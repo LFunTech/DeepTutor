@@ -1,0 +1,107 @@
+# 12. 租户管理界面与统一运营管理后台
+
+## 已确认范围
+
+管理体系不是“把所有人放进同一个超级 Admin”：
+
+- **阶段二：每个租户自己的管理界面**，基于现有 DeepTutor 管理界面微调获得。
+- **阶段三：统一运营管理后台**，面向平台人员管理所有租户。
+
+两者共用资源服务、权限判定及数据底座，但入口、菜单、可操作对象和权限边界分开。不为每租户复制代码或部署，不重建 EduPlus2 用户、学校、组织、身份及授权主数据后台。
+
+## 外壳与前端交付边界
+
+企业包/外壳不等于 iframe 套上原站就完成租户化。B2 继续复用 `web/app/(admin)/admin` 及现有组件，对 tenant 标识、角色/能力字段、导航与资源请求做必要通用接入；原用户体验与完整后端能力同批验收。不为追求上游前端零 diff 复制整套页面、伪造全局 admin 或只用 CSS 隐藏敏感入口。
+
+C1/C2 运营模块可以位于独立企业 UI 构建，通过受控路由挂到 `/ops`，或与企业前端组合发布；这只是构建边界，不创建第二套 grants/policy/审计数据库。两类界面调用同一 `deeptutor_enterprise` 治理服务，后端强制权限与资源范围；拟定包布局见 [13](13-deployment-and-upstream-sync.md)。
+
+## 两类界面
+
+| 维度 | 租户管理界面 | 统一运营后台 |
+| --- | --- | --- |
+| 阶段 | 二 | 三 |
+| 基础 | 现有 `web/app/(admin)/admin` 等管理页面复用 | 新增运营模块；可复用表格/表单组件，不复用全局 admin 放行逻辑 |
+| 入口建议 | `/admin`，上下文锁定当前租户 | `/ops`，平台角色专用 |
+| 用户 | `tenant_admin` 及获具体权限的自定义角色 | `platform_admin`、`platform_operator`、`platform_auditor` |
+| 管理对象 | 本租户共享 KB、grants、允许的模型/工具、配置、用量 | 全部租户、开通/停用、模型及功能分配、配额、聚合用量、审计、系统任务 |
+| 禁止 | 跨租户访问、平台 Secret、平台角色授予 | 默认查看私有对话/附件、静默冒充用户、编辑 EduPlus2 主数据 |
+
+路由、API 和权限 key 是拟定契约，不表示当前已有接口。
+
+## B2：现有租户界面微调清单
+
+1. 导航/页头展示当前租户；菜单数据、表格请求、资源选择器均只取当前 tenant。KB 页面通过企业文档服务展示真实 LightRAG 导入/索引失败和重试状态，托管删除与外部连接解绑明确区分；不跳转原始 Server 管理页绕过权限。
+2. 保留现有用户资源授权、共享 KB、配置等交互，移除平台凭证、全部租户列表和全局配置入口。
+3. EduPlus2 用户/组织只展示必要同步字段；DeepTutor 只编辑应用内 grants，不创建第二套用户密码/学校组织管理。原本地账号功能仅留给受控本地模式。
+4. 已有 API 从 `require_admin` 拆成 scope 与具体 permission 判定；不得仅改前端菜单。
+5. 保存成功后配置与实际 runtime 一致，多副本缓存按版本失效；禁止页面写文件而 worker 仍读旧状态。
+6. 租户管理员默认可管理自己租户；自定义角色按显式能力出现菜单，不以 `eit=adm` 单字段授予平台权限。
+
+## C1/C2 分批交付边界
+
+| 工作包 | 范围 | 完成要求 |
+| --- | --- | --- |
+| C1：运营管理闭环 | 角色/入口、全租户目录、开停、模型/功能/配额、Secret 引用/轮换、基本操作审计 | G3a；真实运行策略生效，租户/平台权限完整；可先发布运营基础版 |
+| C2：运营治理完善 | 用量/费用估算、资源/错误概览、任务/同步状态、重试/取消、高级审计查询与导出 | G3；C1+C2 全部完成才标记 M3，不因 C1 可用而删去 C2 |
+
+B1 先完成首租户最终身份/权限/撤权闭环，B2 完成各租户自己的管理 UI 和治理后端。B2 的跨租户治理 API 已具备可信平台授权、目标租户校验及审计，C1 复用并完善运营角色/默认授权，而不是首次建立安全边界。C1 复用 B2 API；C2 可以在 C1 契约稳定后并行开发，但所有写操作的基本审计、鉴权不得推迟。任务取消/重试在当前运行模式下必须有效，多执行者时还需先通过 H/G-H。
+
+## 运营功能域（完整范围保留）
+
+| 功能 | 操作与要求 |
+| --- | --- |
+| 租户目录 | 按内部 ID/外部 tid、名称、状态检索；分页、详情；只列授权范围的租户管理元数据 |
+| 生命周期 | provisioning/active/suspended/failed 状态；初始化幂等；开通、停用、恢复有审计，失败可重试，不提供一键物理删库/删 bucket |
+| 策略与配额 | 模型白名单、功能开关、并发/token/存储额度；版本化更新、并发冲突提示，复用阶段二执行检查 |
+| 模型与凭证 | 平台模型目录、供应商配置、Secret 引用和受控轮换；API 不回传明文，不向整个后台授予 Kubernetes cluster-admin |
+| 用量 | 租户/时间维度 token、请求、存储、失败率及费用估算；费用估算不冒充计费结算系统 |
+| 运行治理 | 导入/同步/Webhook/turn 状态，授权后的重试/取消，检查幂等和外部副作用，不重复执行已完成操作 |
+| 审计 | 操作者、平台角色、目标租户、动作、资源、脱敏变更摘要、结果、request ID、时间；只读导出单独授权 |
+
+## 权限矩阵：入口到后端必须闭环
+
+以下 `ops.*` / `tenant.*` 是 DeepTutor 拟新增能力 key，不声称 EduPlus2 已有同名 relation。对接时映射现有 EduPlus2 权限；缺失能力通过其版本化 OpenFGA/角色迁移补齐。DeepTutor 使用 FastAPI dependency/权限服务，不照搬其他仓库的 Java 注解。
+
+| 入口 / API（拟定） | 后端校验 | 能力 key / 外部权限映射 | 默认授权角色 | 前端入口 key |
+| --- | --- | --- | --- | --- |
+| `/admin`、`/api/v1/admin/tenant/kbs` | 已认证、当前 tenant、`require_tenant_permission`、资源归属 | `tenant.kb.manage` → 租户资源管理权限 | 本租户 `tenant_admin`；显式授权自定义角色 | `tenant.kb.manage` |
+| 本租户授权/模型配置 | 当前 tenant、禁止越过平台分配范围 | `tenant.grants.manage` | 本租户 `tenant_admin`；显式授权自定义角色 | `tenant.grants.manage` |
+| `/ops`、`GET /api/v1/ops/tenants` | `require_platform_permission` | `ops.tenants.read` → 平台角色/能力 | admin/operator/auditor | `ops.tenants.read` |
+| 租户开通/暂停/恢复 API | 平台权限、目标租户校验、状态机、幂等 | `ops.tenants.manage` | admin/operator | `ops.tenants.manage` |
+| 租户模型/配额 API | 平台权限、限额、版本校验 | `ops.policy.manage` | admin/operator（仅已授权日常范围） | `ops.policy.manage` |
+| 平台 Secret 引用/轮换 API | 平台敏感操作权限、确认、审计 | `ops.credentials.manage` | admin | `ops.credentials.manage` |
+| 运营账号/角色授权 API | 平台角色管理权限，禁止自助提权 | `ops.roles.manage` | admin | `ops.roles.manage` |
+| 用量/审计 API | 平台只读权限，导出独立授权 | `ops.usage.read` / `ops.audit.read` | admin/operator/auditor | 同后端能力 key |
+| 任务重试/取消 API | 平台操作权限、目标 tenant/job 绑定 | `ops.jobs.manage` | admin/operator | `ops.jobs.manage` |
+
+“admin/operator/auditor”在本表分别指 `platform_admin/platform_operator/platform_auditor`。平台角色通过可审计的可信授权维护，不能由学校管理员身份、任意客户端 claim 或本地用户名自动推导。M2M 运维调用也受相同 scope/permission 限制。
+
+## 租户生命周期与策略生效
+
+```text
+provisioning → active → suspended → active
+      ↓
+    failed → 重试 provisioning
+```
+
+- 开通：校验 EduPlus2 应用资格，幂等建内部 tenant、默认策略和授权；必要资源就绪才 active。DeepTutor 不能自行把 EduPlus2 已停订租户标为可用。
+- 停用：拒绝新登录/新 turn/下载授权/后台派发；对已有 WS/运行任务发撤销并在权限检查点终止，不删除历史。已签发直传/下载 URL 最长存活到短 TTL；要求即时撤权的内容使用后端代理，不承诺 presigned URL 可即时撤销。
+- 恢复：重新验证外部资格和策略，更新版本使各 Pod 缓存失效，再允许工作。
+- 配额修改：阶段二已经有 PG 原子预留/扣减、取消/失败释放或核算规则；阶段三仅增加操作入口，不能只改显示数字。
+
+## 数据与越权边界
+
+运营列表使用最小化平台元数据/聚合视图；租户资源操作先校验平台能力、显式绑定目标租户，再用受 RLS 约束的事务执行。不对普通请求开放任意 tenant override 或 BYPASSRLS 连接。
+
+租户用户继续依赖已验证身份 scope；URL/body 的租户 ID 不是授权证据。运营人员无默认私有内容读取或冒充登录能力；如将来需要支持访问，另立审批、授权、时效、用户告知及审计方案，不能在本期用“超级 admin”绕过。
+
+## 状态迁移与运维边界
+
+- **本次文档修改**：不修改 DB、OpenFGA、Keycloak 运行态，不新增可执行 migration。
+- **后续 DeepTutor DB**：租户生命周期、策略版本、运营角色默认数据和审计结构走版本化迁移 Job；已存在用户/角色映射需显式回填与验证。
+- **后续 EduPlus2**：只有新增 relation/tuple/client/scope/redirect 等才需要对应 OpenFGA/Keycloak provider migration；由 EduPlus2 仓库受控流程负责，不用手工改库或启动脚本替代。
+- **验证闭环**：迁移 dry-run/apply/verify、重复执行幂等和 drift 检查；默认管理员、自定义角色正例及 403 负例；菜单/路由/按钮/API 对齐。
+
+## 验收
+
+以 [02 的 G2/G3](02-rollout-testing-and-migration.md) 和 [OpenSpec platform-operations](../../openspec/changes/replace-rollout-with-three-production-stages/specs/platform-operations/spec.md) 为准。至少验证租户管理员不能访问运营 API、auditor 不能写、operator 不能管理 Secret/角色、admin 正常操作，以及管理变更确实影响运行时。

@@ -12,6 +12,10 @@ run_code_workspace/
 deeptutor/agents/question/reference_papers/
 deeptutor/services/rag/eg_only_for_analysis/
 /docs/
+!/docs/
+/docs/*
+!/docs/eduplus2-integration/
+!/docs/eduplus2-integration/**
 /site/
 .claude
 .agents/

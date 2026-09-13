@@ -1,0 +1,21 @@
+schema: spec-driven
+context: |
+  项目为 DeepTutor，Python/FastAPI 后端与 Next.js 前端，CLI/WebSocket/SDK 共用 agent runtime。
+  架构调整的领域文档位于 docs/eduplus2-integration/，readme.md 为入口；00–13 按主执行路径排列，02 为实施总纲、05 为 Woodpecker。任务包内按执行顺序排序，跨包并行依赖仍以显式说明为准。
+  当前工作仅调整方案，不代表功能已实现或部署。不得为规划执行数据库或集群变更。
+  生产路线固定为：单租户 Kubernetes（PostgreSQL + S3-compatible）→ 多租户及租户管理界面 → 统一运营管理后台。
+  三个业务里程碑 M1/M2/M3 下按 A1/A2/A3、B1/B2、C1/C2 七个工作包验收，不要求七次生产发布。
+  H 可用性工作线独立于租户数量：实际启用多执行者或发布要求高可用前必须通过 G-H，单执行模式需确认非 HA 与容量/恢复目标。
+  Woodpecker 流水线为 M1/A3 必交付子环节，从 A1 并行开发，G1 前真实验收构建/推送/迁移/部署/smoke/回退；M2/M3 与 upstream 更新复用，不新增业务工作包。
+  K8s 集成环境和 EduPlus2 外部契约准备从 A1 并行；B1 验证最终单租户接入，B2 才开放多租户；C2 不因 C1 可发布而省略。
+  复用现有租户管理界面，平台运营后台另有权限边界；EduPlus2 保持用户/组织/身份权限主数据权威。
+  配置/现有扩展点优先，必要通用核心 hook 和调用收敛 + 独立 deeptutor_enterprise 包/应用外壳；不承诺完整应用仅配置或零 diff，不采用全站 monkey patch。
+  RAG 默认保留 lightrag-server HTTP 查询与 LightRAG 引擎，企业适配补齐 PG/Secret binding、可信授权、托管文档导入/状态/引用/删除/恢复，检索 KV/vector/doc_status/graph 全部外置 PG，S3 保存原文/解析物。
+  默认经授权路由使用固定 workspace LightRAG Server 实例池，不按租户复制整套 DeepTutor；动态多 workspace 服务层非本期默认。workspace 不等于 RLS，锁定 Server/图后端版本并验证低权运行及数据库强制隔离。
+  保留非托管外部连接只解绑语义；转为托管前核实语料所有权和移交，不能静默删除用户服务器。
+  不交付过渡部署、双写或新增文件型多租户后端；不提交或推送，除非用户明确要求。
+rules:
+  proposal:
+    - 使用简体中文正文，标注规划范围与实际实施状态。
+  tasks:
+    - 按七个工作包分组，H 单列跨里程碑条件性任务；每项包含适用的迁移、真实入口、权限/异常测试和切换证据，未实施任务不得勾选。
