@@ -261,6 +261,20 @@ jobs:
           pip install -r requirements/partners.txt
           pip install pytest pytest-asyncio
 
+      - name: Install isolated PostgreSQL test binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-client
+          sudo service postgresql stop || true
+          pg_initdb="$(find /usr/lib/postgresql -mindepth 2 -maxdepth 2 -type f -name initdb | sort -V | tail -n 1)"
+          test -n "$pg_initdb"
+          pg_bindir="$(dirname "$pg_initdb")"
+          test -x "$pg_bindir/initdb"
+          test -x "$pg_bindir/pg_ctl"
+          echo "DT_TEST_PG_BIN=$pg_bindir" >> "$GITHUB_ENV"
+          echo "PostgreSQL test binaries: $pg_bindir"
+          echo "Business tests create per-job tmp clusters/databases via tests.fixtures.postgres; no shared or developer database is used."
+
       - name: Install optional LightRAG SDK
         if: matrix.python-version == '3.12'
         run: pip install "lightrag-hku==1.5.7"

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from deeptutor.core.providers import ApplicationProviders, provider_context
+from deeptutor.services.config import runtime_settings as runtime_settings_module
 from deeptutor.services.config.model_catalog import SERVICE_NAMES
 from deeptutor.services.config.runtime_settings import (
     RuntimeSettingsService,
@@ -64,6 +66,23 @@ def test_capability_routing_defaults_to_disabled(tmp_path) -> None:
     service = RuntimeSettingsService(tmp_path / "settings")
 
     assert service.load_system()["capability_routing_enabled"] is False
+
+
+def test_runtime_settings_service_is_available_inside_application_provider_context(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Settings/admin routes bind providers but still own deployment JSON settings."""
+
+    settings_dir = tmp_path / "settings"
+    monkeypatch.setattr(runtime_settings_module, "_global_settings_dir", lambda: settings_dir)
+    monkeypatch.setattr(runtime_settings_module.RuntimeSettingsService, "_instances", {})
+
+    with provider_context(ApplicationProviders(store=object())):
+        service = runtime_settings_module.get_runtime_settings_service()
+
+    assert service.load_system()["backend_port"] == 8001
+    assert service.path_for("system").parent == settings_dir.resolve()
 
 
 def test_web_search_source_filter_defaults_to_safe_runtime_json(tmp_path) -> None:

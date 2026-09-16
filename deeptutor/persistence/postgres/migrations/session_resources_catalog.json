@@ -1,0 +1,379 @@
+{
+  "columns": {
+    "sessions": "tenant_id:uuid! owner_id:text! id:text! title:text! summary:text! summary_up_to_msg_id:int8 preferences:jsonb! parent_session_id:text active_leaf_id:int8 pinned:bool! archived:bool! deleting:bool! version:int8! created_at:float8! updated_at:float8! incarnation:uuid! deletion_token:uuid unresolved_dependencies:bool!",
+    "session_objects": "tenant_id:uuid! owner_id:text! object_id:uuid! session_id:text! session_ref:text incarnation:uuid! attachment_id:text! filename:text! mime_type:text! byte_size:int8! sha256:text! state:text! attempts:int4! last_error:text! created_at:timestamptz! updated_at:timestamptz!",
+    "message_objects": "tenant_id:uuid! owner_id:text! session_id:text! message_id:int8! object_id:uuid!",
+    "session_references": "tenant_id:uuid! owner_id:text! session_id:text! source_kind:text! source_id:text! kind:text! target_id:text! message_ref:int8 turn_ref:text path_ref:text workspace_ref:text material_ref:text"
+  },
+  "constraints": {
+    "sessions": [
+      "CHECK (((parent_session_id IS NULL) OR (parent_session_id <> id)))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, id, active_leaf_id) REFERENCES enterprise.messages(tenant_id, owner_id, session_id, id) DEFERRABLE INITIALLY DEFERRED",
+      "FOREIGN KEY (tenant_id, owner_id, id, summary_up_to_msg_id) REFERENCES enterprise.messages(tenant_id, owner_id, session_id, id) DEFERRABLE INITIALLY DEFERRED",
+      "FOREIGN KEY (tenant_id, owner_id, parent_session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id)",
+      "PRIMARY KEY (tenant_id, id)",
+      "UNIQUE (tenant_id, owner_id, id)",
+      "UNIQUE (tenant_id, owner_id, id, incarnation)"
+    ],
+    "session_objects": [
+      "CHECK (((byte_size >= 0) AND (byte_size <= 52428800)))",
+      "CHECK (((session_ref IS NULL) OR (session_ref = session_id)))",
+      "CHECK ((attempts >= 0))",
+      "CHECK ((state = ANY (ARRAY['candidate'::text, 'ready'::text, 'cleanup'::text, 'deleted'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_ref, incarnation) REFERENCES enterprise.sessions(tenant_id, owner_id, id, incarnation) ON DELETE SET NULL (session_ref)",
+      "PRIMARY KEY (tenant_id, owner_id, object_id)",
+      "UNIQUE (tenant_id, owner_id, session_id, object_id)"
+    ],
+    "message_objects": [
+      "FOREIGN KEY (tenant_id, owner_id, object_id) REFERENCES enterprise.session_objects(tenant_id, owner_id, object_id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_id, message_id) REFERENCES enterprise.messages(tenant_id, owner_id, session_id, id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_id, object_id) REFERENCES enterprise.session_objects(tenant_id, owner_id, session_id, object_id)",
+      "PRIMARY KEY (tenant_id, owner_id, message_id, object_id)"
+    ],
+    "session_references": [
+      "CHECK ((kind = ANY (ARRAY['mastery_path_id'::text, 'reading_workspace_id'::text, 'reading_material_id'::text])))",
+      "CHECK ((length(target_id) > 0))",
+      "CHECK ((source_kind = ANY (ARRAY['preferences'::text, 'message'::text, 'turn'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id, material_ref) REFERENCES enterprise.reading_materials(tenant_id, owner_id, material_id)",
+      "FOREIGN KEY (tenant_id, owner_id, path_ref) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_id, message_ref) REFERENCES enterprise.messages(tenant_id, owner_id, session_id, id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_id, turn_ref) REFERENCES enterprise.turns(tenant_id, user_id, session_id, id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, workspace_ref) REFERENCES enterprise.reading_workspaces(tenant_id, owner_id, workspace_id)",
+      "PRIMARY KEY (tenant_id, owner_id, session_id, source_kind, source_id, kind, target_id)"
+    ]
+  },
+  "metadata": {
+    "sessions": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "title": [
+        "",
+        "",
+        "'New conversation'::text",
+        "default"
+      ],
+      "summary": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "summary_up_to_msg_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "preferences": [
+        "",
+        "",
+        "'{}'::jsonb",
+        null
+      ],
+      "parent_session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "active_leaf_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "pinned": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "archived": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "deleting": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "version": [
+        "",
+        "",
+        "1",
+        null
+      ],
+      "created_at": [
+        "",
+        "",
+        "EXTRACT(epoch FROM now())",
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        "EXTRACT(epoch FROM now())",
+        null
+      ],
+      "incarnation": [
+        "",
+        "",
+        "gen_random_uuid()",
+        null
+      ],
+      "deletion_token": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "unresolved_dependencies": [
+        "",
+        "",
+        "false",
+        null
+      ]
+    },
+    "session_objects": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "object_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "session_ref": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "incarnation": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "attachment_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "filename": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "mime_type": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "byte_size": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "sha256": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "state": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "attempts": [
+        "",
+        "",
+        "0",
+        null
+      ],
+      "last_error": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "created_at": [
+        "",
+        "",
+        "now()",
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        "now()",
+        null
+      ]
+    },
+    "message_objects": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "message_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "object_id": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "session_references": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "source_kind": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "source_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "kind": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "target_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "message_ref": [
+        "s",
+        "",
+        "CASE WHEN (source_kind = 'message'::text) THEN (source_id)::bigint ELSE NULL::bigint END",
+        null
+      ],
+      "turn_ref": [
+        "s",
+        "",
+        "CASE WHEN (source_kind = 'turn'::text) THEN source_id ELSE NULL::text END",
+        "default"
+      ],
+      "path_ref": [
+        "s",
+        "",
+        "CASE WHEN (kind = 'mastery_path_id'::text) THEN target_id ELSE NULL::text END",
+        "default"
+      ],
+      "workspace_ref": [
+        "s",
+        "",
+        "CASE WHEN (kind = 'reading_workspace_id'::text) THEN target_id ELSE NULL::text END",
+        "default"
+      ],
+      "material_ref": [
+        "s",
+        "",
+        "CASE WHEN (kind = 'reading_material_id'::text) THEN target_id ELSE NULL::text END",
+        "default"
+      ]
+    }
+  },
+  "indexes": {
+    "message_objects_object": "CREATE INDEX message_objects_object ON enterprise.message_objects USING btree (tenant_id, owner_id, object_id)",
+    "message_objects_pkey": "CREATE UNIQUE INDEX message_objects_pkey ON enterprise.message_objects USING btree (tenant_id, owner_id, message_id, object_id)",
+    "message_objects_session": "CREATE INDEX message_objects_session ON enterprise.message_objects USING btree (tenant_id, owner_id, session_id, message_id)",
+    "session_objects_pending": "CREATE INDEX session_objects_pending ON enterprise.session_objects USING btree (tenant_id, owner_id, state, created_at, object_id)",
+    "session_objects_pkey": "CREATE UNIQUE INDEX session_objects_pkey ON enterprise.session_objects USING btree (tenant_id, owner_id, object_id)",
+    "session_objects_session": "CREATE INDEX session_objects_session ON enterprise.session_objects USING btree (tenant_id, owner_id, session_ref, incarnation)",
+    "session_objects_tenant_id_owner_id_session_id_object_id_key": "CREATE UNIQUE INDEX session_objects_tenant_id_owner_id_session_id_object_id_key ON enterprise.session_objects USING btree (tenant_id, owner_id, session_id, object_id)",
+    "session_references_material": "CREATE INDEX session_references_material ON enterprise.session_references USING btree (tenant_id, owner_id, material_ref)",
+    "session_references_message": "CREATE INDEX session_references_message ON enterprise.session_references USING btree (tenant_id, owner_id, session_id, message_ref)",
+    "session_references_path": "CREATE INDEX session_references_path ON enterprise.session_references USING btree (tenant_id, owner_id, path_ref)",
+    "session_references_pkey": "CREATE UNIQUE INDEX session_references_pkey ON enterprise.session_references USING btree (tenant_id, owner_id, session_id, source_kind, source_id, kind, target_id)",
+    "session_references_turn": "CREATE INDEX session_references_turn ON enterprise.session_references USING btree (tenant_id, owner_id, session_id, turn_ref)",
+    "session_references_workspace": "CREATE INDEX session_references_workspace ON enterprise.session_references USING btree (tenant_id, owner_id, workspace_ref)"
+  }
+}

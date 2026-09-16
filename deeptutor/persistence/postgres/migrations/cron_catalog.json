@@ -1,0 +1,43 @@
+{
+  "columns": {
+    "cron_meta": "tenant_id:uuid! owner_id:text! revision:int8! updated_at_ms:int8!",
+    "cron_jobs": "tenant_id:uuid! owner_id:text! job_id:text! owner_key:text! name:text! message:text! schedule_kind:text! at_ms:int8 every_seconds:int4 cron_expr:text tz:text! enabled:bool! delete_after_run:bool! created_at_ms:int8! next_run_at_ms:int8 last_run_at_ms:int8 last_status:text last_error:text payload:jsonb! revision:int8! updated_at_ms:int8!",
+    "cron_executions": "tenant_id:uuid! owner_id:text! execution_id:uuid! job_id:text! owner_key:text! scheduled_run_at_ms:int8! job_revision:int8! worker_id:text! status:text! claimed_at_ms:int8! completed_at_ms:int8 duration_ms:int8! error:text payload:jsonb!"
+  },
+  "constraints": {
+    "cron_meta": [
+      "CHECK ((revision >= 0))",
+      "CHECK ((updated_at_ms >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id)"
+    ],
+    "cron_jobs": [
+      "CHECK (((created_at_ms >= 0) AND (updated_at_ms >= 0)))",
+      "CHECK (((last_run_at_ms IS NULL) OR (last_run_at_ms >= 0)))",
+      "CHECK (((last_status IS NULL) OR (last_status = ANY (ARRAY['ok'::text, 'error'::text, 'skipped'::text, 'uncertain'::text]))))",
+      "CHECK (((length(job_id) > 0) AND (length(job_id) <= 128)))",
+      "CHECK (((length(owner_key) > 0) AND (length(owner_key) <= 512)))",
+      "CHECK (((next_run_at_ms IS NULL) OR (next_run_at_ms >= 0)))",
+      "CHECK ((((schedule_kind = 'at'::text) AND (at_ms IS NOT NULL) AND (every_seconds IS NULL) AND (cron_expr IS NULL)) OR ((schedule_kind = 'every'::text) AND (at_ms IS NULL) AND (every_seconds IS NOT NULL) AND (every_seconds > 0) AND (cron_expr IS NULL)) OR ((schedule_kind = 'cron'::text) AND (at_ms IS NULL) AND (every_seconds IS NULL) AND (cron_expr IS NOT NULL) AND (length(cron_expr) > 0))))",
+      "CHECK ((revision >= 1))",
+      "CHECK ((schedule_kind = ANY (ARRAY['at'::text, 'every'::text, 'cron'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, job_id)"
+    ],
+    "cron_executions": [
+      "CHECK (((completed_at_ms IS NULL) OR (completed_at_ms >= claimed_at_ms)))",
+      "CHECK (((length(job_id) > 0) AND (length(job_id) <= 128)))",
+      "CHECK (((length(owner_key) > 0) AND (length(owner_key) <= 512)))",
+      "CHECK ((((status = 'claimed'::text) AND (completed_at_ms IS NULL)) OR ((status <> 'claimed'::text) AND (completed_at_ms IS NOT NULL))))",
+      "CHECK ((claimed_at_ms >= 0))",
+      "CHECK ((duration_ms >= 0))",
+      "CHECK ((job_revision >= 1))",
+      "CHECK ((length(worker_id) > 0))",
+      "CHECK ((scheduled_run_at_ms >= 0))",
+      "CHECK ((status = ANY (ARRAY['claimed'::text, 'ok'::text, 'error'::text, 'skipped'::text, 'uncertain'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, execution_id)",
+      "UNIQUE (tenant_id, owner_id, job_id, scheduled_run_at_ms, job_revision)"
+    ]
+  }
+}

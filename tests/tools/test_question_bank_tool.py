@@ -19,7 +19,25 @@ from deeptutor.tools.question_bank import run_question_bank
 
 @pytest.fixture
 def store(tmp_path: Path) -> SQLiteSessionStore:
-    return SQLiteSessionStore(db_path=tmp_path / "bank.db")
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+
+    token = set_current_user(
+        CurrentUser(
+            id="legacy-question-bank-tool",
+            username="legacy-question-bank-tool",
+            role="user",
+            scope=UserScope(
+                kind="user",
+                user_id="legacy-question-bank-tool",
+                root=tmp_path / "legacy-question-bank-tool",
+            ),
+        )
+    )
+    try:
+        yield SQLiteSessionStore(db_path=tmp_path / "bank.db")
+    finally:
+        reset_current_user(token)
 
 
 async def _seed(store: SQLiteSessionStore) -> str:

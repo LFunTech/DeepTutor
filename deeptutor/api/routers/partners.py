@@ -453,9 +453,10 @@ def _validate_llm_selection_payload(
 
 def _caller_tool_reach() -> tuple[set[str] | None, set[str] | None]:
     """``(optional, mcp)`` tool whitelists for the caller; ``None`` = unrestricted."""
+    from deeptutor.multi_user.roles import can_manage_deployment
     from deeptutor.multi_user.tool_access import allowed_mcp_tools, allowed_optional_tools
 
-    if get_current_user().is_admin:
+    if can_manage_deployment(get_current_user()):
         return None, None
     return allowed_optional_tools(), allowed_mcp_tools()
 
@@ -521,6 +522,7 @@ def _resolve_soul_content(soul: SoulSpec | None) -> tuple[str, dict[str, str]]:
 
 def _load_persona_markdown(name: str) -> str:
     from deeptutor.multi_user.paths import get_admin_path_service
+    from deeptutor.multi_user.roles import is_grant_restricted_user
     from deeptutor.services.persona import PersonaService, get_persona_service
 
     try:
@@ -529,7 +531,7 @@ def _load_persona_markdown(name: str) -> str:
     except Exception:
         pass
     try:
-        if not get_current_user().is_admin:
+        if is_grant_restricted_user(get_current_user()):
             admin_service = PersonaService(
                 root=get_admin_path_service().get_workspace_dir() / "personas"
             )
@@ -586,6 +588,7 @@ async def delete_soul(soul_id: str):
 async def soul_sources():
     """Everything the create-wizard's soul step can start from."""
     from deeptutor.multi_user.paths import get_admin_path_service
+    from deeptutor.multi_user.roles import is_grant_restricted_user
     from deeptutor.services.persona import PersonaService, get_persona_service
 
     def _persona_entry(service: PersonaService, info: Any) -> dict[str, str]:
@@ -607,7 +610,7 @@ async def soul_sources():
     except Exception:
         logger.warning("Failed to list user personas", exc_info=True)
     try:
-        if not get_current_user().is_admin:
+        if is_grant_restricted_user(get_current_user()):
             admin_service = PersonaService(
                 root=get_admin_path_service().get_workspace_dir() / "personas"
             )
@@ -897,7 +900,14 @@ def _stopped_partner_dict(
                     "running",
                     "started_at",
                     "last_reload_error",
+                    "tenant_id",
+                    "owner_id",
                     "runtime_owner_id",
+                    "runtime_worker_id",
+                    "runtime_version",
+                    "runtime_ttl_seconds",
+                    "runtime_expires_at",
+                    "runtime_expired",
                     "runtime_state",
                     "runtime_updated_at",
                 )

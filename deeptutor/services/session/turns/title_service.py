@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +38,7 @@ class SessionTitleService:
         execution: _TurnExecution,
         session_id: str,
         ui_language: str,
+        assistant_content: str = "",
     ) -> None:
         """Generate a short LLM-written title for a freshly-named session.
 
@@ -70,6 +72,7 @@ class SessionTitleService:
                 first_assistant = content
             if first_user and first_assistant:
                 break
+        first_assistant = first_assistant or assistant_content
         if not first_user or not first_assistant:
             return
 
@@ -114,11 +117,16 @@ class SessionTitleService:
                     buf.append(c)
                 return "".join(buf)
 
-            from deeptutor.services.model_selection.tasks import task_llm_scope
+            if execution.prepared_environment is not None:
+                title_scope = nullcontext()
+            else:
+                from deeptutor.services.model_selection.tasks import task_llm_scope
+
+                title_scope = task_llm_scope()
 
             # The scope is entered before the task is created so `wait_for`'s
             # inner task copies it; with no task model configured it is a no-op.
-            with task_llm_scope():
+            with title_scope:
                 raw_title = await asyncio.wait_for(_collect_title(), timeout=20.0)
             if _looks_like_error_payload(raw_title):
                 logger.debug("Title model streamed an error payload — falling back")
@@ -127,7 +135,7 @@ class SessionTitleService:
         except asyncio.TimeoutError:
             logger.debug("Title LLM call timed out — falling back")
         except Exception:
-            logger.debug("Title LLM call failed", exc_info=True)
+            logger.debug("Title LLM call failed", exc_info=execution.prepared_environment is None)
 
         if not title:
             # Fallback: truncate the first user message so the sidebar
@@ -139,17 +147,31 @@ class SessionTitleService:
             return
 
         try:
-            await self.store.update_session_title(session_id, title)
+            generated_update = getattr(self.store, "update_generated_session_title", None)
+            if generated_update is not None:
+                if not await generated_update(session_id, title):
+                    return
+            else:
+                await self.store.update_session_title(session_id, title)
         except Exception:
             # Not debug: the conversation keeps its placeholder title forever
             # and nothing else reports it. A silent failure here is how the
             # sidebar ends up permanently wrong.
             logger.warning(
-                "Could not store generated title for session %s", session_id, exc_info=True
+                "Could not store generated title for session %s",
+                session_id,
+                exc_info=execution.prepared_environment is None,
             )
+            if execution.prepared_environment is not None:
+                raise
             return
 
-        await self._publish_live_event(
+        publish = (
+            self._configured_event
+            if execution.prepared_environment is not None
+            else self._publish_live_event
+        )
+        await publish(
             execution,
             StreamEvent(
                 type=StreamEventType.SESSION_META,

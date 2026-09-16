@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
-import { fetchAuthStatus } from "@/lib/auth";
+import { fetchAuthStatus, canManageAccounts, validAccountPassword } from "@/lib/auth";
 import {
   listUsers,
   deleteUser,
@@ -89,7 +89,7 @@ export default function AdminUsersPage() {
         router.replace("/login");
         return;
       }
-      if (status.role !== "admin") {
+      if (!canManageAccounts(status)) {
         router.replace("/");
         return;
       }
@@ -120,8 +120,8 @@ export default function AdminUsersPage() {
       setCreateError(t("Username is required."));
       return;
     }
-    if (createPassword.length < 8) {
-      setCreateError(t("Password must be at least 8 characters."));
+    if (!validAccountPassword(createPassword)) {
+      setCreateError(t("Password must contain 12 to 72 UTF-8 bytes."));
       return;
     }
     setCreateSubmitting(true);
@@ -148,14 +148,14 @@ export default function AdminUsersPage() {
         await deleteUser(user.username);
         setUsers((prev) => prev.filter((u) => u.username !== user.username));
       } else {
-        const newRole = kind === "promote" ? "admin" : "user";
+        const newRole = kind === "promote" ? "tenant_admin" : "user";
         await setUserRole(user.username, newRole);
         setUsers((prev) =>
           prev.map((u) =>
             u.username === user.username ? { ...u, role: newRole } : u,
           ),
         );
-        if (newRole === "admin") {
+        if (newRole === "tenant_admin") {
           setExpandedUserId((current) =>
             current === user.id ? null : current,
           );
@@ -179,7 +179,7 @@ export default function AdminUsersPage() {
   useEffect(() => {
     if (!expandedUserId) return;
     const expanded = users.find((user) => user.id === expandedUserId);
-    if (!expanded || expanded.role === "admin") {
+    if (!expanded || expanded.role === "tenant_admin") {
       setExpandedUserId(null);
     }
   }, [expandedUserId, users]);
@@ -351,7 +351,7 @@ export default function AdminUsersPage() {
               <tbody className="divide-y divide-[var(--border)]">
                 {filteredUsers.map((user) => {
                   const isSelf = user.username === currentUser;
-                  const isAdmin = user.role === "admin";
+                  const isAdmin = user.role === "tenant_admin";
                   const canManageAssignments = !isAdmin && Boolean(user.id);
                   return (
                     <Fragment key={user.username}>
@@ -434,7 +434,7 @@ export default function AdminUsersPage() {
                               title={
                                 isSelf
                                   ? t("Cannot change your own role")
-                                  : user.role === "admin"
+                                  : user.role === "tenant_admin"
                                     ? t("Demote to user")
                                     : t("Promote to admin")
                               }
@@ -442,7 +442,7 @@ export default function AdminUsersPage() {
                                        hover:bg-[var(--background)] hover:text-[var(--foreground)]
                                        disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                             >
-                              {user.role === "admin" ? (
+                              {user.role === "tenant_admin" ? (
                                 <ShieldOff size={15} />
                               ) : (
                                 <Shield size={15} />
@@ -551,7 +551,7 @@ export default function AdminUsersPage() {
                 <p className="text-xs text-[var(--muted-foreground)]">
                   {t("{{role}} · joined {{date}}", {
                     role:
-                      confirmTarget.user.role === "admin"
+                      confirmTarget.user.role === "tenant_admin"
                         ? t("Admin")
                         : t("User"),
                     date: formatDate(confirmTarget.user.created_at, lang),
@@ -617,7 +617,7 @@ export default function AdminUsersPage() {
             </label>
 
             <label className="mb-4 block text-xs text-[var(--muted-foreground)]">
-              {t("Password (≥ 8 chars)")}
+              {t("Password (12–72 UTF-8 bytes)")}
               <input
                 type="password"
                 value={createPassword}

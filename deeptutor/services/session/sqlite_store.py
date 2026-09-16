@@ -11,7 +11,6 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-import re
 import sqlite3
 import time
 from typing import Any
@@ -27,7 +26,10 @@ from deeptutor.utils.secret_files import ensure_private_directory, ensure_privat
 
 from .ask_user_trace import select_ask_user_events
 from .event_preview import MAX_TRACE_PREVIEW_EVENTS, compact_trace_preview
+from .import_ids import make_imported_session_id
 from .provider_response_state import redact_private_message_metadata
+from .question_bank import ASSESSMENT_SOURCES, QuestionBankQuery
+from .scope import StoreScope
 from .workspace_preferences import upgrade_workspace_preferences
 
 
@@ -92,27 +94,9 @@ def _json_loads(value: str | None, default: Any) -> Any:
         return default
 
 
-# Imported conversations share the session tables with native chats but carry
-# this id prefix as their discriminator (see ``SQLiteSessionStore._WHERE_*``).
-_IMPORTED_ID_PREFIX = "imported_"
-_ID_SAFE = re.compile(r"[^A-Za-z0-9_-]")
-ASSESSMENT_SOURCES = frozenset({"deep_question", "mastery_path", "immersive_reading", "book"})
-SCORE_TRENDS = frozenset({"new", "improved", "declined", "unchanged"})
 ACTIVE_TURN_STATUSES = frozenset({"queued", "running", "waiting_input"})
 TERMINAL_TURN_STATUSES = frozenset({"completed", "failed", "cancelled"})
 ALL_TURN_STATUSES = ACTIVE_TURN_STATUSES | TERMINAL_TURN_STATUSES
-
-
-def make_imported_session_id(source: str, external_id: str) -> str:
-    """Build a deterministic, dedup-friendly id for an imported conversation.
-
-    ``source`` (e.g. ``claude_code``/``codex``) namespaces the original
-    session uuid so two tools that happen to reuse an id never collide; the
-    determinism is what makes re-importing the same folder idempotent.
-    """
-    src = _ID_SAFE.sub("-", (source or "external").strip()) or "external"
-    ext = _ID_SAFE.sub("-", (external_id or "").strip()) or uuid.uuid4().hex
-    return f"{_IMPORTED_ID_PREFIX}{src}_{ext}"
 
 
 @dataclass
@@ -154,73 +138,31 @@ class TurnRecord:
         }
 
 
-@dataclass(frozen=True)
-class QuestionBankQuery:
-    """One question-bank listing request.
-
-    A value object instead of a widening positional signature: the store's
-    ``_run`` helper only forwards positional args, so every new filter used
-    to mean another parameter threaded through three layers. Callers build
-    a query, the store reads it — adding a filter never changes an arity.
-
-    ``category_id`` and ``uncategorized`` are mutually exclusive views of the
-    same axis; when both are supplied the explicit category wins, because a
-    caller asking for one category always means "show me that category".
-    """
-
-    category_id: int | None = None
-    uncategorized: bool = False
-    bookmarked: bool | None = None
-    is_correct: bool | None = None
-    source: str = ""
-    material_id: str = ""
-    section_id: str = ""
-    resolved: bool | None = None
-    score_trend: str = ""
-    search: str = ""
-    session_id: str | None = None
-    session_ids: Sequence[str] | None = None
-    sort: str = "recent"
-    limit: int = 50
-    offset: int = 0
-
-    def normalized(self) -> "QuestionBankQuery":
-        """Clamp untrusted inputs into the ranges the SQL below assumes."""
-        return QuestionBankQuery(
-            category_id=self.category_id,
-            uncategorized=self.uncategorized and self.category_id is None,
-            bookmarked=self.bookmarked,
-            is_correct=self.is_correct,
-            source=(self.source or "").strip()
-            if (self.source or "").strip() in ASSESSMENT_SOURCES
-            else "",
-            material_id=(self.material_id or "").strip(),
-            section_id=(self.section_id or "").strip(),
-            resolved=self.resolved,
-            score_trend=(self.score_trend or "").strip()
-            if (self.score_trend or "").strip() in SCORE_TRENDS
-            else "",
-            search=(self.search or "").strip()[:200],
-            session_id=self.session_id,
-            session_ids=None if self.session_ids is None else tuple(self.session_ids),
-            sort="oldest" if self.sort == "oldest" else "recent",
-            limit=max(1, min(int(self.limit), 500)),
-            offset=max(0, int(self.offset)),
-        )
-
-
 class SQLiteSessionStore:
     """Persist unified chat sessions and messages in a SQLite database."""
 
     def __init__(self, db_path: Path | None = None) -> None:
-        path_service = get_path_service()
-        self.db_path = db_path or path_service.get_chat_history_db()
+        # Direct construction is retained only for offline importers and legacy
+        # fixture tests.  An explicit fixture path must not require an ambient
+        # authenticated runtime owner; the disabled runtime factory is the PG-only
+        # guard for business execution.
+        path_service = None if db_path is not None else get_path_service()
+        self.db_path = Path(db_path) if db_path is not None else path_service.get_chat_history_db()
         ensure_private_directory(self.db_path.parent)
-        self._migrate_legacy_db(path_service)
+        if path_service is not None:
+            self._migrate_legacy_db(path_service)
         self._lock = asyncio.Lock()
         with _migration_lock(self.db_path):
             self._initialize()
         ensure_private_file(self.db_path)
+
+    @property
+    def store_scope(self) -> StoreScope:
+        return StoreScope(
+            "sqlite-fixture",
+            str(self.db_path.resolve()),
+            "legacy-fixture",
+        )
 
     def _migrate_legacy_db(self, path_service) -> None:
         """Move the legacy ``data/chat_history.db`` into ``data/user/`` once."""
@@ -3043,11 +2985,11 @@ _instances: dict[str, SQLiteSessionStore] = {}
 
 
 def get_sqlite_session_store() -> SQLiteSessionStore:
-    db_path = get_path_service().get_chat_history_db().resolve()
-    key = str(db_path)
-    if key not in _instances:
-        _instances[key] = SQLiteSessionStore(db_path=db_path)
-    return _instances[key]
+    raise RuntimeError(
+        "PostgreSQL-only runtime no longer provides a SQLite session store factory. "
+        "Use the PostgreSQL provider for business execution; legacy SQLite files are "
+        "accepted only by the controlled offline import tools / old-format fixtures."
+    )
 
 
 __all__ = [

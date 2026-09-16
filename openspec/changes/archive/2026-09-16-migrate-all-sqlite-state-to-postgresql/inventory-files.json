@@ -1,0 +1,148 @@
+{
+  "frozen_at": "2026-09-14",
+  "path_base": "repository-root",
+  "syntax": "literal paths only; no glob, brace expansion, or ellipsis",
+  "tests": {
+    "session_turn_event": [
+      "tests/services/session/test_sqlite_store.py",
+      "tests/services/session/test_turn_repository.py",
+      "tests/services/session/test_turn_runtime_subscribe.py",
+      "tests/services/session/test_regenerate.py",
+      "tests/services/session/test_legacy_migration.py",
+      "tests/services/session/test_import_session.py",
+      "tests/services/session/test_trace_memory.py",
+      "tests/services/session/test_turn_event_flush.py",
+      "tests/services/session/test_session_factory.py",
+      "tests/core/test_turn_event_store.py",
+      "tests/app/test_multiworker_turn_application.py",
+      "tests/app/test_turn_application_service.py",
+      "tests/api/test_sessions_trace.py",
+      "tests/api/test_unified_ws_turn_runtime.py"
+    ],
+    "enterprise_pg_session_slice": [
+      "extensions/enterprise/tests/test_sessions.py",
+      "extensions/enterprise/tests/test_application.py",
+      "extensions/enterprise/tests/test_flows.py",
+      "extensions/enterprise/tests/test_isolation_matrix.py",
+      "extensions/enterprise/tests/test_branch_consistency.py",
+      "extensions/enterprise/tests/test_versions.py"
+    ],
+    "question_notebook_import_book_quiz": [
+      "tests/api/test_notebook_router.py",
+      "tests/api/test_question_bank_api.py",
+      "tests/api/test_imports.py",
+      "tests/api/test_book_quiz_attempt_notebook.py",
+      "tests/tools/test_question_bank_tool.py",
+      "tests/agents/question/test_pipeline.py",
+      "tests/services/session/test_sqlite_store.py"
+    ],
+    "learning_mastery": [
+      "deeptutor/learning/tests/test_storage.py",
+      "deeptutor/learning/tests/test_v2_migration.py",
+      "deeptutor/learning/tests/test_event_hub.py",
+      "deeptutor/learning/tests/test_api_endpoints.py",
+      "deeptutor/learning/tests/test_mastery_tools.py",
+      "deeptutor/learning/tests/test_mastery_navigation.py",
+      "deeptutor/learning/tests/test_mastery_mode.py",
+      "deeptutor/learning/tests/test_guided_mastery_updates.py",
+      "deeptutor/learning/tests/test_service_replace_merge.py",
+      "tests/capabilities/test_mastery_capability.py",
+      "tests/capabilities/test_mastery_echoed_options.py",
+      "tests/capabilities/test_mastery_loop_pipeline.py"
+    ],
+    "reading": [
+      "tests/reading/test_capability.py",
+      "tests/reading/test_catalog_store.py",
+      "tests/reading/test_engine.py",
+      "tests/reading/test_epub_bilingual.py",
+      "tests/reading/test_extension_router.py",
+      "tests/reading/test_extensions.py",
+      "tests/reading/test_grounding.py",
+      "tests/reading/test_ingestion.py",
+      "tests/reading/test_knowledge_capture.py",
+      "tests/reading/test_mode_registration.py",
+      "tests/reading/test_quiz.py",
+      "tests/reading/test_read_aloud.py",
+      "tests/reading/test_reading_hints.py",
+      "tests/reading/test_references.py",
+      "tests/reading/test_router.py",
+      "tests/reading/test_study_guidance.py",
+      "tests/reading/test_translation.py",
+      "tests/reading/test_turn_wiring.py",
+      "tests/reading/test_vocabulary.py",
+      "tests/reading/test_workspace_tools.py",
+      "tests/api/test_courses_router.py",
+      "tests/capabilities/test_course_study.py"
+    ],
+    "reading_mock_e2e": [
+      "web/tests/e2e/reading-citation-material.audit.ts",
+      "web/tests/e2e/reading-location-history.audit.ts",
+      "web/tests/e2e/reading-w3c-annotations.audit.ts"
+    ],
+    "cron": [
+      "tests/services/cron/test_cron_repository.py",
+      "tests/services/cron/test_cron_service.py",
+      "tests/services/cron/test_cron_tool.py"
+    ],
+    "partners_status": [
+      "tests/services/partners/test_runtime_status.py",
+      "tests/api/test_partners_router.py",
+      "tests/services/partners/test_partner_manager_config.py",
+      "tests/services/partners/test_partner_runtime.py"
+    ],
+    "matrix": [
+      "tests/test_matrix_requirements.py",
+      "tests/services/partners/test_channel_state_migration.py",
+      "tests/scripts/test_install_extras.py"
+    ],
+    "marginnote": [
+      "tests/capabilities/marginnote4/test_store.py",
+      "tests/capabilities/marginnote4/test_tools.py",
+      "tests/capabilities/marginnote4/test_capability.py",
+      "tests/api/test_marginnote4_router.py",
+      "tests/knowledge/test_marginnote4_kb.py"
+    ],
+    "memory_read_only": [
+      "tests/services/memory/test_snapshot_adapters.py",
+      "tests/services/memory/test_snapshot_probes.py",
+      "tests/services/memory/test_recall.py",
+      "tests/services/memory/test_modes.py",
+      "tests/api/test_memory_resolver.py"
+    ],
+    "default_routing_entry": [
+      "tests/api/test_canonical_route_surface.py",
+      "tests/api/test_websocket_routing.py",
+      "tests/api/test_unified_ws_protocol.py",
+      "tests/cli/test_chat_cli.py",
+      "tests/cli/test_chat_state_output.py",
+      "tests/cli/test_chat_terminal.py",
+      "tests/cli/test_codebuddy_login.py",
+      "tests/cli/test_common.py",
+      "tests/cli/test_config_cli.py",
+      "tests/cli/test_docs_contract.py",
+      "tests/cli/test_doctor_cli.py",
+      "tests/cli/test_init_wizard_probe.py",
+      "tests/cli/test_kb_cli.py",
+      "tests/cli/test_notebook_cli.py",
+      "tests/cli/test_provider_cli.py",
+      "tests/cli/test_skill_cli.py",
+      "tests/cli/test_turn_renderer.py",
+      "tests/cli/test_workspace_cli.py",
+      "tests/app/test_multiworker_turn_application.py",
+      "tests/app/test_multiworker_turn_reply_after_queue_drop.py",
+      "tests/app/test_startup_data_migrations.py",
+      "tests/app/test_turn_application_service.py",
+      "tests/app/test_turn_parked_on_ask_user_is_reclaimable.py",
+      "tests/app/test_waiting_turn_recovery.py",
+      "tests/core/test_capabilities_runtime.py"
+    ],
+    "packaging_optional_sdk": [
+      "tests/test_packaging_metadata.py",
+      "tests/test_matrix_requirements.py",
+      "tests/scripts/test_install_extras.py",
+      "tests/agents/chat/test_pageindex_sdk_tools.py",
+      "tests/services/rag/test_pageindex_pipeline.py",
+      "tests/services/rag/test_pageindex_tools.py"
+    ]
+  }
+}

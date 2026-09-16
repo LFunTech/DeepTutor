@@ -15,7 +15,6 @@ race on a shared object.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -75,6 +74,7 @@ from deeptutor.learning.question_card import (
     build_grade_result,
     build_question_card,
 )
+from deeptutor.learning.service import LearningService
 
 if TYPE_CHECKING:
     from deeptutor.learning.models import LearningProgress
@@ -108,11 +108,20 @@ _BUILD_SHAPE_ERROR = (
 logger = logging.getLogger(__name__)
 
 
-def _new_service() -> LearningService:
-    from deeptutor.learning.service import LearningService
-    from deeptutor.learning.storage import LearningStore
+def _new_service(kwargs, *, read_only=False):
+    from deeptutor.learning.runtime import get_learning_runtime
 
-    return LearningService(LearningStore())
+    runtime = get_learning_runtime()
+    if not read_only:
+        authority = runtime.authority
+        if authority is None or not authority.turn_id:
+            raise RuntimeError("Live learning turn authority is required")
+        if (authority.session_id, authority.turn_id) != (
+            _resolve_session_id(kwargs),
+            _resolve_turn_id(kwargs),
+        ):
+            raise PermissionError("Learning tool session/turn authority mismatch")
+    return runtime
 
 
 def _resolve_path_id(kwargs: dict[str, Any]) -> str:
@@ -289,19 +298,16 @@ async def _resolve_pending_choice(
     """
     options = pending.choice_map
     if not has_option_bodies(options):
-        try:
-            from deeptutor.services.session import get_sqlite_session_store
+        from deeptutor.learning.runtime import get_learning_runtime
 
-            options = await recover_options_from_turn(
-                get_sqlite_session_store(), turn_id, pending.prompt
-            )
-        except Exception:
-            logger.warning("Failed to recover legacy mastery choice options", exc_info=True)
-            options = {}
+        runtime = get_learning_runtime()
+        await runtime.authorize()
+        options = await recover_options_from_turn(runtime.session_store, turn_id, pending.prompt)
+        await runtime.authorize()
     return options, resolve_answer(pending.expected_answer, options) or pending.expected_answer
 
 
-async def _sync_mastery_attempt_to_question_bank(
+def _mastery_notebook_item(
     *,
     path_id: str,
     session_id: str,
@@ -314,8 +320,6 @@ async def _sync_mastery_attempt_to_question_bank(
     material_title: str = "",
     section_title: str = "",
 ) -> None:
-    if not session_id:
-        return
     item = {
         "turn_id": turn_id,
         "question_id": pending.question_id,
@@ -335,20 +339,7 @@ async def _sync_mastery_attempt_to_question_bank(
         "section_id": pending.knowledge_point_id,
         "section_title": section_title,
     }
-    try:
-        from deeptutor.services.session import get_sqlite_session_store
-
-        await asyncio.wait_for(
-            get_sqlite_session_store().upsert_notebook_entries(session_id, [item]),
-            timeout=5.0,
-        )
-    except Exception:
-        logger.warning(
-            "Failed to sync mastery question %s to question bank for session %s",
-            pending.question_id,
-            session_id,
-            exc_info=True,
-        )
+    return item
 
 
 def _unreadable_choice_result(answer: str, options: dict[str, str]) -> ToolResult:
@@ -385,7 +376,7 @@ def _no_path_result() -> ToolResult:
     )
 
 
-def _load_path(service: LearningService, path_id: str) -> LearningProgress | None:
+async def _load_path(service: LearningService, path_id: str) -> LearningProgress | None:
     """Read a path, or ``None`` when it does not exist yet.
 
     Reading must not create. ``get_or_create`` is the right entry point for
@@ -394,7 +385,7 @@ def _load_path(service: LearningService, path_id: str) -> LearningProgress | Non
     how a chat that merely *asked* about its progress left an empty path behind
     each time (#909).
     """
-    return service.store.load(path_id)
+    return await service.run(lambda unit: unit.load(path_id))
 
 
 def _profile_status(progress: LearningProgress | None) -> dict[str, Any]:
@@ -566,18 +557,13 @@ async def _unbuilt_status_message(
             "in this one. Read the materials, ask what you cannot read off them, "
             "then call mastery_build."
         )
-    overviews = await asyncio.to_thread(service.list_path_overviews)
-    elsewhere = [
-        overview
-        for overview in overviews
-        if overview["objectives"] > 0 and overview["path_id"] != active_path_id
-    ]
+    elsewhere = await service.run(lambda unit: unit.other_built_path_cardinality(active_path_id))
     if not elsewhere:
         return (
             "No mastery path has been built yet. Design one from the learner's "
             "materials and call mastery_build."
         )
-    if len(elsewhere) == 1:
+    if elsewhere == 1:
         return (
             "This conversation is not on a built path, but the learner has one "
             "built elsewhere. Call mastery_paths for its id and mastery_switch "
@@ -585,8 +571,8 @@ async def _unbuilt_status_message(
             "here."
         )
     return (
-        f"This conversation is not on a built path, but the learner already has "
-        f"{len(elsewhere)} built elsewhere. Call mastery_paths, then ask the "
+        "This conversation is not on a built path, but the learner already has "
+        "multiple built elsewhere. Call mastery_paths, then ask the "
         "learner which one they mean and mastery_switch to the one they name — "
         "do not pick for them. Only call mastery_build if they want a new path "
         "here."
@@ -613,18 +599,9 @@ class MasteryStatusTool(BaseTool):
         path_id = _resolve_path_id(kwargs)
         if not path_id:
             return _no_path_result()
-        service = _new_service()
-        progress = _load_path(service, path_id)
-        # Which goal this is, in the learner's own words. The tutor had no way
-        # to see it before: the map carries a name, and the sentence the
-        # learner actually wrote when they created the goal lived only in the
-        # dashboard — so a conversation standing inside a brand-new goal read
-        # as a conversation standing nowhere.
-        topic = (
-            await asyncio.to_thread(service.store.get_topic, path_id, progress=progress)
-            if progress is not None
-            else None
-        )
+        service = _new_service(kwargs, read_only=True)
+        snapshot = await service.run(lambda u: u.get_topic_snapshot(path_id))
+        progress, topic, _, interaction = snapshot if snapshot else (None, None, 0, None)
         identity = {
             "path_id": path_id,
             "path_name": path_display_name(progress) if progress is not None else "",
@@ -655,7 +632,6 @@ class MasteryStatusTool(BaseTool):
             "map": map_summary(progress),
             **_profile_status(progress),
         }
-        interaction = service.store.get_active_interaction(path_id)
         if interaction is not None:
             pending_interaction = {
                 "question_id": interaction.interaction_id,
@@ -825,8 +801,8 @@ class MasteryQuizTool(BaseTool):
             question, {option["label"]: option["body"] for option in options}
         )
 
-        service = _new_service()
-        progress = _load_path(service, path_id)
+        service = _new_service(kwargs)
+        progress = await _load_path(service, path_id)
         if progress is None:
             return _no_built_path_result("mastery_quiz")
         scope = _review_scope_refusal(kwargs, progress, kp_id)
@@ -851,13 +827,23 @@ class MasteryQuizTool(BaseTool):
         )
         from deeptutor.learning.service import MasteryInteractionError
 
-        try:
-            progress, interaction, created = service.register_question(
+        def register(unit):
+            progress, interaction, created = LearningService(unit).register_question(
                 path_id,
                 pending,
                 session_id=_resolve_session_id(kwargs),
                 turn_id=_resolve_turn_id(kwargs),
             )
+            LearningService(unit).mark_question_awaiting(
+                path_id,
+                interaction_id=interaction.interaction_id,
+                session_id=_resolve_session_id(kwargs),
+                turn_id=_resolve_turn_id(kwargs),
+            )
+            return unit.load(path_id), interaction, created
+
+        try:
+            progress, interaction, created = await service.run(register)
         except MasteryInteractionError as exc:
             return ToolResult(content=str(exc), success=False)
         pending = interaction.question
@@ -869,13 +855,6 @@ class MasteryQuizTool(BaseTool):
         )
         # The card is now the learner's to answer, which is the same commit the
         # old pause hook made before parking the turn.
-        await asyncio.to_thread(
-            service.mark_question_awaiting,
-            path_id,
-            interaction_id=interaction.interaction_id,
-            session_id=_resolve_session_id(kwargs),
-            turn_id=_resolve_turn_id(kwargs),
-        )
         # Diagnostic only. The question itself travels in ``card``, so nothing
         # here restates it.
         payload = {
@@ -971,13 +950,13 @@ class MasteryGradeTool(BaseTool):
         from deeptutor.learning.scheduler import SpacedRepetitionScheduler
 
         answer = str(kwargs.get("answer") or "")
-        service = _new_service()
+        service = _new_service(kwargs)
         scheduler = SpacedRepetitionScheduler()
         submitted_question_id = str(kwargs.get("question_id") or "").strip()
         interaction = (
-            service.store.get_interaction(path_id, submitted_question_id)
+            await service.run(lambda unit: unit.get_interaction(path_id, submitted_question_id))
             if submitted_question_id
-            else service.store.get_active_interaction(path_id)
+            else await service.run(lambda unit: unit.get_active_interaction(path_id))
         )
         if interaction is not None and interaction.status == InteractionStatus.ANSWERED:
             # The pause/resume boundary already committed the learner's exact
@@ -992,7 +971,7 @@ class MasteryGradeTool(BaseTool):
                 stored, question.choice_map
             ):
                 answer = stored
-        progress_before = _load_path(service, path_id)
+        progress_before = await _load_path(service, path_id)
         if progress_before is None:
             return _no_built_path_result("mastery_grade")
         pending = (
@@ -1023,8 +1002,8 @@ class MasteryGradeTool(BaseTool):
                 answer_for_grading = answer
         from deeptutor.learning.service import MasteryInteractionError
 
-        try:
-            progress, interaction, replayed = service.grade_interaction(
+        def grade_atomic(unit):
+            progress, interaction, replayed = LearningService(unit).grade_interaction(
                 path_id,
                 answer=answer,
                 question_id=submitted_question_id,
@@ -1035,6 +1014,27 @@ class MasteryGradeTool(BaseTool):
                 session_id=_resolve_session_id(kwargs),
                 turn_id=_resolve_turn_id(kwargs),
             )
+            graded_pending = interaction.question
+            kp, _, _ = find_knowledge_point(progress, graded_pending.knowledge_point_id)
+            item = _mastery_notebook_item(
+                path_id=path_id,
+                session_id=_resolve_session_id(kwargs),
+                turn_id=_resolve_turn_id(kwargs),
+                pending=graded_pending,
+                user_answer=interaction.user_answer,
+                is_correct=bool(interaction.result.get("is_correct")),
+                choice_options=choice_options,
+                correct_answer=expected_answer,
+                material_title=progress.name,
+                section_title=kp.name if kp else "",
+            )
+            if not replayed:
+                with unit.transaction(path_id):
+                    unit.upsert_mastery_notebook_entries(_resolve_session_id(kwargs), [item])
+            return unit.load(path_id), interaction, replayed
+
+        try:
+            progress, interaction, replayed = await service.run(grade_atomic)
         except MasteryInteractionError as exc:
             # The common way to land here now is grading something the runtime
             # already ruled on: an answer sent from a card is graded before the
@@ -1050,24 +1050,7 @@ class MasteryGradeTool(BaseTool):
             )
         pending = interaction.question
         is_correct = bool(interaction.result.get("is_correct"))
-        # Upsert on every call, including an idempotent replay: if the first
-        # best-effort sync timed out, a safe retry repairs the auxiliary
-        # question bank without duplicating the mastery attempt.
         kp, _, _ = find_knowledge_point(progress, pending.knowledge_point_id)
-        await _sync_mastery_attempt_to_question_bank(
-            path_id=path_id,
-            session_id=interaction.session_id or _resolve_session_id(kwargs),
-            turn_id=interaction.turn_id or _resolve_turn_id(kwargs),
-            pending=pending,
-            # Replays must repair the auxiliary question bank with the
-            # committed answer, not whatever a later model round supplied.
-            user_answer=interaction.user_answer,
-            is_correct=is_correct,
-            choice_options=choice_options,
-            correct_answer=expected_answer,
-            material_title=progress.name,
-            section_title=kp.name if kp else "",
-        )
         mastered = bool(kp and is_mastered(progress, kp))
         payload = {
             "is_correct": is_correct,
@@ -1159,8 +1142,8 @@ class MasteryAssessTool(BaseTool):
         passed = bool(kwargs.get("passed"))
         feedback = str(kwargs.get("feedback") or "").strip()
 
-        service = _new_service()
-        progress = _load_path(service, path_id)
+        service = _new_service(kwargs)
+        progress = await _load_path(service, path_id)
         if progress is None:
             return _no_built_path_result("mastery_assess")
         scope = _review_scope_refusal(kwargs, progress, kp_id)
@@ -1183,14 +1166,16 @@ class MasteryAssessTool(BaseTool):
         from deeptutor.learning.service import MasteryInteractionError
 
         try:
-            progress = service.record_qualitative_for_path(
-                path_id,
-                kp_id,
-                passed=passed,
-                evidence=feedback,
-                scheduler=SpacedRepetitionScheduler(),
-                session_id=_resolve_session_id(kwargs),
-                turn_id=_resolve_turn_id(kwargs),
+            progress = await service.run(
+                lambda unit: LearningService(unit).record_qualitative_for_path(
+                    path_id,
+                    kp_id,
+                    passed=passed,
+                    evidence=feedback,
+                    scheduler=SpacedRepetitionScheduler(),
+                    session_id=_resolve_session_id(kwargs),
+                    turn_id=_resolve_turn_id(kwargs),
+                )
             )
         except MasteryInteractionError as exc:
             return ToolResult(content=str(exc), success=False)
@@ -1232,12 +1217,14 @@ class MasterySkipQuestionTool(BaseTool):
         if not path_id:
             return _no_path_result()
 
-        service = _new_service()
-        if _load_path(service, path_id) is None:
+        service = _new_service(kwargs)
+        if await _load_path(service, path_id) is None:
             return _no_built_path_result("mastery_skip_question")
 
-        interaction = service.store.get_active_interaction(path_id)
-        progress, skipped = service.abandon_active_question(path_id)
+        interaction = await service.run(lambda unit: unit.get_active_interaction(path_id))
+        progress, skipped = await service.run(
+            lambda unit: LearningService(unit).abandon_active_question(path_id)
+        )
         payload = {
             "status": "skipped" if skipped else "no_pending_question",
             "skipped": skipped,
@@ -1348,7 +1335,7 @@ class MasteryBuildTool(BaseTool):
         if mode not in {"replace", "append"}:
             mode = "replace"
 
-        service = _new_service()
+        service = _new_service(kwargs)
         new_modules, error = _parse_modules(
             kwargs.get("modules"),
             path_id,
@@ -1358,14 +1345,16 @@ class MasteryBuildTool(BaseTool):
         if error:
             return ToolResult(content=error, success=False)
 
-        progress = service.replace_modules_for_path(
-            path_id,
-            new_modules,
-            append=mode == "append",
-            name=str(kwargs.get("path_name") or ""),
-            event_type="path.built",
-            session_id=_resolve_session_id(kwargs),
-            turn_id=_resolve_turn_id(kwargs),
+        progress = await service.run(
+            lambda unit: LearningService(unit).replace_modules_for_path(
+                path_id,
+                new_modules,
+                append=mode == "append",
+                name=str(kwargs.get("path_name") or ""),
+                event_type="path.built",
+                session_id=_resolve_session_id(kwargs),
+                turn_id=_resolve_turn_id(kwargs),
+            )
         )
         kp_count = sum(len(m.knowledge_points) for m in new_modules)
         return _json_result(
@@ -1446,8 +1435,8 @@ class MasteryModeTool(BaseTool):
             )
 
         current = _mode_of(kwargs)
-        service = _new_service()
-        progress = _load_path(service, path_id)
+        service = _new_service(kwargs)
+        progress = await _load_path(service, path_id)
         has_outline = progress is not None and any(
             module.knowledge_points for module in progress.modules
         )
@@ -1456,14 +1445,14 @@ class MasteryModeTool(BaseTool):
             return ToolResult(content=refusal, success=False)
 
         bind = kwargs.get("_bind_active_mode")
-        if callable(bind):
-            bind(requested)
         # Two places, like a path switch: the live turn so the rest of it can
         # use the new mode's tools, and the conversation so the next turn (and
         # a reload) resumes in it.
         from deeptutor.capabilities.mastery.binding import remember_mode_on_session
 
         await remember_mode_on_session(_resolve_session_id(kwargs), requested)
+        if callable(bind):
+            bind(requested)
         return _json_result(
             {
                 "status": "unchanged" if requested == current else "switched",
@@ -1568,12 +1557,14 @@ class MasteryProfileTool(BaseTool):
                 success=False,
             )
 
-        service = _new_service()
-        progress, changed = service.record_learner_profile(
-            path_id,
-            fields=fields,
-            session_id=_resolve_session_id(kwargs),
-            turn_id=_resolve_turn_id(kwargs),
+        service = _new_service(kwargs)
+        progress, changed = await service.run(
+            lambda unit: LearningService(unit).record_learner_profile(
+                path_id,
+                fields=fields,
+                session_id=_resolve_session_id(kwargs),
+                turn_id=_resolve_turn_id(kwargs),
+            )
         )
         return _json_result(
             {
@@ -1685,8 +1676,8 @@ class MasteryReviseTool(BaseTool):
         if not path_id:
             return _no_path_result()
 
-        service = _new_service()
-        progress = _load_path(service, path_id)
+        service = _new_service(kwargs)
+        progress = await _load_path(service, path_id)
         if progress is None or not progress.modules:
             return _no_built_path_result("mastery_revise")
 
@@ -1709,12 +1700,14 @@ class MasteryReviseTool(BaseTool):
             else module.model_copy(deep=True)
             for module in sorted(progress.modules, key=lambda m: m.order)
         ]
-        progress = service.replace_modules_for_path(
-            path_id,
-            applied,
-            event_type="path.module_revised",
-            session_id=_resolve_session_id(kwargs),
-            turn_id=_resolve_turn_id(kwargs),
+        progress = await service.run(
+            lambda unit: LearningService(unit).replace_modules_for_path(
+                path_id,
+                applied,
+                event_type="path.module_revised",
+                session_id=_resolve_session_id(kwargs),
+                turn_id=_resolve_turn_id(kwargs),
+            )
         )
         return _json_result(
             {
@@ -1748,13 +1741,23 @@ class MasteryPathsTool(BaseTool):
                 "the learner asks what they are studying or what is finished, "
                 "or before mastery_switch, to find the id to switch to."
             ),
-            parameters=[],
+            parameters=[
+                ToolParameter(
+                    name="cursor",
+                    type="string",
+                    required=False,
+                    description="Continue from next_cursor in the previous page.",
+                )
+            ],
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        service = _new_service()
+        service = _new_service(kwargs, read_only=True)
         active = _resolve_path_id(kwargs)
-        overviews = await asyncio.to_thread(service.list_path_overviews)
+        from deeptutor.learning.navigation import path_overview_page
+
+        page = await path_overview_page(store=service, cursor=kwargs.get("cursor"))
+        overviews = page["paths"]
         # A path with no objectives is one nobody has built yet; listing it
         # would offer the model an id that teaches nothing.
         paths = [
@@ -1766,6 +1769,7 @@ class MasteryPathsTool(BaseTool):
             {
                 "active_path_id": active,
                 "paths": paths,
+                "next_cursor": page["next_cursor"],
                 "instruction": (
                     "Switch with mastery_switch(path_id=...); every later call "
                     "in the turn — including ones issued alongside it — then "

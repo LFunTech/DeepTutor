@@ -19,6 +19,7 @@ from deeptutor.api.contracts.turn_protocol import (
 )
 from deeptutor.api.routers.auth import require_admin
 from deeptutor.multi_user.context import get_current_user
+from deeptutor.multi_user.roles import can_manage_deployment
 from deeptutor.runtime import memory_probe
 from deeptutor.services.app_update import (
     Installation,
@@ -194,7 +195,7 @@ def _update_payload(
             "reason": installation.reason,
         },
         "launcher_managed": launcher_available(),
-        "is_admin": get_current_user().is_admin,
+        "is_admin": can_manage_deployment(get_current_user()),
         "job": _job_payload(_stored_job(store)),
     }
 
@@ -390,7 +391,7 @@ async def get_system_status():
     # Non-admin users have no need to know which model the admin configured;
     # exposing the name leaks operational detail and would let curious users
     # fingerprint the deployment. Strip the identifying fields.
-    if not get_current_user().is_admin:
+    if not can_manage_deployment(get_current_user()):
         for section in ("llm", "embeddings"):
             result[section].pop("model", None)
         result["search"].pop("provider", None)
@@ -410,7 +411,7 @@ async def get_memory_usage():
     non-admins — process composition and host memory are operational detail a
     tenant has no need for.
     """
-    if not get_current_user().is_admin:
+    if not can_manage_deployment(get_current_user()):
         return {"available": False}
 
     snapshot = await asyncio.to_thread(memory_probe.capture)

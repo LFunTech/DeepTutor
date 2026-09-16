@@ -864,14 +864,14 @@ def maybe_run(coro):  # noqa: ANN001
 
 def print_session_table(sessions: list[dict[str, Any]]) -> None:
     table = Table(title="Sessions")
-    table.add_column("ID")
+    table.add_column("ID", no_wrap=True)
     table.add_column("Title")
     table.add_column("Capability")
     table.add_column("Status")
     table.add_column("Messages", justify="right")
     for session in sessions:
         table.add_row(
-            str(session.get("id", "")),
+            str(session.get("id") or session.get("session_id") or ""),
             str(session.get("title", "")),
             str(session.get("capability", "") or "chat"),
             str(session.get("status", "")),

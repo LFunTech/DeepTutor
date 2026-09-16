@@ -21,13 +21,17 @@ from pydantic import BaseModel, Field
 
 from deeptutor.multi_user.context import get_current_user
 from deeptutor.multi_user.paths import get_admin_path_service
+from deeptutor.multi_user.roles import can_manage_deployment, is_grant_restricted_user
 from deeptutor.services.i18n import t
 from deeptutor.services.persona import (
     InvalidPersonaNameError,
     PersonaExistsError,
     PersonaNotFoundError,
     PersonaService,
-    get_persona_service,
+)
+from deeptutor.services.persona.runtime import (
+    call_persona_service,
+    get_runtime_persona_service,
 )
 
 router = APIRouter()
@@ -51,10 +55,10 @@ def _admin_persona_service() -> PersonaService:
 
 @router.get("/personas")
 async def list_personas() -> dict[str, list[dict[str, object]]]:
-    service = get_persona_service()
-    own = [info.to_dict() for info in service.list_personas()]
+    service = get_runtime_persona_service()
+    own = [info.to_dict() for info in await call_persona_service(service, "list_personas")]
     user = get_current_user()
-    if user.is_admin:
+    if can_manage_deployment(user) or not isinstance(service, PersonaService):
         return {"personas": own}
     own_names = {item["name"] for item in own}
     merged = list(own)
@@ -69,16 +73,16 @@ async def list_personas() -> dict[str, list[dict[str, object]]]:
 
 @router.get("/personas/{name}")
 async def get_persona(name: str) -> dict[str, object]:
-    service = get_persona_service()
+    service = get_runtime_persona_service()
     try:
-        return service.get_detail(name).to_dict()
+        return (await call_persona_service(service, "get_detail", name)).to_dict()
     except PersonaNotFoundError:
         pass
     except InvalidPersonaNameError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     user = get_current_user()
-    if not user.is_admin:
+    if isinstance(service, PersonaService) and is_grant_restricted_user(user):
         try:
             detail = _admin_persona_service().get_detail(name).to_dict()
             detail.update({"source": "admin", "read_only": True})
@@ -90,9 +94,11 @@ async def get_persona(name: str) -> dict[str, object]:
 
 @router.post("/personas")
 async def create_persona(payload: CreatePersonaRequest) -> dict[str, object]:
-    service = get_persona_service()
+    service = get_runtime_persona_service()
     try:
-        info = service.create(
+        info = await call_persona_service(
+            service,
+            "create",
             name=payload.name,
             description=payload.description,
             content=payload.content,
@@ -109,9 +115,11 @@ async def create_persona(payload: CreatePersonaRequest) -> dict[str, object]:
 
 @router.put("/personas/{name}")
 async def update_persona(name: str, payload: UpdatePersonaRequest) -> dict[str, object]:
-    service = get_persona_service()
+    service = get_runtime_persona_service()
     try:
-        info = service.update(
+        info = await call_persona_service(
+            service,
+            "update",
             name,
             description=payload.description,
             content=payload.content,
@@ -128,9 +136,9 @@ async def update_persona(name: str, payload: UpdatePersonaRequest) -> dict[str, 
 
 @router.delete("/personas/{name}")
 async def delete_persona(name: str) -> dict[str, str]:
-    service = get_persona_service()
+    service = get_runtime_persona_service()
     try:
-        service.delete(name)
+        await call_persona_service(service, "delete", name)
         return {"status": "deleted", "name": name}
     except PersonaNotFoundError:
         raise HTTPException(status_code=404, detail=t("api.persona_not_found", name=name))

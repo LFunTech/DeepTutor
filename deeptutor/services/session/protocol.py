@@ -7,6 +7,7 @@ allowing the rest of the codebase to be store-agnostic.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -23,6 +24,20 @@ class SessionRepository(Protocol):
     async def get_session(self, session_id: str) -> dict[str, Any] | None: ...
 
     async def ensure_session(self, session_id: str | None = None) -> dict[str, Any]: ...
+
+    async def import_session(
+        self,
+        session_id: str,
+        title: str,
+        created_at: float,
+        updated_at: float,
+        preferences: dict[str, Any] | None,
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any]: ...
+
+    async def list_imported_sessions(
+        self, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]: ...
 
     async def import_legacy_session(
         self,
@@ -102,7 +117,99 @@ class MessageRepository(Protocol):
 
 
 @runtime_checkable
-class SessionStoreProtocol(SessionRepository, TurnRepository, MessageRepository, Protocol):
+class QuestionBankRepository(Protocol):
+    async def upsert_notebook_entries(
+        self, session_id: str, items: list[dict[str, Any]]
+    ) -> int: ...
+
+    async def list_notebook_entries(
+        self,
+        category_id: int | None = None,
+        bookmarked: bool | None = None,
+        is_correct: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        *,
+        session_id: str | None = None,
+        session_ids: Sequence[str] | None = None,
+        source: str = "",
+        material_id: str = "",
+        section_id: str = "",
+        resolved: bool | None = None,
+        score_trend: str = "",
+        search: str = "",
+        uncategorized: bool = False,
+        sort: str = "recent",
+        cursor: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def has_question_bank_entries(self) -> bool: ...
+
+    async def question_bank_stats(
+        self, session_ids: Sequence[str] | None = None
+    ) -> dict[str, int]: ...
+
+    async def list_question_bank_materials(
+        self, session_ids: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]: ...
+
+    async def get_notebook_entry(self, entry_id: int) -> dict[str, Any] | None: ...
+
+    async def find_notebook_entry(
+        self, session_id: str, question_id: str, turn_id: str | None = None
+    ) -> dict[str, Any] | None: ...
+
+    async def update_notebook_entry(
+        self,
+        entry_id: int,
+        updates: dict[str, Any],
+        *,
+        expected_version: int | None = None,
+    ) -> bool: ...
+
+    async def delete_notebook_entry(
+        self, entry_id: int, *, expected_version: int | None = None
+    ) -> bool: ...
+
+    async def create_category(self, name: str) -> dict[str, Any]: ...
+
+    async def list_categories(
+        self, session_ids: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]: ...
+
+    async def rename_category(
+        self,
+        category_id: int,
+        name: str,
+        *,
+        expected_version: int | None = None,
+    ) -> bool: ...
+
+    async def delete_category(
+        self, category_id: int, *, expected_version: int | None = None
+    ) -> bool: ...
+
+    async def add_entry_to_category(self, entry_id: int, category_id: int) -> bool: ...
+
+    async def remove_entry_from_category(self, entry_id: int, category_id: int) -> bool: ...
+
+    async def get_entry_categories(self, entry_id: int) -> list[dict[str, Any]]: ...
+
+    async def link_entries_to_category(
+        self, entry_ids: list[int], category_id: int, *, link: bool = True
+    ) -> int: ...
+
+    async def find_category_by_name(self, name: str) -> dict[str, Any] | None: ...
+
+
+@runtime_checkable
+class SessionStoreProtocol(
+    SessionRepository,
+    TurnRepository,
+    MessageRepository,
+    QuestionBankRepository,
+    Protocol,
+):
     async def migrate_workspace_preferences(self) -> int: ...
 
     async def create_session(
@@ -192,6 +299,7 @@ class SessionStoreProtocol(SessionRepository, TurnRepository, MessageRepository,
 
 __all__ = [
     "MessageRepository",
+    "QuestionBankRepository",
     "SessionRepository",
     "SessionStoreProtocol",
     "TurnRepository",

@@ -1,3 +1,5 @@
+# ruff: noqa: F811
+# pytest fixture 重导出与注入参数同名。
 """Account preset persistence, expansion, and admin HTTP behavior."""
 
 from __future__ import annotations
@@ -6,30 +8,26 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+
 
 @pytest.fixture
-def preset_client(mu_isolated_root, monkeypatch, as_user):
-    from deeptutor.api.routers import multi_user as multi_user_router
-    import deeptutor.api.routers.auth as auth_router
-    from deeptutor.api.routers.auth import require_admin
-    from deeptutor.multi_user.identity import save_user
-    from deeptutor.services.auth import TokenPayload
+def preset_client(pg_dsn, tmp_path):
+    from tests.fixtures.default_pg_auth import pg_auth_client
 
-    admin = save_user("admin", "$2b$12$placeholder", role="admin")
-    tokens = {"admin-token": TokenPayload(username="admin", role="admin", user_id=admin["id"])}
-    monkeypatch.setattr(auth_router, "AUTH_ENABLED", True)
-    monkeypatch.setattr(auth_router, "decode_token", lambda token: tokens.get(token))
-
-    app = FastAPI()
-    app.include_router(auth_router.router, prefix="/api/auth")
-    app.include_router(multi_user_router.router, prefix="/api/multi-user")
-    app.dependency_overrides[require_admin] = lambda: tokens["admin-token"]
-    return TestClient(app), admin, tokens
+    with pg_auth_client(
+        pg_dsn,
+        tmp_path / "resources",
+        admin="admin",
+        learner="seed-learner",
+        ordinary="seed-standard",
+    ) as client:
+        yield client, client.users()["admin"], client.app.state.tokens
 
 
-def test_legacy_and_new_standard_users_default_to_standard(seed_user):
-    user = seed_user("legacy")
-    assert user["preset"] == "standard"
+def test_legacy_and_new_standard_users_default_to_standard(preset_client):
+    client, _, _ = preset_client
+    assert client.users()["seed-standard"]["preset"] == "standard"
 
 
 def test_learning_surface_routing_matches_complete_path_segments():
@@ -59,13 +57,11 @@ def test_non_learner_presets_do_not_install_a_learning_grant(preset_client, pres
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["preset"] == preset
-    from deeptutor.multi_user.grants import load_grant
 
-    assert load_grant(body["user_id"])["learning_policy"] is None
+    assert client.users()[body["username"]]["learning_policy"] is None
 
 
 def test_learner_preset_expands_to_a_conservative_grant(preset_client):
-    from deeptutor.multi_user.grants import load_grant
 
     client, _admin, _tokens = preset_client
 
@@ -84,12 +80,8 @@ def test_learner_preset_expands_to_a_conservative_grant(preset_client):
     assert body["role"] == "user"
     assert body["preset"] == "learner"
 
-    grant = load_grant(body["user_id"])
-    assert grant["enabled_tools"] == []
-    assert grant["mcp_tools"] == []
-    assert grant["cli_apps"] == []
-    assert grant["exec_enabled"] is False
-    assert grant["learning_policy"] == {
+    # PG 账号策略是权威，完整资源 grants 的接线另由领域任务承担。
+    assert client.users()[body["username"]]["learning_policy"] == {
         "age_band": "9-12",
         "locked_persona": "teacher",
         "allowed_capabilities": ["chat", "immersive_reading"],
@@ -104,15 +96,17 @@ def test_learner_preset_expands_to_a_conservative_grant(preset_client):
 
 
 def test_learner_creation_rolls_back_when_grant_initialization_fails(preset_client, monkeypatch):
-    from deeptutor.multi_user import grants
-    from deeptutor.multi_user.identity import get_user
 
     client, _admin, _tokens = preset_client
 
-    def fail_save_grant(*args, **kwargs):
-        raise RuntimeError("grant store unavailable")
+    original = client.identity._audit
 
-    monkeypatch.setattr(grants, "save_grant", fail_save_grant)
+    async def fail_account_commit(c, actor, action, target, result):
+        if action == "create_user":
+            raise RuntimeError("account policy transaction failed")
+        return await original(c, actor, action, target, result)
+
+    monkeypatch.setattr(client.identity, "_audit", fail_account_commit)
     response = client.post(
         "/api/auth/users",
         headers={"Authorization": "Bearer admin-token"},
@@ -123,9 +117,9 @@ def test_learner_creation_rolls_back_when_grant_initialization_fails(preset_clie
         },
     )
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == "The learner preset could not be initialized."
-    assert get_user("student") is None
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Account service unavailable"
+    assert "student" not in client.users()
 
 
 def test_learner_accounts_cannot_disable_the_learning_policy(preset_client):
@@ -151,11 +145,11 @@ def test_learner_accounts_cannot_disable_the_learning_policy(preset_client):
 
 
 @pytest.mark.parametrize("preset", ["learner", "custom"])
-def test_pocketbase_rejects_presets_it_cannot_enforce(preset_client, monkeypatch, preset):
-    import deeptutor.api.routers.auth as auth_router
+def test_pocketbase_setting_cannot_replace_pg_preset_authority(preset_client, monkeypatch, preset):
+    import deeptutor.services.auth as auth_service
 
     client, _admin, _tokens = preset_client
-    monkeypatch.setattr(auth_router, "POCKETBASE_ENABLED", True)
+    monkeypatch.setattr(auth_service, "POCKETBASE_ENABLED", True)
     response = client.post(
         "/api/auth/users",
         headers={"Authorization": "Bearer admin-token"},
@@ -166,8 +160,8 @@ def test_pocketbase_rejects_presets_it_cannot_enforce(preset_client, monkeypatch
         },
     )
 
-    assert response.status_code == 400
-    assert "standard preset" in response.json()["detail"]
+    assert response.status_code == 201
+    assert response.json()["preset"] == preset
 
 
 def test_auth_status_returns_the_effective_learning_policy(preset_client):
@@ -181,11 +175,8 @@ def test_auth_status_returns_the_effective_learning_policy(preset_client):
             "preset": "learner",
         },
     ).json()
-    from deeptutor.services.auth import TokenPayload
-
-    tokens["learner-token"] = TokenPayload(
-        username="student", role="user", user_id=created["user_id"]
-    )
+    token = client.call("login", "student", "reading-password-1", client="status-test")
+    tokens["learner-token"] = token
     response = client.get(
         "/api/auth/status",
         headers={"Authorization": "Bearer learner-token"},

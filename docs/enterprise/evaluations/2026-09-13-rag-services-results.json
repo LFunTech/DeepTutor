@@ -1,0 +1,1041 @@
+{
+  "evaluation_date": "2026-09-13",
+  "scope": "local Docker contract checks with synthetic text; not production acceptance or comparative quality benchmark",
+  "releases": [
+    {
+      "tag_name": "v0.8.0",
+      "target_commitish": "main",
+      "published_at": "2026-09-03T07:03:36Z",
+      "html_url": "https://github.com/Tencent/WeKnora/releases/tag/v0.8.0",
+      "prerelease": false,
+      "repo": "Tencent/WeKnora",
+      "commit": "1edcd54b43606d9079bb36650efe3f68707a79ea"
+    },
+    {
+      "tag_name": "v1.5.7",
+      "target_commitish": "main",
+      "published_at": "2026-09-02T07:23:55Z",
+      "html_url": "https://github.com/HKUDS/LightRAG/releases/tag/v1.5.7",
+      "prerelease": false,
+      "repo": "HKUDS/LightRAG",
+      "commit": "28ff1b05f2ac3f3e6fa14dd2cd33656579bd0c9c"
+    }
+  ],
+  "images": {
+    "pg-w": {
+      "image": "paradedb/paradedb:v0.22.2-pg17",
+      "digests": [
+        "paradedb/paradedb@sha256:af585013f97f622715de01e48d00558f7edf17055d7b40deafc9f98ca8d99a56"
+      ],
+      "architecture": "arm64"
+    },
+    "pg-l": {
+      "image": "pgvector/pgvector:pg17",
+      "digests": [
+        "pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+      ],
+      "architecture": "arm64"
+    },
+    "redis": {
+      "image": "redis:7.4-alpine",
+      "digests": [
+        "redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf"
+      ],
+      "architecture": "arm64"
+    },
+    "s3": {
+      "image": "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
+      "digests": [
+        "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+      ],
+      "architecture": "arm64"
+    },
+    "neo4j": {
+      "image": "neo4j:5.26-community",
+      "digests": [
+        "neo4j@sha256:22ec5cd05a8cbb372fc4bed5e384c30bc75fd92504c72be4462039761b105f61"
+      ],
+      "architecture": "arm64"
+    },
+    "docreader": {
+      "image": "wechatopenai/weknora-docreader:v0.8.0",
+      "digests": [
+        "wechatopenai/weknora-docreader@sha256:59e26f98f17c296c5f4bd216404558f51d31991b580cfef1d204903a01e4b46b"
+      ],
+      "architecture": "arm64"
+    },
+    "model-proxy": {
+      "image": "ghcr.io/hkuds/lightrag:v1.5.7",
+      "digests": [
+        "ghcr.io/hkuds/lightrag@sha256:5bdbd524931b011df246fe20888d110cef691e6804c12cde636a2b746d7de27e"
+      ],
+      "architecture": "arm64"
+    },
+    "weknora": {
+      "image": "wechatopenai/weknora-app:v0.8.0",
+      "digests": [
+        "wechatopenai/weknora-app@sha256:14953fcb990c59b2546f00e94673d2a4c88689e3319bfcf2b06f82feaccec9b4"
+      ],
+      "architecture": "arm64"
+    },
+    "lightrag-a": {
+      "image": "ghcr.io/hkuds/lightrag:v1.5.7",
+      "digests": [
+        "ghcr.io/hkuds/lightrag@sha256:5bdbd524931b011df246fe20888d110cef691e6804c12cde636a2b746d7de27e"
+      ],
+      "architecture": "arm64"
+    },
+    "lightrag-b": {
+      "image": "ghcr.io/hkuds/lightrag:v1.5.7",
+      "digests": [
+        "ghcr.io/hkuds/lightrag@sha256:5bdbd524931b011df246fe20888d110cef691e6804c12cde636a2b746d7de27e"
+      ],
+      "architecture": "arm64"
+    }
+  },
+  "models": {
+    "chat": "qwen-plus",
+    "embedding": "text-embedding-v4",
+    "embedding_dimensions": 1024,
+    "reranking_enabled": false,
+    "thinking_enabled": false,
+    "max_chat_output_tokens": 4096
+  },
+  "fixtures": {
+    "a_station.md": {
+      "text": "# 苍鹭站运行档案（A 租户合成资料）\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。",
+      "bytes": 263,
+      "sha256": "8a123a6c515d87b25252ccf13c955259fd6d3dbff1fa655b4579915f1f30d965"
+    },
+    "a_research.md": {
+      "text": "# 岚川学院合作网络\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。",
+      "bytes": 219,
+      "sha256": "7448b1ddbb02dcf413af1d055c6765ecbe33f07c41fa2ae440331d1dfe817afb"
+    },
+    "a_rule.md": {
+      "text": "# 赤霄协议计算规则\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。",
+      "bytes": 279,
+      "sha256": "5ac80e78335fe88e9d1e95083f57219a4dc2500d9da88cc390a7f194834873f9"
+    },
+    "b_station.md": {
+      "text": "# 苍鹭站运行档案（B 租户合成资料）\nB 租户的苍鹭站由远杉学院运营，使用玄鸟协议。B 租户苍鹭站的检修口令是 BOREAL-926。玄鸟协议校准间隔为 43 分钟。B 租户项目负责人是叶峻，不是林澈。",
+      "bytes": 254,
+      "sha256": "2e9c02d92b26a2ab3bdf8a72615b29c99946403cf5416676175199650b11397c"
+    }
+  },
+  "lightrag": {
+    "queries": [
+      {
+        "name": "口令",
+        "query": "苍鹭站的检修口令是什么？",
+        "seconds": 1.615,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 3,
+        "expected_substrings": [
+          "AURORA-731"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/query",
+          "json": {
+            "query": "苍鹭站的检修口令是什么？",
+            "mode": "mix",
+            "only_need_context": true
+          },
+          "authentication": "test A instance API key; value omitted"
+        },
+        "context_sha256": [
+          "46b739768effa4fa72e20a8fafee670dfd2c17353573f8f362719e4ae26adc07"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "两跳关系",
+        "query": "运营苍鹭站的学院资助了哪家实验室，实验室负责的项目负责人是谁？",
+        "seconds": 1.568,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 3,
+        "expected_substrings": [
+          "靛桥实验室",
+          "林澈"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/query",
+          "json": {
+            "query": "运营苍鹭站的学院资助了哪家实验室，实验室负责的项目负责人是谁？",
+            "mode": "mix",
+            "only_need_context": true
+          },
+          "authentication": "test A instance API key; value omitted"
+        },
+        "context_sha256": [
+          "b2710fb23ef9e31ee4374fceecb5fe29419c6e1a3679e04190a84e8d0f83de11"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "协议计算",
+        "query": "苍鹭站采用的协议规定基准周期为7秒，采样周期是多少？",
+        "seconds": 1.56,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 3,
+        "expected_substrings": [
+          "21"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/query",
+          "json": {
+            "query": "苍鹭站采用的协议规定基准周期为7秒，采样周期是多少？",
+            "mode": "mix",
+            "only_need_context": true
+          },
+          "authentication": "test A instance API key; value omitted"
+        },
+        "context_sha256": [
+          "35f283d20a36b7acd113e1a0db85cc702bc3e86678b08e94702f2be23ff49e0b"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "周期",
+        "query": "苍鹭站需要每隔多少分钟校准？",
+        "seconds": 1.485,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 3,
+        "expected_substrings": [
+          "17"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/query",
+          "json": {
+            "query": "苍鹭站需要每隔多少分钟校准？",
+            "mode": "mix",
+            "only_need_context": true
+          },
+          "authentication": "test A instance API key; value omitted"
+        },
+        "context_sha256": [
+          "97d17762007797cc93ddacc5c5e27f48a877bae469b0e9592c17540bcadba3d6"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "项目",
+        "query": "哪个计划为苍鹭站提供传感器？",
+        "seconds": 1.363,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 3,
+        "expected_substrings": [
+          "潮汐计划"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/query",
+          "json": {
+            "query": "哪个计划为苍鹭站提供传感器？",
+            "mode": "mix",
+            "only_need_context": true
+          },
+          "authentication": "test A instance API key; value omitted"
+        },
+        "context_sha256": [
+          "601fb1a3872acfba0bf9c3780383a6b3495c1ac18f1d8921d6eb61ff918da7b7"
+        ],
+        "join_separator": "\n"
+      }
+    ],
+    "latency_median_seconds": 1.56,
+    "graph_query": {
+      "status": 200,
+      "counts": {
+        "entities": 15,
+        "relationships": 15,
+        "chunks": 3,
+        "references": 3
+      },
+      "request": {
+        "method": "POST",
+        "path": "/query/data",
+        "json": {
+          "query": "运营苍鹭站的学院资助了哪家实验室，实验室负责的项目负责人是谁？",
+          "mode": "local",
+          "enable_rerank": false
+        }
+      },
+      "observed_data": {
+        "entities": [
+          {
+            "entity_name": "苍鹭站",
+            "entity_type": "location",
+            "description": "接收潮汐计划所供传感器的站点，是该计划的服务对象之一。<SEP>一个由岚川学院运营的站点，采用赤霄协议，检修口令为AURORA-731",
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000<SEP>doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_research.md<SEP>a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "AURORA-731",
+            "entity_type": "artifact",
+            "description": "苍鹭站专用的检修口令，用于系统维护与访问授权",
+            "source_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "潮汐计划",
+            "entity_type": "event",
+            "description": "一项由靛桥实验室负责、林澈领导的研究项目，向苍鹭站提供传感器，交付时间为十一月。",
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000",
+            "file_path": "a_research.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "岚川学院",
+            "entity_type": "organization",
+            "description": "一所资助靛桥实验室的教育机构，参与潮汐计划的合作网络。<SEP>运营苍鹭站的教育与研究机构，与靛桥实验室相互独立",
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000<SEP>doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_research.md<SEP>a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "赤霄协议",
+            "entity_type": "artifact",
+            "description": "苍鹭站所采用的技术协议，规定每隔17分钟执行一次校准操作<SEP>一种通信或计算协议，定义了采样周期与基准周期的关系(T=3B)，并规定了校准值使用限制，由许沐负责测试。",
+            "source_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000<SEP>doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_station.md<SEP>a_rule.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "校准",
+            "entity_type": "event",
+            "description": "依据赤霄协议在苍鹭站定期执行的系统参数调整与验证操作，周期为17分钟一次",
+            "source_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "靛桥实验室",
+            "entity_type": "organization",
+            "description": "受岚川学院资助的研究机构，负责执行潮汐计划。<SEP>与岚川学院相互独立的科研机构，未参与苍鹭站运营",
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000<SEP>doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_research.md<SEP>a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "玄鸟协议",
+            "entity_type": "artifact",
+            "description": "另一种通信或计算协议，与赤霄协议互不兼容，禁止混用其校准值。",
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "entity_name": "许沐",
+            "entity_type": "person",
+            "description": "赤霄协议测试工作的负责人。",
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "entity_name": "林澈",
+            "entity_type": "person",
+            "description": "潮汐计划的负责人，主导该计划的实施。",
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000",
+            "file_path": "a_research.md",
+            "created_at": 1789290343
+          },
+          {
+            "entity_name": "采样周期",
+            "entity_type": "concept",
+            "description": "赤霄协议中定义的时间周期，数值为21秒，等于基准周期的三倍。",
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "entity_name": "7秒",
+            "entity_type": "data",
+            "description": "赤霄协议中规定的基准周期B的具体数值，为7秒。",
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "entity_name": "21秒",
+            "entity_type": "data",
+            "description": "赤霄协议中推导出的采样周期T的具体数值，等于3倍基准周期，即21秒。",
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "entity_name": "基准周期",
+            "entity_type": "concept",
+            "description": "赤霄协议中的基础时间单位，设定为7秒，用于推导采样周期(T=3B)。",
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "entity_name": "十一月",
+            "entity_type": "concept",
+            "description": "潮汐计划的交付时间，指公历每年的第十一个月。",
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000",
+            "file_path": "a_research.md",
+            "created_at": 1789290343
+          }
+        ],
+        "relationships": [
+          {
+            "src_id": "苍鹭站",
+            "tgt_id": "赤霄协议",
+            "description": "苍鹭站依据赤霄协议进行技术规范与校准操作",
+            "keywords": "采用",
+            "weight": 1.0,
+            "source_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "src_id": "潮汐计划",
+            "tgt_id": "苍鹭站",
+            "description": "潮汐计划向苍鹭站交付并部署传感器设备。",
+            "keywords": "提供传感器",
+            "weight": 1.0,
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000",
+            "file_path": "a_research.md",
+            "created_at": 1789290342
+          },
+          {
+            "src_id": "基准周期",
+            "tgt_id": "赤霄协议",
+            "description": "赤霄协议以基准周期B(7秒)为基本参数，采样周期的计算依赖于该值。",
+            "keywords": "依赖,定义",
+            "weight": 1.0,
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "src_id": "赤霄协议",
+            "tgt_id": "采样周期",
+            "description": "赤霄协议明确定义采样周期T等于基准周期B的三倍(T=3B)，并据此得出其具体值为21秒。",
+            "keywords": "定义,推导",
+            "weight": 1.0,
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "src_id": "校准",
+            "tgt_id": "赤霄协议",
+            "description": "赤霄协议明确要求每隔17分钟对苍鹭站系统执行一次校准",
+            "keywords": "规定周期",
+            "weight": 1.0,
+            "source_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "src_id": "玄鸟协议",
+            "tgt_id": "赤霄协议",
+            "description": "赤霄协议与玄鸟协议被明确指出不同且禁止混用彼此的校准值，二者在应用上互斥。",
+            "keywords": "互斥,对比",
+            "weight": 1.0,
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "src_id": "许沐",
+            "tgt_id": "赤霄协议",
+            "description": "许沐是赤霄协议测试工作的直接负责人。",
+            "keywords": "测试,负责",
+            "weight": 1.0,
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "src_id": "岚川学院",
+            "tgt_id": "苍鹭站",
+            "description": "岚川学院负责苍鹭站的整体运行与管理",
+            "keywords": "运营",
+            "weight": 1.0,
+            "source_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "src_id": "潮汐计划",
+            "tgt_id": "靛桥实验室",
+            "description": "靛桥实验室承担潮汐计划的组织实施工作。",
+            "keywords": "负责执行",
+            "weight": 1.0,
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000",
+            "file_path": "a_research.md",
+            "created_at": 1789290342
+          },
+          {
+            "src_id": "AURORA-731",
+            "tgt_id": "苍鹭站",
+            "description": "AURORA-731是苍鹭站进行设备检修与系统维护时必需输入的专用口令",
+            "keywords": "使用",
+            "weight": 1.0,
+            "source_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "src_id": "十一月",
+            "tgt_id": "潮汐计划",
+            "description": "潮汐计划的成果(如传感器)预定于十一月完成交付。",
+            "keywords": "交付时间",
+            "weight": 1.0,
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000",
+            "file_path": "a_research.md",
+            "created_at": 1789290342
+          },
+          {
+            "src_id": "林澈",
+            "tgt_id": "潮汐计划",
+            "description": "林澈是潮汐计划的直接负责人和领导者。",
+            "keywords": "负责人",
+            "weight": 1.0,
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000",
+            "file_path": "a_research.md",
+            "created_at": 1789290342
+          },
+          {
+            "src_id": "岚川学院",
+            "tgt_id": "靛桥实验室",
+            "description": "岚川学院为靛桥实验室提供资金支持。<SEP>二者在组织隶属、职能与运营管理上完全分离，无隶属或协作关系",
+            "keywords": "独立机构,资助",
+            "weight": 2.0,
+            "source_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000<SEP>doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000",
+            "file_path": "a_research.md<SEP>a_station.md",
+            "created_at": 1789290343
+          },
+          {
+            "src_id": "21秒",
+            "tgt_id": "采样周期",
+            "description": "采样周期T在赤霄协议中经计算得出为21秒。",
+            "keywords": "取值,等于",
+            "weight": 1.0,
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          },
+          {
+            "src_id": "7秒",
+            "tgt_id": "基准周期",
+            "description": "基准周期B在赤霄协议中被明确定义为7秒。",
+            "keywords": "取值,等于",
+            "weight": 1.0,
+            "source_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000",
+            "file_path": "a_rule.md",
+            "created_at": 1789290357
+          }
+        ],
+        "chunks": [
+          {
+            "reference_id": "1",
+            "content": "# 苍鹭站运行档案（A 租户合成资料）\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。",
+            "file_path": "a_station.md",
+            "chunk_id": "doc-6285a0fb8fb65d355512bdb22f457d22-chunk-000"
+          },
+          {
+            "reference_id": "2",
+            "content": "# 岚川学院合作网络\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。",
+            "file_path": "a_research.md",
+            "chunk_id": "doc-2419eabac27c1fe2058a7f66d7ae5f77-chunk-000"
+          },
+          {
+            "reference_id": "3",
+            "content": "# 赤霄协议计算规则\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。",
+            "file_path": "a_rule.md",
+            "chunk_id": "doc-b87a701229541f1400a6f385ad95bf50-chunk-000"
+          }
+        ],
+        "references": [
+          {
+            "reference_id": "1",
+            "file_path": "a_station.md"
+          },
+          {
+            "reference_id": "2",
+            "file_path": "a_research.md"
+          },
+          {
+            "reference_id": "3",
+            "file_path": "a_rule.md"
+          }
+        ]
+      }
+    },
+    "workspace_header": {
+      "status": 200,
+      "still_A": true,
+      "contains_B": false
+    },
+    "wrong_key_status": 403,
+    "workspace_b": {
+      "has_B": true,
+      "has_A": false
+    },
+    "lifecycle": {
+      "fresh_scratch_restart": {
+        "http_status": 200,
+        "has_original_A": true,
+        "seconds": 5.492
+      },
+      "delete_request": {
+        "status": 200,
+        "response": {
+          "status": "deletion_started",
+          "message": "Document deletion for 1 documents has been initiated. Processing will continue in background.",
+          "doc_id": "doc-b87a701229541f1400a6f385ad95bf50"
+        }
+      },
+      "after_delete": {
+        "doc_absent": true,
+        "removed_source_absent": true,
+        "removed_formula_absent": true
+      },
+      "s3_delete": true
+    },
+    "pg_public_tables_with_rls": 0,
+    "pg_public_tables_count": 13
+  },
+  "weknora": {
+    "queries": [
+      {
+        "name": "口令",
+        "query": "苍鹭站的检修口令是什么？",
+        "seconds": 0.438,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 5,
+        "expected_substrings": [
+          "AURORA-731"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/knowledge-search",
+          "json": {
+            "query": "苍鹭站的检修口令是什么？",
+            "knowledge_base_id": "test A KB; actual generated ID omitted"
+          },
+          "authentication": "test A scoped retrieve key; value omitted"
+        },
+        "context_sha256": [
+          "8a123a6c515d87b25252ccf13c955259fd6d3dbff1fa655b4579915f1f30d965",
+          "7a06c0cec4ad0d6a915e5ccc5156227e48d09e5d1496031f94866233cdfae9be",
+          "7448b1ddbb02dcf413af1d055c6765ecbe33f07c41fa2ae440331d1dfe817afb",
+          "57a9db9a7bfc1df0102a26814a1e816c74c8c8dc4eb7a3e01498acac9b0e0694",
+          "5ac80e78335fe88e9d1e95083f57219a4dc2500d9da88cc390a7f194834873f9"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "两跳关系",
+        "query": "运营苍鹭站的学院资助了哪家实验室，实验室负责的项目负责人是谁？",
+        "seconds": 0.28,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 5,
+        "expected_substrings": [
+          "靛桥实验室",
+          "林澈"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/knowledge-search",
+          "json": {
+            "query": "运营苍鹭站的学院资助了哪家实验室，实验室负责的项目负责人是谁？",
+            "knowledge_base_id": "test A KB; actual generated ID omitted"
+          },
+          "authentication": "test A scoped retrieve key; value omitted"
+        },
+        "context_sha256": [
+          "8a123a6c515d87b25252ccf13c955259fd6d3dbff1fa655b4579915f1f30d965",
+          "7448b1ddbb02dcf413af1d055c6765ecbe33f07c41fa2ae440331d1dfe817afb",
+          "7a06c0cec4ad0d6a915e5ccc5156227e48d09e5d1496031f94866233cdfae9be",
+          "57a9db9a7bfc1df0102a26814a1e816c74c8c8dc4eb7a3e01498acac9b0e0694",
+          "5ac80e78335fe88e9d1e95083f57219a4dc2500d9da88cc390a7f194834873f9"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "协议计算",
+        "query": "苍鹭站采用的协议规定基准周期为7秒，采样周期是多少？",
+        "seconds": 0.41,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 5,
+        "expected_substrings": [
+          "21"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/knowledge-search",
+          "json": {
+            "query": "苍鹭站采用的协议规定基准周期为7秒，采样周期是多少？",
+            "knowledge_base_id": "test A KB; actual generated ID omitted"
+          },
+          "authentication": "test A scoped retrieve key; value omitted"
+        },
+        "context_sha256": [
+          "5ac80e78335fe88e9d1e95083f57219a4dc2500d9da88cc390a7f194834873f9",
+          "7a06c0cec4ad0d6a915e5ccc5156227e48d09e5d1496031f94866233cdfae9be",
+          "8a123a6c515d87b25252ccf13c955259fd6d3dbff1fa655b4579915f1f30d965",
+          "57a9db9a7bfc1df0102a26814a1e816c74c8c8dc4eb7a3e01498acac9b0e0694",
+          "53dbc14c871ee39bc902a0e2bcc7ed39e2ac3f441e421b6cd6dda2d4da620761"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "周期",
+        "query": "苍鹭站需要每隔多少分钟校准？",
+        "seconds": 0.298,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 5,
+        "expected_substrings": [
+          "17"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/knowledge-search",
+          "json": {
+            "query": "苍鹭站需要每隔多少分钟校准？",
+            "knowledge_base_id": "test A KB; actual generated ID omitted"
+          },
+          "authentication": "test A scoped retrieve key; value omitted"
+        },
+        "context_sha256": [
+          "7a06c0cec4ad0d6a915e5ccc5156227e48d09e5d1496031f94866233cdfae9be",
+          "8a123a6c515d87b25252ccf13c955259fd6d3dbff1fa655b4579915f1f30d965",
+          "5ac80e78335fe88e9d1e95083f57219a4dc2500d9da88cc390a7f194834873f9",
+          "57a9db9a7bfc1df0102a26814a1e816c74c8c8dc4eb7a3e01498acac9b0e0694",
+          "53dbc14c871ee39bc902a0e2bcc7ed39e2ac3f441e421b6cd6dda2d4da620761"
+        ],
+        "join_separator": "\n"
+      },
+      {
+        "name": "项目",
+        "query": "哪个计划为苍鹭站提供传感器？",
+        "seconds": 0.301,
+        "expected_in_context": true,
+        "foreign_canary_present": false,
+        "source_count": 5,
+        "expected_substrings": [
+          "潮汐计划"
+        ],
+        "match_rule": "all expected substrings occur in joined context; no exact answer or fact validation",
+        "forbidden_substring": "BOREAL-926",
+        "request": {
+          "method": "POST",
+          "path": "/api/v1/knowledge-search",
+          "json": {
+            "query": "哪个计划为苍鹭站提供传感器？",
+            "knowledge_base_id": "test A KB; actual generated ID omitted"
+          },
+          "authentication": "test A scoped retrieve key; value omitted"
+        },
+        "context_sha256": [
+          "8a123a6c515d87b25252ccf13c955259fd6d3dbff1fa655b4579915f1f30d965",
+          "7a06c0cec4ad0d6a915e5ccc5156227e48d09e5d1496031f94866233cdfae9be",
+          "53dbc14c871ee39bc902a0e2bcc7ed39e2ac3f441e421b6cd6dda2d4da620761",
+          "57a9db9a7bfc1df0102a26814a1e816c74c8c8dc4eb7a3e01498acac9b0e0694",
+          "5ac80e78335fe88e9d1e95083f57219a4dc2500d9da88cc390a7f194834873f9"
+        ],
+        "join_separator": "\n"
+      }
+    ],
+    "latency_median_seconds": 0.301,
+    "unauth_status": 401,
+    "cross_tenant_status": 403,
+    "mixed_kb_status": 403,
+    "retrieve_key_write_status": 403,
+    "download_a": {
+      "status": 200,
+      "hash_match": true
+    },
+    "download_b": {
+      "status": 200,
+      "hash_match": true
+    },
+    "workspace_b": {
+      "has_B": true,
+      "has_A": false
+    },
+    "boundaries": {
+      "add_viewer_status": 201,
+      "switch_tenant_status": 200,
+      "same_workspace_viewer_read": {
+        "status": 200,
+        "can_read_owner_kb_canary": true,
+        "interpretation": "WeKnora 空间成员读权限，不等于 DeepTutor 个人默认私有"
+      },
+      "graph_offline_retrieval": {
+        "status": 200,
+        "seconds": 0.259,
+        "result_count": 5,
+        "has_context": true
+      },
+      "revoke_status": 200,
+      "revoked_key_status": 401
+    },
+    "lifecycle": {
+      "fresh_scratch_restart": {
+        "status": 200,
+        "has_A": true,
+        "seconds": 2.642
+      },
+      "delete_status": 200,
+      "deleted_doc_status": 404,
+      "after_delete": {
+        "removed_source_absent": true,
+        "removed_formula_absent": true
+      },
+      "native_s3_copy_removed": true,
+      "reparse_status": 200,
+      "reparse_final": "completed",
+      "reparse_error": "",
+      "source_after_restart_and_reparse": {
+        "status": 200,
+        "bytes_match": true
+      }
+    },
+    "neo4j_before_deletion": {
+      "nodes": 19,
+      "edges": 14
+    },
+    "pg_public_tables_with_rls": 0,
+    "pg_public_tables_count": 66
+  },
+  "hugegraph": {
+    "readonly_checks": [
+      {
+        "check": "version",
+        "status": 200,
+        "version_info": {
+          "versions": {
+            "version": "v1",
+            "core": "1.7.0",
+            "gremlin": "3.5.1",
+            "api": "0.71.0.0"
+          }
+        }
+      },
+      {
+        "check": "configured_graph",
+        "status": 200
+      }
+    ],
+    "data_written": false,
+    "native_backend_in_pinned_candidates": false
+  },
+  "synthetic_s3_harness": [
+    {
+      "key": "tenants/eval_a/source/a_rule.md",
+      "bytes": 279,
+      "hash_match": true,
+      "signed_status": 200,
+      "unsigned_status": 403
+    },
+    {
+      "key": "tenants/eval_a/source/a_station.md",
+      "bytes": 263,
+      "hash_match": true,
+      "signed_status": 200,
+      "unsigned_status": 403
+    },
+    {
+      "key": "tenants/eval_b/source/b_station.md",
+      "bytes": 254,
+      "hash_match": true,
+      "signed_status": 200,
+      "unsigned_status": 403
+    },
+    {
+      "key": "tenants/eval_a/source/a_research.md",
+      "bytes": 219,
+      "hash_match": true,
+      "signed_status": 200,
+      "unsigned_status": 403
+    }
+  ],
+  "proxy_model_usage": {
+    "qwen-plus": {
+      "requests": 26,
+      "prompt_tokens": 28632,
+      "completion_tokens": 4447,
+      "errors": 0
+    },
+    "text-embedding-v4": {
+      "requests": 43,
+      "prompt_tokens": 3702,
+      "completion_tokens": 0,
+      "errors": 0
+    }
+  },
+  "preflight_outside_proxy": [
+    {
+      "path": "/embeddings",
+      "status": 200,
+      "model": "text-embedding-v4",
+      "usage": {
+        "prompt_tokens": 13,
+        "total_tokens": 13
+      },
+      "dimensions": 1024
+    },
+    {
+      "path": "/chat/completions",
+      "status": 200,
+      "model": "qwen-plus",
+      "usage": {
+        "total_tokens": 18,
+        "completion_tokens": 3,
+        "prompt_tokens": 15,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    }
+  ],
+  "billing_verified": false,
+  "idle_resource_sample": [
+    {
+      "Name": "local-debug-rag-eval-weknora-1",
+      "MemUsage": "195.2MiB / 31.29GiB",
+      "CPUPerc": "0.44%"
+    },
+    {
+      "Name": "local-debug-rag-eval-lightrag-a-1",
+      "MemUsage": "318MiB / 31.29GiB",
+      "CPUPerc": "0.33%"
+    },
+    {
+      "Name": "local-debug-rag-eval-neo4j-1",
+      "MemUsage": "670.9MiB / 31.29GiB",
+      "CPUPerc": "0.89%"
+    },
+    {
+      "Name": "local-debug-rag-eval-s3-1",
+      "MemUsage": "107.6MiB / 31.29GiB",
+      "CPUPerc": "0.02%"
+    },
+    {
+      "Name": "local-debug-rag-eval-docreader-1",
+      "MemUsage": "149.8MiB / 31.29GiB",
+      "CPUPerc": "0.19%"
+    },
+    {
+      "Name": "local-debug-rag-eval-pg-w-1",
+      "MemUsage": "127.7MiB / 31.29GiB",
+      "CPUPerc": "0.00%"
+    },
+    {
+      "Name": "local-debug-rag-eval-redis-1",
+      "MemUsage": "11.69MiB / 31.29GiB",
+      "CPUPerc": "0.95%"
+    },
+    {
+      "Name": "local-debug-rag-eval-lightrag-b-1",
+      "MemUsage": "317.4MiB / 31.29GiB",
+      "CPUPerc": "0.27%"
+    },
+    {
+      "Name": "local-debug-rag-eval-model-proxy-1",
+      "MemUsage": "15.9MiB / 31.29GiB",
+      "CPUPerc": "0.02%"
+    },
+    {
+      "Name": "local-debug-rag-eval-pg-l-1",
+      "MemUsage": "51.58MiB / 31.29GiB",
+      "CPUPerc": "0.01%"
+    }
+  ],
+  "quality_findings": [
+    {
+      "provider": "lightrag",
+      "observed": "岚川学院为靛桥实验室提供资金支持。<SEP>二者在组织隶属、职能与运营管理上完全分离，无隶属或协作关系",
+      "assessment": "Generated relation description includes an unsupported denial of collaboration and conflicts with the funding relation; substring hit is not graph correctness."
+    },
+    {
+      "provider": "weknora",
+      "observed": "二者在组织隶属、管理架构及技术体系上均无关联",
+      "assessment": "Generated summary expands independent institutions into unsupported claims about technical systems; not an answer accuracy measurement."
+    }
+  ],
+  "not_verified": [
+    "real textbook PDF/OCR/formulas/tables/images",
+    "statistical recall/answer accuracy/p95/throughput",
+    "HugeGraph write/read adapter, isolation, performance and recovery",
+    "least-privilege DB runtime and migrations",
+    "enterprise RLS and complete owner/grant revocation",
+    "atomic new index-version rebuild and binding switch",
+    "HA, concurrent indexing, production backup restore",
+    "billing cost"
+  ],
+  "raw_evidence_sha256": {
+    "lightrag-query.json": "151e14601ef9c0f50c8ba1ee79f8e2e6f796268e1524546532de80b4460a6094",
+    "weknora-query.json": "81daacc3231fe25ce23c896f9fcf88e170c6002931bde24c7bde39175815926b",
+    "lightrag-lifecycle.json": "1572f8febd302281b6d2a205094d6abade763b1c8175aa69a57fc38e1b6fda1c",
+    "weknora-lifecycle.json": "e31c2871575bf9a2109faad70f737920d3ef215132a1eeb57d10399703af5569",
+    "weknora-boundaries.json": "cd065f82460461fbdc95ffd908b4ce42dc4b3ea865a7fef0a74956eee52ffaac",
+    "hugegraph-readonly-check.json": "c9fad3e3a52967b7f78d5dab1a70bcfc12e412eae2849b916026b1a4f94abc0e",
+    "s3-source-check.json": "c68ac403ed513701aa243172af336d0ab3f3201b36d7b37ee650a3b25cc5311e"
+  },
+  "observed_contexts_by_sha256": {
+    "46b739768effa4fa72e20a8fafee670dfd2c17353573f8f362719e4ae26adc07": "\nKnowledge Graph Data (Entity):\n\n```json\n{\"entity\": \"苍鹭站\", \"type\": \"location\", \"description\": \"接收潮汐计划所供传感器的站点，是该计划的服务对象之一。<SEP>一个由岚川学院运营的站点，采用赤霄协议，检修口令为AURORA-731\"}\n{\"entity\": \"AURORA-731\", \"type\": \"artifact\", \"description\": \"苍鹭站专用的检修口令，用于系统维护与访问授权\"}\n{\"entity\": \"潮汐计划\", \"type\": \"event\", \"description\": \"一项由靛桥实验室负责、林澈领导的研究项目，向苍鹭站提供传感器，交付时间为十一月。\"}\n{\"entity\": \"赤霄协议\", \"type\": \"artifact\", \"description\": \"苍鹭站所采用的技术协议，规定每隔17分钟执行一次校准操作<SEP>一种通信或计算协议，定义了采样周期与基准周期的关系(T=3B)，并规定了校准值使用限制，由许沐负责测试。\"}\n{\"entity\": \"岚川学院\", \"type\": \"organization\", \"description\": \"一所资助靛桥实验室的教育机构，参与潮汐计划的合作网络。<SEP>运营苍鹭站的教育与研究机构，与靛桥实验室相互独立\"}\n{\"entity\": \"校准\", \"type\": \"event\", \"description\": \"依据赤霄协议在苍鹭站定期执行的系统参数调整与验证操作，周期为17分钟一次\"}\n{\"entity\": \"玄鸟协议\", \"type\": \"artifact\", \"description\": \"另一种通信或计算协议，与赤霄协议互不兼容，禁止混用其校准值。\"}\n{\"entity\": \"靛桥实验室\", \"type\": \"organization\", \"description\": \"受岚川学院资助的研究机构，负责执行潮汐计划。<SEP>与岚川学院相互独立的科研机构，未参与苍鹭站运营\"}\n{\"entity\": \"基准周期\", \"type\": \"concept\", \"description\": \"赤霄协议中的基础时间单位，设定为7秒，用于推导采样周期(T=3B)。\"}\n{\"entity\": \"许沐\", \"type\": \"person\", \"description\": \"赤霄协议测试工作的负责人。\"}\n{\"entity\": \"采样周期\", \"type\": \"concept\", \"description\": \"赤霄协议中定义的时间周期，数值为21秒，等于基准周期的三倍。\"}\n{\"entity\": \"林澈\", \"type\": \"person\", \"description\": \"潮汐计划的负责人，主导该计划的实施。\"}\n{\"entity\": \"21秒\", \"type\": \"data\", \"description\": \"赤霄协议中推导出的采样周期T的具体数值，等于3倍基准周期，即21秒。\"}\n{\"entity\": \"7秒\", \"type\": \"data\", \"description\": \"赤霄协议中规定的基准周期B的具体数值，为7秒。\"}\n{\"entity\": \"十一月\", \"type\": \"concept\", \"description\": \"潮汐计划的交付时间，指公历每年的第十一个月。\"}\n```\n\nKnowledge Graph Data (Relationship):\n\n```json\n{\"entity1\": \"苍鹭站\", \"entity2\": \"赤霄协议\", \"description\": \"苍鹭站依据赤霄协议进行技术规范与校准操作\"}\n{\"entity1\": \"AURORA-731\", \"entity2\": \"苍鹭站\", \"description\": \"AURORA-731是苍鹭站进行设备检修与系统维护时必需输入的专用口令\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"苍鹭站\", \"description\": \"潮汐计划向苍鹭站交付并部署传感器设备。\"}\n{\"entity1\": \"基准周期\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议以基准周期B(7秒)为基本参数，采样周期的计算依赖于该值。\"}\n{\"entity1\": \"校准\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议明确要求每隔17分钟对苍鹭站系统执行一次校准\"}\n{\"entity1\": \"赤霄协议\", \"entity2\": \"采样周期\", \"description\": \"赤霄协议明确定义采样周期T等于基准周期B的三倍(T=3B)，并据此得出其具体值为21秒。\"}\n{\"entity1\": \"玄鸟协议\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议与玄鸟协议被明确指出不同且禁止混用彼此的校准值，二者在应用上互斥。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"苍鹭站\", \"description\": \"岚川学院负责苍鹭站的整体运行与管理\"}\n{\"entity1\": \"许沐\", \"entity2\": \"赤霄协议\", \"description\": \"许沐是赤霄协议测试工作的直接负责人。\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"靛桥实验室\", \"description\": \"靛桥实验室承担潮汐计划的组织实施工作。\"}\n{\"entity1\": \"21秒\", \"entity2\": \"采样周期\", \"description\": \"采样周期T在赤霄协议中经计算得出为21秒。\"}\n{\"entity1\": \"十一月\", \"entity2\": \"潮汐计划\", \"description\": \"潮汐计划的成果(如传感器)预定于十一月完成交付。\"}\n{\"entity1\": \"林澈\", \"entity2\": \"潮汐计划\", \"description\": \"林澈是潮汐计划的直接负责人和领导者。\"}\n{\"entity1\": \"7秒\", \"entity2\": \"基准周期\", \"description\": \"基准周期B在赤霄协议中被明确定义为7秒。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"靛桥实验室\", \"description\": \"岚川学院为靛桥实验室提供资金支持。<SEP>二者在组织隶属、职能与运营管理上完全分离，无隶属或协作关系\"}\n```\n\nDocument Chunks (Each entry has a reference_id refer to the `Reference Document List`; the optional `content_headings` field gives the chunk's heading path within its source document, e.g. `Section 1 → Subsection 1.2`):\n\n```json\n{\"reference_id\": \"1\", \"content\": \"# 苍鹭站运行档案（A 租户合成资料）\\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。\"}\n{\"reference_id\": \"2\", \"content\": \"# 岚川学院合作网络\\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。\"}\n{\"reference_id\": \"3\", \"content\": \"# 赤霄协议计算规则\\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。\"}\n```\n\nReference Document List (Each entry starts with a [reference_id] that corresponds to entries in the Document Chunks):\n\n```\n[1] a_station.md\n[2] a_research.md\n[3] a_rule.md\n```\n\n",
+    "b2710fb23ef9e31ee4374fceecb5fe29419c6e1a3679e04190a84e8d0f83de11": "\nKnowledge Graph Data (Entity):\n\n```json\n{\"entity\": \"苍鹭站\", \"type\": \"location\", \"description\": \"接收潮汐计划所供传感器的站点，是该计划的服务对象之一。<SEP>一个由岚川学院运营的站点，采用赤霄协议，检修口令为AURORA-731\"}\n{\"entity\": \"岚川学院\", \"type\": \"organization\", \"description\": \"一所资助靛桥实验室的教育机构，参与潮汐计划的合作网络。<SEP>运营苍鹭站的教育与研究机构，与靛桥实验室相互独立\"}\n{\"entity\": \"AURORA-731\", \"type\": \"artifact\", \"description\": \"苍鹭站专用的检修口令，用于系统维护与访问授权\"}\n{\"entity\": \"靛桥实验室\", \"type\": \"organization\", \"description\": \"受岚川学院资助的研究机构，负责执行潮汐计划。<SEP>与岚川学院相互独立的科研机构，未参与苍鹭站运营\"}\n{\"entity\": \"潮汐计划\", \"type\": \"event\", \"description\": \"一项由靛桥实验室负责、林澈领导的研究项目，向苍鹭站提供传感器，交付时间为十一月。\"}\n{\"entity\": \"赤霄协议\", \"type\": \"artifact\", \"description\": \"苍鹭站所采用的技术协议，规定每隔17分钟执行一次校准操作<SEP>一种通信或计算协议，定义了采样周期与基准周期的关系(T=3B)，并规定了校准值使用限制，由许沐负责测试。\"}\n{\"entity\": \"林澈\", \"type\": \"person\", \"description\": \"潮汐计划的负责人，主导该计划的实施。\"}\n{\"entity\": \"校准\", \"type\": \"event\", \"description\": \"依据赤霄协议在苍鹭站定期执行的系统参数调整与验证操作，周期为17分钟一次\"}\n{\"entity\": \"许沐\", \"type\": \"person\", \"description\": \"赤霄协议测试工作的负责人。\"}\n{\"entity\": \"玄鸟协议\", \"type\": \"artifact\", \"description\": \"另一种通信或计算协议，与赤霄协议互不兼容，禁止混用其校准值。\"}\n{\"entity\": \"十一月\", \"type\": \"concept\", \"description\": \"潮汐计划的交付时间，指公历每年的第十一个月。\"}\n{\"entity\": \"采样周期\", \"type\": \"concept\", \"description\": \"赤霄协议中定义的时间周期，数值为21秒，等于基准周期的三倍。\"}\n{\"entity\": \"7秒\", \"type\": \"data\", \"description\": \"赤霄协议中规定的基准周期B的具体数值，为7秒。\"}\n{\"entity\": \"基准周期\", \"type\": \"concept\", \"description\": \"赤霄协议中的基础时间单位，设定为7秒，用于推导采样周期(T=3B)。\"}\n{\"entity\": \"21秒\", \"type\": \"data\", \"description\": \"赤霄协议中推导出的采样周期T的具体数值，等于3倍基准周期，即21秒。\"}\n```\n\nKnowledge Graph Data (Relationship):\n\n```json\n{\"entity1\": \"苍鹭站\", \"entity2\": \"赤霄协议\", \"description\": \"苍鹭站依据赤霄协议进行技术规范与校准操作\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"靛桥实验室\", \"description\": \"岚川学院为靛桥实验室提供资金支持。<SEP>二者在组织隶属、职能与运营管理上完全分离，无隶属或协作关系\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"苍鹭站\", \"description\": \"潮汐计划向苍鹭站交付并部署传感器设备。\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"靛桥实验室\", \"description\": \"靛桥实验室承担潮汐计划的组织实施工作。\"}\n{\"entity1\": \"基准周期\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议以基准周期B(7秒)为基本参数，采样周期的计算依赖于该值。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"苍鹭站\", \"description\": \"岚川学院负责苍鹭站的整体运行与管理\"}\n{\"entity1\": \"赤霄协议\", \"entity2\": \"采样周期\", \"description\": \"赤霄协议明确定义采样周期T等于基准周期B的三倍(T=3B)，并据此得出其具体值为21秒。\"}\n{\"entity1\": \"林澈\", \"entity2\": \"潮汐计划\", \"description\": \"林澈是潮汐计划的直接负责人和领导者。\"}\n{\"entity1\": \"校准\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议明确要求每隔17分钟对苍鹭站系统执行一次校准\"}\n{\"entity1\": \"许沐\", \"entity2\": \"赤霄协议\", \"description\": \"许沐是赤霄协议测试工作的直接负责人。\"}\n{\"entity1\": \"玄鸟协议\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议与玄鸟协议被明确指出不同且禁止混用彼此的校准值，二者在应用上互斥。\"}\n{\"entity1\": \"AURORA-731\", \"entity2\": \"苍鹭站\", \"description\": \"AURORA-731是苍鹭站进行设备检修与系统维护时必需输入的专用口令\"}\n{\"entity1\": \"十一月\", \"entity2\": \"潮汐计划\", \"description\": \"潮汐计划的成果(如传感器)预定于十一月完成交付。\"}\n{\"entity1\": \"21秒\", \"entity2\": \"采样周期\", \"description\": \"采样周期T在赤霄协议中经计算得出为21秒。\"}\n{\"entity1\": \"7秒\", \"entity2\": \"基准周期\", \"description\": \"基准周期B在赤霄协议中被明确定义为7秒。\"}\n```\n\nDocument Chunks (Each entry has a reference_id refer to the `Reference Document List`; the optional `content_headings` field gives the chunk's heading path within its source document, e.g. `Section 1 → Subsection 1.2`):\n\n```json\n{\"reference_id\": \"1\", \"content\": \"# 苍鹭站运行档案（A 租户合成资料）\\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。\"}\n{\"reference_id\": \"2\", \"content\": \"# 岚川学院合作网络\\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。\"}\n{\"reference_id\": \"3\", \"content\": \"# 赤霄协议计算规则\\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。\"}\n```\n\nReference Document List (Each entry starts with a [reference_id] that corresponds to entries in the Document Chunks):\n\n```\n[1] a_station.md\n[2] a_research.md\n[3] a_rule.md\n```\n\n",
+    "35f283d20a36b7acd113e1a0db85cc702bc3e86678b08e94702f2be23ff49e0b": "\nKnowledge Graph Data (Entity):\n\n```json\n{\"entity\": \"苍鹭站\", \"type\": \"location\", \"description\": \"接收潮汐计划所供传感器的站点，是该计划的服务对象之一。<SEP>一个由岚川学院运营的站点，采用赤霄协议，检修口令为AURORA-731\"}\n{\"entity\": \"赤霄协议\", \"type\": \"artifact\", \"description\": \"苍鹭站所采用的技术协议，规定每隔17分钟执行一次校准操作<SEP>一种通信或计算协议，定义了采样周期与基准周期的关系(T=3B)，并规定了校准值使用限制，由许沐负责测试。\"}\n{\"entity\": \"AURORA-731\", \"type\": \"artifact\", \"description\": \"苍鹭站专用的检修口令，用于系统维护与访问授权\"}\n{\"entity\": \"采样周期\", \"type\": \"concept\", \"description\": \"赤霄协议中定义的时间周期，数值为21秒，等于基准周期的三倍。\"}\n{\"entity\": \"基准周期\", \"type\": \"concept\", \"description\": \"赤霄协议中的基础时间单位，设定为7秒，用于推导采样周期(T=3B)。\"}\n{\"entity\": \"校准\", \"type\": \"event\", \"description\": \"依据赤霄协议在苍鹭站定期执行的系统参数调整与验证操作，周期为17分钟一次\"}\n{\"entity\": \"7秒\", \"type\": \"data\", \"description\": \"赤霄协议中规定的基准周期B的具体数值，为7秒。\"}\n{\"entity\": \"潮汐计划\", \"type\": \"event\", \"description\": \"一项由靛桥实验室负责、林澈领导的研究项目，向苍鹭站提供传感器，交付时间为十一月。\"}\n{\"entity\": \"21秒\", \"type\": \"data\", \"description\": \"赤霄协议中推导出的采样周期T的具体数值，等于3倍基准周期，即21秒。\"}\n{\"entity\": \"玄鸟协议\", \"type\": \"artifact\", \"description\": \"另一种通信或计算协议，与赤霄协议互不兼容，禁止混用其校准值。\"}\n{\"entity\": \"岚川学院\", \"type\": \"organization\", \"description\": \"一所资助靛桥实验室的教育机构，参与潮汐计划的合作网络。<SEP>运营苍鹭站的教育与研究机构，与靛桥实验室相互独立\"}\n{\"entity\": \"十一月\", \"type\": \"concept\", \"description\": \"潮汐计划的交付时间，指公历每年的第十一个月。\"}\n{\"entity\": \"靛桥实验室\", \"type\": \"organization\", \"description\": \"受岚川学院资助的研究机构，负责执行潮汐计划。<SEP>与岚川学院相互独立的科研机构，未参与苍鹭站运营\"}\n{\"entity\": \"许沐\", \"type\": \"person\", \"description\": \"赤霄协议测试工作的负责人。\"}\n{\"entity\": \"林澈\", \"type\": \"person\", \"description\": \"潮汐计划的负责人，主导该计划的实施。\"}\n```\n\nKnowledge Graph Data (Relationship):\n\n```json\n{\"entity1\": \"苍鹭站\", \"entity2\": \"赤霄协议\", \"description\": \"苍鹭站依据赤霄协议进行技术规范与校准操作\"}\n{\"entity1\": \"赤霄协议\", \"entity2\": \"采样周期\", \"description\": \"赤霄协议明确定义采样周期T等于基准周期B的三倍(T=3B)，并据此得出其具体值为21秒。\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"苍鹭站\", \"description\": \"潮汐计划向苍鹭站交付并部署传感器设备。\"}\n{\"entity1\": \"基准周期\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议以基准周期B(7秒)为基本参数，采样周期的计算依赖于该值。\"}\n{\"entity1\": \"7秒\", \"entity2\": \"基准周期\", \"description\": \"基准周期B在赤霄协议中被明确定义为7秒。\"}\n{\"entity1\": \"21秒\", \"entity2\": \"采样周期\", \"description\": \"采样周期T在赤霄协议中经计算得出为21秒。\"}\n{\"entity1\": \"校准\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议明确要求每隔17分钟对苍鹭站系统执行一次校准\"}\n{\"entity1\": \"玄鸟协议\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议与玄鸟协议被明确指出不同且禁止混用彼此的校准值，二者在应用上互斥。\"}\n{\"entity1\": \"许沐\", \"entity2\": \"赤霄协议\", \"description\": \"许沐是赤霄协议测试工作的直接负责人。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"苍鹭站\", \"description\": \"岚川学院负责苍鹭站的整体运行与管理\"}\n{\"entity1\": \"AURORA-731\", \"entity2\": \"苍鹭站\", \"description\": \"AURORA-731是苍鹭站进行设备检修与系统维护时必需输入的专用口令\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"靛桥实验室\", \"description\": \"靛桥实验室承担潮汐计划的组织实施工作。\"}\n{\"entity1\": \"十一月\", \"entity2\": \"潮汐计划\", \"description\": \"潮汐计划的成果(如传感器)预定于十一月完成交付。\"}\n{\"entity1\": \"林澈\", \"entity2\": \"潮汐计划\", \"description\": \"林澈是潮汐计划的直接负责人和领导者。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"靛桥实验室\", \"description\": \"岚川学院为靛桥实验室提供资金支持。<SEP>二者在组织隶属、职能与运营管理上完全分离，无隶属或协作关系\"}\n```\n\nDocument Chunks (Each entry has a reference_id refer to the `Reference Document List`; the optional `content_headings` field gives the chunk's heading path within its source document, e.g. `Section 1 → Subsection 1.2`):\n\n```json\n{\"reference_id\": \"1\", \"content\": \"# 赤霄协议计算规则\\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。\"}\n{\"reference_id\": \"2\", \"content\": \"# 苍鹭站运行档案（A 租户合成资料）\\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。\"}\n{\"reference_id\": \"3\", \"content\": \"# 岚川学院合作网络\\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。\"}\n```\n\nReference Document List (Each entry starts with a [reference_id] that corresponds to entries in the Document Chunks):\n\n```\n[1] a_rule.md\n[2] a_station.md\n[3] a_research.md\n```\n\n",
+    "97d17762007797cc93ddacc5c5e27f48a877bae469b0e9592c17540bcadba3d6": "\nKnowledge Graph Data (Entity):\n\n```json\n{\"entity\": \"苍鹭站\", \"type\": \"location\", \"description\": \"接收潮汐计划所供传感器的站点，是该计划的服务对象之一。<SEP>一个由岚川学院运营的站点，采用赤霄协议，检修口令为AURORA-731\"}\n{\"entity\": \"校准\", \"type\": \"event\", \"description\": \"依据赤霄协议在苍鹭站定期执行的系统参数调整与验证操作，周期为17分钟一次\"}\n{\"entity\": \"AURORA-731\", \"type\": \"artifact\", \"description\": \"苍鹭站专用的检修口令，用于系统维护与访问授权\"}\n{\"entity\": \"赤霄协议\", \"type\": \"artifact\", \"description\": \"苍鹭站所采用的技术协议，规定每隔17分钟执行一次校准操作<SEP>一种通信或计算协议，定义了采样周期与基准周期的关系(T=3B)，并规定了校准值使用限制，由许沐负责测试。\"}\n{\"entity\": \"潮汐计划\", \"type\": \"event\", \"description\": \"一项由靛桥实验室负责、林澈领导的研究项目，向苍鹭站提供传感器，交付时间为十一月。\"}\n{\"entity\": \"采样周期\", \"type\": \"concept\", \"description\": \"赤霄协议中定义的时间周期，数值为21秒，等于基准周期的三倍。\"}\n{\"entity\": \"岚川学院\", \"type\": \"organization\", \"description\": \"一所资助靛桥实验室的教育机构，参与潮汐计划的合作网络。<SEP>运营苍鹭站的教育与研究机构，与靛桥实验室相互独立\"}\n{\"entity\": \"基准周期\", \"type\": \"concept\", \"description\": \"赤霄协议中的基础时间单位，设定为7秒，用于推导采样周期(T=3B)。\"}\n{\"entity\": \"7秒\", \"type\": \"data\", \"description\": \"赤霄协议中规定的基准周期B的具体数值，为7秒。\"}\n{\"entity\": \"21秒\", \"type\": \"data\", \"description\": \"赤霄协议中推导出的采样周期T的具体数值，等于3倍基准周期，即21秒。\"}\n{\"entity\": \"靛桥实验室\", \"type\": \"organization\", \"description\": \"受岚川学院资助的研究机构，负责执行潮汐计划。<SEP>与岚川学院相互独立的科研机构，未参与苍鹭站运营\"}\n{\"entity\": \"玄鸟协议\", \"type\": \"artifact\", \"description\": \"另一种通信或计算协议，与赤霄协议互不兼容，禁止混用其校准值。\"}\n{\"entity\": \"许沐\", \"type\": \"person\", \"description\": \"赤霄协议测试工作的负责人。\"}\n{\"entity\": \"林澈\", \"type\": \"person\", \"description\": \"潮汐计划的负责人，主导该计划的实施。\"}\n{\"entity\": \"十一月\", \"type\": \"concept\", \"description\": \"潮汐计划的交付时间，指公历每年的第十一个月。\"}\n```\n\nKnowledge Graph Data (Relationship):\n\n```json\n{\"entity1\": \"苍鹭站\", \"entity2\": \"赤霄协议\", \"description\": \"苍鹭站依据赤霄协议进行技术规范与校准操作\"}\n{\"entity1\": \"校准\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议明确要求每隔17分钟对苍鹭站系统执行一次校准\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"苍鹭站\", \"description\": \"潮汐计划向苍鹭站交付并部署传感器设备。\"}\n{\"entity1\": \"赤霄协议\", \"entity2\": \"采样周期\", \"description\": \"赤霄协议明确定义采样周期T等于基准周期B的三倍(T=3B)，并据此得出其具体值为21秒。\"}\n{\"entity1\": \"基准周期\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议以基准周期B(7秒)为基本参数，采样周期的计算依赖于该值。\"}\n{\"entity1\": \"7秒\", \"entity2\": \"基准周期\", \"description\": \"基准周期B在赤霄协议中被明确定义为7秒。\"}\n{\"entity1\": \"21秒\", \"entity2\": \"采样周期\", \"description\": \"采样周期T在赤霄协议中经计算得出为21秒。\"}\n{\"entity1\": \"玄鸟协议\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议与玄鸟协议被明确指出不同且禁止混用彼此的校准值，二者在应用上互斥。\"}\n{\"entity1\": \"AURORA-731\", \"entity2\": \"苍鹭站\", \"description\": \"AURORA-731是苍鹭站进行设备检修与系统维护时必需输入的专用口令\"}\n{\"entity1\": \"许沐\", \"entity2\": \"赤霄协议\", \"description\": \"许沐是赤霄协议测试工作的直接负责人。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"苍鹭站\", \"description\": \"岚川学院负责苍鹭站的整体运行与管理\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"靛桥实验室\", \"description\": \"靛桥实验室承担潮汐计划的组织实施工作。\"}\n{\"entity1\": \"十一月\", \"entity2\": \"潮汐计划\", \"description\": \"潮汐计划的成果(如传感器)预定于十一月完成交付。\"}\n{\"entity1\": \"林澈\", \"entity2\": \"潮汐计划\", \"description\": \"林澈是潮汐计划的直接负责人和领导者。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"靛桥实验室\", \"description\": \"岚川学院为靛桥实验室提供资金支持。<SEP>二者在组织隶属、职能与运营管理上完全分离，无隶属或协作关系\"}\n```\n\nDocument Chunks (Each entry has a reference_id refer to the `Reference Document List`; the optional `content_headings` field gives the chunk's heading path within its source document, e.g. `Section 1 → Subsection 1.2`):\n\n```json\n{\"reference_id\": \"1\", \"content\": \"# 苍鹭站运行档案（A 租户合成资料）\\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。\"}\n{\"reference_id\": \"2\", \"content\": \"# 赤霄协议计算规则\\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。\"}\n{\"reference_id\": \"3\", \"content\": \"# 岚川学院合作网络\\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。\"}\n```\n\nReference Document List (Each entry starts with a [reference_id] that corresponds to entries in the Document Chunks):\n\n```\n[1] a_station.md\n[2] a_rule.md\n[3] a_research.md\n```\n\n",
+    "601fb1a3872acfba0bf9c3780383a6b3495c1ac18f1d8921d6eb61ff918da7b7": "\nKnowledge Graph Data (Entity):\n\n```json\n{\"entity\": \"苍鹭站\", \"type\": \"location\", \"description\": \"接收潮汐计划所供传感器的站点，是该计划的服务对象之一。<SEP>一个由岚川学院运营的站点，采用赤霄协议，检修口令为AURORA-731\"}\n{\"entity\": \"潮汐计划\", \"type\": \"event\", \"description\": \"一项由靛桥实验室负责、林澈领导的研究项目，向苍鹭站提供传感器，交付时间为十一月。\"}\n{\"entity\": \"AURORA-731\", \"type\": \"artifact\", \"description\": \"苍鹭站专用的检修口令，用于系统维护与访问授权\"}\n{\"entity\": \"十一月\", \"type\": \"concept\", \"description\": \"潮汐计划的交付时间，指公历每年的第十一个月。\"}\n{\"entity\": \"岚川学院\", \"type\": \"organization\", \"description\": \"一所资助靛桥实验室的教育机构，参与潮汐计划的合作网络。<SEP>运营苍鹭站的教育与研究机构，与靛桥实验室相互独立\"}\n{\"entity\": \"赤霄协议\", \"type\": \"artifact\", \"description\": \"苍鹭站所采用的技术协议，规定每隔17分钟执行一次校准操作<SEP>一种通信或计算协议，定义了采样周期与基准周期的关系(T=3B)，并规定了校准值使用限制，由许沐负责测试。\"}\n{\"entity\": \"校准\", \"type\": \"event\", \"description\": \"依据赤霄协议在苍鹭站定期执行的系统参数调整与验证操作，周期为17分钟一次\"}\n{\"entity\": \"靛桥实验室\", \"type\": \"organization\", \"description\": \"受岚川学院资助的研究机构，负责执行潮汐计划。<SEP>与岚川学院相互独立的科研机构，未参与苍鹭站运营\"}\n{\"entity\": \"玄鸟协议\", \"type\": \"artifact\", \"description\": \"另一种通信或计算协议，与赤霄协议互不兼容，禁止混用其校准值。\"}\n{\"entity\": \"许沐\", \"type\": \"person\", \"description\": \"赤霄协议测试工作的负责人。\"}\n{\"entity\": \"林澈\", \"type\": \"person\", \"description\": \"潮汐计划的负责人，主导该计划的实施。\"}\n{\"entity\": \"采样周期\", \"type\": \"concept\", \"description\": \"赤霄协议中定义的时间周期，数值为21秒，等于基准周期的三倍。\"}\n{\"entity\": \"7秒\", \"type\": \"data\", \"description\": \"赤霄协议中规定的基准周期B的具体数值，为7秒。\"}\n{\"entity\": \"基准周期\", \"type\": \"concept\", \"description\": \"赤霄协议中的基础时间单位，设定为7秒，用于推导采样周期(T=3B)。\"}\n{\"entity\": \"21秒\", \"type\": \"data\", \"description\": \"赤霄协议中推导出的采样周期T的具体数值，等于3倍基准周期，即21秒。\"}\n```\n\nKnowledge Graph Data (Relationship):\n\n```json\n{\"entity1\": \"苍鹭站\", \"entity2\": \"赤霄协议\", \"description\": \"苍鹭站依据赤霄协议进行技术规范与校准操作\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"苍鹭站\", \"description\": \"潮汐计划向苍鹭站交付并部署传感器设备。\"}\n{\"entity1\": \"十一月\", \"entity2\": \"潮汐计划\", \"description\": \"潮汐计划的成果(如传感器)预定于十一月完成交付。\"}\n{\"entity1\": \"基准周期\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议以基准周期B(7秒)为基本参数，采样周期的计算依赖于该值。\"}\n{\"entity1\": \"赤霄协议\", \"entity2\": \"采样周期\", \"description\": \"赤霄协议明确定义采样周期T等于基准周期B的三倍(T=3B)，并据此得出其具体值为21秒。\"}\n{\"entity1\": \"校准\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议明确要求每隔17分钟对苍鹭站系统执行一次校准\"}\n{\"entity1\": \"潮汐计划\", \"entity2\": \"靛桥实验室\", \"description\": \"靛桥实验室承担潮汐计划的组织实施工作。\"}\n{\"entity1\": \"玄鸟协议\", \"entity2\": \"赤霄协议\", \"description\": \"赤霄协议与玄鸟协议被明确指出不同且禁止混用彼此的校准值，二者在应用上互斥。\"}\n{\"entity1\": \"AURORA-731\", \"entity2\": \"苍鹭站\", \"description\": \"AURORA-731是苍鹭站进行设备检修与系统维护时必需输入的专用口令\"}\n{\"entity1\": \"许沐\", \"entity2\": \"赤霄协议\", \"description\": \"许沐是赤霄协议测试工作的直接负责人。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"苍鹭站\", \"description\": \"岚川学院负责苍鹭站的整体运行与管理\"}\n{\"entity1\": \"林澈\", \"entity2\": \"潮汐计划\", \"description\": \"林澈是潮汐计划的直接负责人和领导者。\"}\n{\"entity1\": \"岚川学院\", \"entity2\": \"靛桥实验室\", \"description\": \"岚川学院为靛桥实验室提供资金支持。<SEP>二者在组织隶属、职能与运营管理上完全分离，无隶属或协作关系\"}\n{\"entity1\": \"21秒\", \"entity2\": \"采样周期\", \"description\": \"采样周期T在赤霄协议中经计算得出为21秒。\"}\n{\"entity1\": \"7秒\", \"entity2\": \"基准周期\", \"description\": \"基准周期B在赤霄协议中被明确定义为7秒。\"}\n```\n\nDocument Chunks (Each entry has a reference_id refer to the `Reference Document List`; the optional `content_headings` field gives the chunk's heading path within its source document, e.g. `Section 1 → Subsection 1.2`):\n\n```json\n{\"reference_id\": \"1\", \"content\": \"# 苍鹭站运行档案（A 租户合成资料）\\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。\"}\n{\"reference_id\": \"2\", \"content\": \"# 岚川学院合作网络\\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。\"}\n{\"reference_id\": \"3\", \"content\": \"# 赤霄协议计算规则\\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。\"}\n```\n\nReference Document List (Each entry starts with a [reference_id] that corresponds to entries in the Document Chunks):\n\n```\n[1] a_station.md\n[2] a_research.md\n[3] a_rule.md\n```\n\n",
+    "8a123a6c515d87b25252ccf13c955259fd6d3dbff1fa655b4579915f1f30d965": "# 苍鹭站运行档案（A 租户合成资料）\n苍鹭站由岚川学院运营。苍鹭站采用赤霄协议。苍鹭站的检修口令是 AURORA-731。赤霄协议规定每隔 17 分钟校准一次。岚川学院不是靛桥实验室，二者是独立机构。",
+    "7a06c0cec4ad0d6a915e5ccc5156227e48d09e5d1496031f94866233cdfae9be": "# Summary\n苍鹭站是由岚川学院负责运营的一座设施，其运行遵循“赤霄协议”这一技术规范。根据该协议，系统需严格实行定时校准机制，即每17分钟执行一次校准操作，以确保运行精度与稳定性。为保障系统安全与维护可控，苍鹭站设定了专用检修口令——AURORA-731，该口令仅限授权人员在例行检修或应急处置时使用。文档特别强调，岚川学院与靛桥实验室是两个完全独立的机构，二者在组织隶属、管理架构及技术体系上均无关联；苍鹭站的运营管理、协议执行及维护职责均由岚川学院全权承担，不涉及靛桥实验室的参与或干预。本档案作为A租户的合成资料，整合了苍鹭站的基础运行属性、协议要求、安全凭证及机构归属等关键信息，旨在为相关协作方提供清晰、准确的运行背景参考。",
+    "7448b1ddbb02dcf413af1d055c6765ecbe33f07c41fa2ae440331d1dfe817afb": "# 岚川学院合作网络\n岚川学院资助靛桥实验室。靛桥实验室负责潮汐计划。潮汐计划的负责人是林澈。潮汐计划向苍鹭站提供传感器。潮汐计划的交付月份为十一月。",
+    "57a9db9a7bfc1df0102a26814a1e816c74c8c8dc4eb7a3e01498acac9b0e0694": "# Summary\n《赤霄协议》是一套明确的计算与测试规范，其核心计算规则如下：采样周期 $ T $ 严格定义为基准周期 $ B $ 的三倍，即数学关系为 $ T = 3B $；已知基准周期 $ B = 7 $ 秒，由此可精确推导出采样周期 $ T = 21 $ 秒。该周期设定是协议执行中时间同步、数据采集及信号处理的关键参数，所有相关测试与校准操作均须以此为时间基准。\n\n协议指定许沐为本次赤霄协议测试的负责人，承担测试方案制定、过程监督、结果审核及问题协调等职责，确保协议执行的规范性与可追溯性。\n\n特别强调，赤霄协议与玄鸟协议在设计原理、参数体系及校准逻辑上相互独立，二者不可交叉使用。协议明文禁止混用两套协议的校准值——即赤霄协议下获得的校准参数不得用于玄鸟协议系统，反之亦然。该禁令旨在避免因模型假设、误差补偿机制或量纲适配差异导致的系统性偏差，保障测量精度与运行可靠性。违反此规定可能引发数据失真、控制异常或安全风险，属于严重操作违规。\n\n综上，《赤霄协议》以严谨的时序定义（$ B=7\\,\\text{s},\\,T=21\\,\\text{s} $）、明确的责任归属（许沐为测试负责人）以及严格的协议隔离原则（禁用玄鸟协议校准值）构成完整的技术约束体系，适用于特定传感、测控或通信场景下的标准化作业。",
+    "5ac80e78335fe88e9d1e95083f57219a4dc2500d9da88cc390a7f194834873f9": "# 赤霄协议计算规则\n赤霄协议规定：采样周期 T 等于基准周期 B 的三倍，即 T=3B。基准周期 B 为 7 秒，因此采样周期为 21 秒。赤霄协议测试负责人为许沐。赤霄协议与玄鸟协议不同，禁止混用两个协议的校准值。",
+    "53dbc14c871ee39bc902a0e2bcc7ed39e2ac3f441e421b6cd6dda2d4da620761": "# Summary\n岚川学院与靛桥实验室建立了合作关系，由岚川学院提供资金支持，靛桥实验室承接并执行“潮汐计划”。该计划由林澈担任负责人，核心任务是为苍鹭站研发并交付专用传感器设备。根据项目安排，潮汐计划的成果交付时间明确为十一月。这一合作链条体现了清晰的层级关系与分工：岚川学院作为资助方提供资源保障；靛桥实验室作为执行主体负责技术研发与项目管理；林澈作为计划负责人统筹协调；苍鹭站则是最终用户与应用端，接收并部署相关传感器系统。整个合作聚焦于具体科研任务（传感器开发与部署），时间节点明确，责任主体清晰，构成一个目标导向、闭环管理的科研协作网络。"
+  },
+  "source_interpretation": "Contexts and graph data are preserved synthetic retrieval outputs, not verified factual truth. API secrets, endpoints and prompts used for extraction are not included.",
+  "query_client_source": {
+    "deeptutor/services/rag/pipelines/weknora/client.py": {
+      "sha256": "a51fd866e6b12043684730b1d6f6f7e319997d8446434c45ad938a39446ca539"
+    },
+    "deeptutor/services/rag/pipelines/lightrag_server/client.py": {
+      "sha256": "d5e224fef4524b8414e3c1a5dfe654e84e287e5b160592b18a180672c4e601dd"
+    }
+  }
+}

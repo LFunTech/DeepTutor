@@ -10,8 +10,11 @@
 #
 # Prerequisites:
 #   1. Runtime settings are stored in ./data/user/settings (created automatically)
-#   2. Configure model providers from the web Settings page or model_catalog.json
-#   3. Use scripts/docker_compose.py so port mappings are rendered from system.json
+#   2. Provide PostgreSQL config + backend Secret env refs before business startup.
+#      Missing PG config/schema/permissions fails readiness; there is no SQLite
+#      or PocketBase business fallback.
+#   3. Configure model providers from the web Settings page or model_catalog.json
+#   4. Use scripts/docker_compose.py so port mappings are rendered from system.json
 #
 # Local LLM (LM Studio / Ollama / vLLM):
 #   Use "host.docker.internal" instead of "localhost" in provider base_url fields.
@@ -26,7 +29,7 @@
 services:
   # Redis is internal-only runtime coordination state. AOF keeps unflushed
   # event/command streams available across a sidecar restart; business data
-  # remains in SQLite/PocketBase.
+  # remains in PostgreSQL.
   redis:
     image: redis:7.4-alpine
     container_name: deeptutor-redis
@@ -43,11 +46,13 @@ services:
       - deeptutor-network
 
   # ============================================
-  # PocketBase — optional auth + storage sidecar
-  # Set integrations.pocketbase_url=http://pocketbase:8090 to activate.
-  # Leave integrations.pocketbase_url blank to run without PocketBase (SQLite fallback).
+  # PocketBase — legacy migration source only
+  # This sidecar is kept for local export/import exercises and old-data
+  # migration testing. It is not a runtime auth/storage backend and cannot
+  # replace the required PostgreSQL application database.
   # ============================================
   pocketbase:
+    profiles: ["legacy-pocketbase"]
     image: ghcr.io/muchobien/pocketbase:latest
     container_name: pocketbase
     restart: unless-stopped
@@ -98,6 +103,13 @@ services:
       - "${DEEPTUTOR_WORKSPACE_HOST:-./data/user/workspace}:/workspace"
 
     environment:
+      # PostgreSQL-only runtime:
+      # - Mount or create data/user/settings/postgres.json (or set
+      #   DEEPTUTOR_POSTGRES_CONFIG to another backend-only path).
+      # - Provide DEEPTUTOR_DATABASE_URL, DEEPTUTOR_MIGRATION_DATABASE_URL,
+      #   identity signing/auth epoch/bootstrap Secret values from your secret
+      #   manager or local shell. Do not put them in NEXT_PUBLIC_* or frontend
+      #   settings, and do not commit literal DSNs here.
       # Route untrusted shell exec to the runner sidecar (SYSTEM isolation).
       # When this is set, the main app NEVER runs untrusted code in its own
       # process — see deeptutor/services/sandbox/config.py:build_backend().
@@ -126,8 +138,6 @@ services:
 
     depends_on:
       redis:
-        condition: service_healthy
-      pocketbase:
         condition: service_healthy
       sandbox-runner:
         condition: service_healthy

@@ -30,6 +30,7 @@ from fastapi import HTTPException
 from .context import get_current_user
 from .grants import load_grant
 from .models import CurrentUser
+from .roles import can_manage_deployment
 
 
 def _manager() -> Any:
@@ -63,7 +64,7 @@ def assigned_partner_ids(user_id: str | None = None) -> set[str]:
 def can_manage_partner(partner_id: str, user: CurrentUser | None = None) -> bool:
     """Whether the user may configure *partner_id* — its owner, or any admin."""
     actor = user or get_current_user()
-    if actor.is_admin:
+    if can_manage_deployment(actor):
         return True
     owner = partner_owner_id(partner_id)
     return bool(owner) and owner == actor.id

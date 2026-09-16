@@ -1314,7 +1314,7 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        from deeptutor.services.skill import get_skill_service
+        from deeptutor.services.skill.runtime import call_skill_service, get_runtime_skill_service
         from deeptutor.services.skill.service import (
             InvalidSkillNameError,
             InvalidSkillPathError,
@@ -1328,14 +1328,19 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
         if not name:
             raise ValueError("read_skill requires a skill name.")
 
-        services: list[SkillService] = [get_skill_service()]
+        services: list[object] = [get_runtime_skill_service()]
         try:
             from deeptutor.multi_user.context import get_current_user
             from deeptutor.multi_user.paths import get_admin_path_service
+            from deeptutor.multi_user.roles import is_grant_restricted_user
             from deeptutor.multi_user.skill_access import assigned_skill_ids
 
             user = get_current_user()
-            if not user.is_admin and name in assigned_skill_ids(user.id):
+            if (
+                isinstance(services[0], SkillService)
+                and is_grant_restricted_user(user)
+                and name in assigned_skill_ids(user.id)
+            ):
                 services.append(
                     SkillService(root=get_admin_path_service().get_workspace_dir() / "skills")
                 )
@@ -1344,7 +1349,7 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
 
         for service in services:
             try:
-                content = service.read_skill_file(name, rel_path)
+                content = await call_skill_service(service, "read_skill_file", name, rel_path)
             except SkillFileNotFoundError:
                 return ToolResult(
                     content=(
@@ -1458,7 +1463,7 @@ class CronTool(_PromptHintsMixin, BaseTool):
                     type="string",
                     description="What to do.",
                     required=True,
-                    enum=["schedule", "list", "cancel"],
+                    enum=["schedule", "list", "cancel", "pause", "resume"],
                 ),
                 ToolParameter(
                     name="message",
@@ -1518,9 +1523,9 @@ class CronTool(_PromptHintsMixin, BaseTool):
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        from deeptutor.tools.cron_tool import run_cron_action
+        from deeptutor.tools.cron_tool import run_cron_action_async
 
-        outcome = run_cron_action(kwargs)
+        outcome = await run_cron_action_async(kwargs)
         return ToolResult(content=outcome.text, success=outcome.ok, metadata=outcome.meta)
 
 

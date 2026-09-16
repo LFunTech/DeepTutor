@@ -30,6 +30,7 @@ interface KbDocumentListProps {
   kbName: string;
   /** Refresh trigger: bumping this prop forces a re-fetch (e.g. after upload). */
   refreshKey?: number;
+  readOnly?: boolean;
   selectedFile: string | null;
   onSelect: (file: KnowledgeBaseFile | null) => void;
   collapsed: boolean;
@@ -107,6 +108,7 @@ function buildTree(entries: KnowledgeBaseFile[]): {
 export default function KbDocumentList({
   kbName,
   refreshKey = 0,
+  readOnly = false,
   selectedFile,
   onSelect,
   collapsed,
@@ -165,6 +167,7 @@ export default function KbDocumentList({
     });
 
   const handleCreateFolder = async () => {
+    if (readOnly) return;
     const name = newFolderName.trim();
     if (!name) return;
     setBusy(true);
@@ -184,6 +187,7 @@ export default function KbDocumentList({
     setMoveMenuFor(null);
     setDropTarget(null);
     setDragPath(null);
+    if (readOnly) return;
     if (parentOf(source) === destFolder) return; // already there
     setBusy(true);
     try {
@@ -209,6 +213,7 @@ export default function KbDocumentList({
 
   const handleDelete = async (path: string) => {
     setConfirmDeleteFor(null);
+    if (readOnly) return;
     setBusy(true);
     try {
       await deleteKbFile(kbName, path);
@@ -275,6 +280,7 @@ export default function KbDocumentList({
           <div
             onClick={() => toggleFolder(node.path)}
             onDragOver={(e) => {
+              if (readOnly) return;
               e.preventDefault();
               e.stopPropagation();
               setDropTarget(node.path);
@@ -283,6 +289,7 @@ export default function KbDocumentList({
               setDropTarget((cur) => (cur === node.path ? null : cur))
             }
             onDrop={(e) => {
+              if (readOnly) return;
               e.preventDefault();
               e.stopPropagation();
               const src = e.dataTransfer.getData("text/plain");
@@ -321,8 +328,9 @@ export default function KbDocumentList({
     return (
       <li key={`f:${node.path}`} className="group/row relative">
         <div
-          draggable
+          draggable={!readOnly}
           onDragStart={(e) => {
+            if (readOnly) return;
             e.dataTransfer.setData("text/plain", node.path);
             e.dataTransfer.effectAllowed = "move";
             setDragPath(node.path);
@@ -381,7 +389,7 @@ export default function KbDocumentList({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-          ) : (
+          ) : readOnly ? null : (
             <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/row:opacity-100">
               <button
                 type="button"
@@ -413,7 +421,7 @@ export default function KbDocumentList({
           )}
         </div>
 
-        {moveMenuFor === node.path && (
+        {!readOnly && moveMenuFor === node.path && (
           <>
             <div
               className="fixed inset-0 z-10"
@@ -468,18 +476,20 @@ export default function KbDocumentList({
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => {
-              setNewFolderOpen((v) => !v);
-              setNewFolderName("");
-            }}
-            title={t("New folder")}
-            aria-label={t("New folder")}
-            className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-          >
-            <FolderPlus size={13} strokeWidth={1.7} />
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => {
+                setNewFolderOpen((v) => !v);
+                setNewFolderName("");
+              }}
+              title={t("New folder")}
+              aria-label={t("New folder")}
+              className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+            >
+              <FolderPlus size={13} strokeWidth={1.7} />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void load(true)}
@@ -506,7 +516,7 @@ export default function KbDocumentList({
         </div>
       </div>
 
-      {newFolderOpen && (
+      {!readOnly && newFolderOpen && (
         <div className="flex items-center gap-1 px-2.5 pb-1.5">
           <input
             value={newFolderName}
@@ -533,15 +543,24 @@ export default function KbDocumentList({
       <div
         className="flex-1 overflow-y-auto px-1.5 pb-2.5"
         onDragOver={(e) => {
+          if (readOnly) return;
           e.preventDefault();
           setDropTarget("");
         }}
         onDrop={(e) => {
+          if (readOnly) return;
           e.preventDefault();
           const src = e.dataTransfer.getData("text/plain");
           if (src) void handleMove(src, "");
         }}
       >
+        {readOnly ? (
+          <div className="mb-2 rounded-md border border-[var(--border)] bg-[var(--muted)]/35 px-2.5 py-2 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+            {t(
+              "This knowledge base is connected to an external resource. Files are managed in the external system.",
+            )}
+          </div>
+        ) : null}
         {error ? (
           <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
             {error}

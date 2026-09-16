@@ -170,8 +170,10 @@ def get_settings_draft_service() -> SettingsDraftService:
     try:
         from deeptutor.multi_user.context import get_current_user
         from deeptutor.multi_user.paths import get_admin_path_service
+        from deeptutor.multi_user.roles import can_manage_deployment
 
-        if not get_current_user().is_admin:
+        current = get_current_user()
+        if current.scope.kind in {"tenant", "user"} or can_manage_deployment(current):
             return SettingsDraftService.get_instance(
                 get_admin_path_service().get_settings_file("settings_draft")
             )

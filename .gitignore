@@ -14,8 +14,8 @@ deeptutor/services/rag/eg_only_for_analysis/
 /docs/
 !/docs/
 /docs/*
-!/docs/eduplus2-integration/
-!/docs/eduplus2-integration/**
+!/docs/enterprise/
+!/docs/enterprise/**
 /site/
 .claude
 .agents/
@@ -335,3 +335,10 @@ celerybeat.pid
 *.wav
 *.ogg
 !demo/*.mp4
+.secrets
+# Local CodeGraph index (kept resident, never committed)
+.codegraph/
+
+# Local development/runtime state (PostgreSQL data, logs, caches, test artifacts)
+.local/
+.hypothesis/

@@ -1,8 +1,7 @@
-"""Auth router — login, logout, status, registration, profile, and user-management endpoints."""
+"""默认 PG 身份入口，保留原 DTO/路由；无 JSON/PocketBase/无认证管理员。"""
 
-from contextvars import Token as _CtxToken
-from datetime import datetime, timedelta, timezone
-import logging
+import asyncio
+from contextlib import asynccontextmanager
 import re
 
 from fastapi import (
@@ -16,87 +15,56 @@ from fastapi import (
     Response,
     UploadFile,
     WebSocket,
-    status,
 )
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.requests import HTTPConnection
 
-from deeptutor.services.config import load_auth_settings
-
-# SameSite=None lets the cookie work when the browser accesses the frontend via
-# 127.0.0.1 and the backend via localhost (different origins on the same machine).
-# Browsers require Secure=True for SameSite=None, but that needs HTTPS — so in
-# local dev we fall back to SameSite=Lax and tell users to use localhost:// URLs.
-_SECURE = bool(load_auth_settings()["cookie_secure"])
-_SAMESITE = "none" if _SECURE else "lax"
-
-from deeptutor.multi_user.audit import log_admin_action, log_usage
 from deeptutor.multi_user.context import set_current_user, user_from_token_payload
-from deeptutor.multi_user.device_credentials import (
-    heartbeat_device_credential,
-    issue_device_credential,
-    list_device_credentials,
-    revoke_device_credential,
-)
-from deeptutor.multi_user.identity import get_user_by_id
-from deeptutor.multi_user.learning_access import learning_policy_for_user
 from deeptutor.multi_user.models import AccountPreset
-from deeptutor.multi_user.paths import local_admin_user
-from deeptutor.services.auth import (
-    AUTH_ENABLED,
-    POCKETBASE_ENABLED,
-    TOKEN_EXPIRE_HOURS,
-    TokenPayload,
-    add_user,
-    authenticate,
-    authenticate_device,
-    authenticate_pb,
-    create_token,
-    decode_token,
-    delete_user,
-    get_user_info,
-    is_first_user,
-    list_users,
-    register_pb,
-    set_avatar,
-    set_learner_profile,
-    set_role,
-)
-from deeptutor.services.auth import (
-    get_learner_profile as load_learner_profile,
-)
-from deeptutor.services.codex_auth.contracts import CodexAuthError
-from deeptutor.services.codex_auth.service import deliver_codex_oauth_callback
-
-logger = logging.getLogger(__name__)
+from deeptutor.services.auth import TokenPayload
 
 router = APIRouter()
-
 _COOKIE_NAME = "dt_token"
-_COOKIE_MAX_AGE = TOKEN_EXPIRE_HOURS * 3600
+_AVATAR_MAX_BYTES = 1024 * 1024
+_AVATAR_MEDIA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
 
 
-def _cookie_attrs() -> dict:
-    """Attribute set shared by ``login``'s ``set_cookie`` and ``logout``'s
-    ``delete_cookie``.
+def _provider(connection: HTTPConnection):
+    provider = getattr(connection.app.state, "auth_provider", None)
+    if provider is None:
+        from deeptutor.core.providers import get_providers
 
-    The deletion ``Set-Cookie`` must carry the same attributes as the one
-    that created the cookie — ``delete_cookie`` defaults ``secure=False``,
-    which browsers reject when paired with ``SameSite=None``, silently
-    keeping the old cookie. See #623. Reads the module globals at call time
-    so tests can monkeypatch ``_SECURE``/``_SAMESITE``.
-    """
+        provider = getattr(get_providers(), "auth", None)
+    if provider is None:
+        raise HTTPException(503, "PostgreSQL authentication provider is not configured")
+    return provider
+
+
+def _cookie_attrs(provider):
     return {
         "key": _COOKIE_NAME,
         "httponly": True,
-        "samesite": _SAMESITE,
-        "secure": _SECURE,
+        "samesite": "none" if provider.cookie_secure else "lax",
+        "secure": provider.cookie_secure,
+        "path": "/",
     }
 
 
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def _errors():
+    try:
+        yield
+    except HTTPException:
+        raise
+    except PermissionError:
+        raise HTTPException(403, "Permission denied") from None
+    except LookupError:
+        raise HTTPException(404, "User or resource not found") from None
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+    except Exception:
+        raise HTTPException(503, "Account service unavailable") from None
 
 
 class LoginRequest(BaseModel):
@@ -136,8 +104,7 @@ class RegisterRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("Email cannot be empty")
-        # Accept standard email addresses (used by PocketBase mode) or plain
-        # usernames (used by the built-in SQLite/JSON auth mode).
+        # 保留 email/普通用户名输入兼容；两种形式都由同一 PG 身份权威处理。
         email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
         plain_re = re.compile(r"^[A-Za-z0-9_\-.]{3,64}$")
         if not email_re.match(v) and not plain_re.match(v):
@@ -147,8 +114,8 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_valid(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
+        if not 12 <= len(v.encode("utf-8")) <= 72:
+            raise ValueError("Password must contain 12 to 72 UTF-8 bytes")
         return v
 
 
@@ -160,9 +127,9 @@ class SetRoleRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_valid(cls, v: str) -> str:
-        if v not in ("admin", "user"):
+        if v not in ("admin", "tenant_admin", "user"):
             raise ValueError("Role must be 'admin' or 'user'")
-        return v
+        return "tenant_admin" if v == "admin" else v
 
 
 class AdminCreateUserRequest(RegisterRequest):
@@ -208,6 +175,16 @@ class LearnerProfileRequest(BaseModel):
     reading_level: str | None = Field(default=None, max_length=80)
     explanation_style: str | None = Field(default=None, max_length=80)
 
+    @field_validator("grade_level", "curriculum", "language", "reading_level", "explanation_style")
+    @classmethod
+    def profile_text_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        from deeptutor.multi_user.learner_profile import normalize_profile
+
+        normalize_profile({"language": value})
+        return value.strip()
+
 
 # Markers settable through PUT /profile. Image markers ("img:<version>") are
 # managed exclusively by the upload endpoint so users cannot point their
@@ -234,11 +211,6 @@ class UpdateProfileRequest(BaseModel):
         return v
 
 
-# ---------------------------------------------------------------------------
-# Shared helper — extract token from cookie or Bearer header
-# ---------------------------------------------------------------------------
-
-
 def _bearer_token_from_header(authorization: str | None) -> str | None:
     """Parse ``Authorization: Bearer <token>`` without using ``HTTPBearer``.
 
@@ -261,143 +233,49 @@ def _extract_token(authorization: str | None, dt_token: str | None) -> str | Non
     return _bearer_token_from_header(authorization) or dt_token
 
 
-# ---------------------------------------------------------------------------
-# Dependencies — reusable auth guards for other routers
-# ---------------------------------------------------------------------------
-
-
-def _install_current_user(payload: TokenPayload | None) -> _CtxToken:
-    """Install the request-local current-user ContextVar from an auth result.
-
-    Single point of truth for ``payload → CurrentUser`` so HTTP and WebSocket
-    entry points produce identical user objects. ``payload is None`` means
-    "no JWT was required" (AUTH_ENABLED=false) and resolves to the local
-    admin user; a non-None payload resolves through ``user_from_token_payload``.
-
-    Returns the ContextVar reset token. HTTP callers ignore it (the request
-    ends with the task, so the var is GC'd with the task context). WebSocket
-    callers keep it and call ``reset_current_user`` in their ``finally`` block,
-    because a WS connection outlives the dependency-resolution task.
-
-    ⚠ Invariant: every authenticated entry point MUST call this before the
-    handler runs. Skipping it leaves ``get_current_path_service()`` falling
-    back to the admin workspace — the silent-routing root cause of #481.
-    """
-    user = local_admin_user() if payload is None else user_from_token_payload(payload)
-    return set_current_user(user)
+def _install_current_user(payload):
+    return set_current_user(user_from_token_payload(payload))
 
 
 async def require_auth(
+    connection: HTTPConnection,
     authorization: str | None = Header(default=None, alias="Authorization"),
     dt_token: str | None = Cookie(default=None, alias=_COOKIE_NAME),
-) -> TokenPayload | None:
-    """
-    FastAPI dependency that enforces authentication when AUTH_ENABLED=true.
-
-    Accepts the JWT from either:
-      - Authorization: Bearer <token> header
-      - dt_token cookie
-
-    ``Header`` and ``Cookie`` are kept here in place of ``HTTPBearer`` so the
-    function stays usable from WebSocket call sites that don't go through
-    FastAPI's standard HTTP request lifecycle.
-
-    Returns the authenticated TokenPayload, or None if auth is disabled.
-    Raises HTTP 401 if auth is enabled but the token is missing or invalid.
-
-    Declared ``async def`` so the ``set_current_user`` call runs in the same
-    asyncio context as the endpoint. A sync dependency is dispatched via
-    ``anyio.to_thread.run_sync``, which executes the function in a worker
-    thread under a *copy* of the request context; any ``ContextVar.set``
-    inside that thread is discarded when the thread returns, leaving the
-    endpoint to read the unset default. That regression was the root cause
-    of #481.
-    """
-    if not AUTH_ENABLED:
-        _install_current_user(None)
-        return None
-
+) -> TokenPayload:
     token = _extract_token(authorization, dt_token)
     if not token:
+        raise HTTPException(401, "Not authenticated", headers={"WWW-Authenticate": "Bearer"})
+    provider = _provider(connection)
+    try:
+        payload = await provider.decode(token)
+    except PermissionError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+            401, "Invalid or expired token", headers={"WWW-Authenticate": "Bearer"}
+        ) from None
+    except Exception:
+        raise HTTPException(503, "Account service unavailable") from None
     _install_current_user(payload)
     return payload
 
 
 class _WsAuthFailed:
-    """Sentinel: ws_require_auth failed and closed the WebSocket."""
+    pass
 
 
-ws_auth_failed: _WsAuthFailed = _WsAuthFailed()
+ws_auth_failed = _WsAuthFailed()
 
 
-async def ws_require_auth(ws: WebSocket) -> _CtxToken | _WsAuthFailed:
-    """Authenticate a WebSocket connection and set the user ContextVar.
-
-    Must be called **before** ``ws.accept()`` so the server can reject
-    unauthenticated upgrades cleanly.
-
-    Returns a ContextVar reset token on success, or ``ws_auth_failed``
-    on failure (the WebSocket is already closed — the caller should
-    ``return`` immediately).
-
-    Usage::
-
-        user_token = await ws_require_auth(ws)
-        if user_token is ws_auth_failed:
-            return
-        await ws.accept()
-        try:
-            ...
-        finally:
-            reset_current_user(user_token)
-    """
-    if not AUTH_ENABLED:
-        return _install_current_user(None)
-
-    token = ws.query_params.get("token") or ws.cookies.get(_COOKIE_NAME)
-    payload = decode_token(token) if token else None
-    if not payload:
+async def ws_require_auth(ws: WebSocket):
+    try:
+        return await _provider(ws).authenticate(ws)
+    except (PermissionError, HTTPException):
         await ws.close(code=4001)
         return ws_auth_failed
 
-    return _install_current_user(payload)
 
-
-async def require_admin(
-    payload: TokenPayload | None = Depends(require_auth),
-) -> TokenPayload:
-    """
-    FastAPI dependency that requires the caller to be an admin.
-
-    Raises HTTP 403 if the authenticated user is not an admin.
-    When AUTH_ENABLED=false, all requests are treated as admin.
-
-    ``async def`` mirrors ``require_auth`` so the dependency chain stays on
-    the event loop and the user ContextVar set by ``require_auth`` is visible
-    to the endpoint.
-    """
-    if not AUTH_ENABLED:
-        return _local_admin_token_payload()
-
-    if payload is None or payload.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
-        )
+async def require_admin(payload: TokenPayload = Depends(require_auth)):
+    if payload.role != "tenant_admin":
+        raise HTTPException(403, "Tenant account management required")
     return payload
 
 
@@ -416,39 +294,12 @@ def _learning_surface_for_path(path: str) -> str:
     return ""
 
 
-async def require_learning_surface(
-    request: Request,
-    _: TokenPayload | None = Depends(require_auth),
-) -> None:
-    """Second-stage default-deny guard for configured learning accounts."""
-    from deeptutor.multi_user.learning_access import assert_learning_surface
-
-    try:
-        assert_learning_surface(_learning_surface_for_path(request.url.path))
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-
-
-def _local_admin_token_payload() -> TokenPayload:
-    """Synthetic admin payload used when AUTH_ENABLED=false.
-
-    Mirrors the local admin identity (LOCAL_ADMIN_USERNAME / LOCAL_ADMIN_ID)
-    so audit logs and self-reference checks behave the same as in multi-user
-    mode. Values are kept aligned with ``local_admin_user()`` in
-    ``deeptutor/multi_user/paths.py``.
-    """
-    from deeptutor.multi_user.models import LOCAL_ADMIN_ID, LOCAL_ADMIN_USERNAME
-
-    return TokenPayload(
-        username=LOCAL_ADMIN_USERNAME,
-        role="admin",
-        user_id=LOCAL_ADMIN_ID,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Public endpoints (no auth required)
-# ---------------------------------------------------------------------------
+async def require_learning_surface(request: Request, payload: TokenPayload = Depends(require_auth)):
+    policy = payload.learning_policy
+    if policy is not None and _learning_surface_for_path(request.url.path) not in set(
+        policy.get("allowed_surfaces") or ["chat", "reading"]
+    ):
+        raise HTTPException(403, "This learning account cannot use the requested server surface.")
 
 
 @router.get("/openai-codex/callback")
@@ -459,6 +310,9 @@ async def receive_codex_oauth_callback(
     error: str | None = None,
 ) -> HTMLResponse:
     headers = {"Cache-Control": "no-store"}
+    from deeptutor.services.codex_auth.contracts import CodexAuthError
+    from deeptutor.services.codex_auth.service import deliver_codex_oauth_callback
+
     try:
         callback_state = state if len(request.query_params.getlist("state")) == 1 else None
         await deliver_codex_oauth_callback(code, callback_state, error)
@@ -480,278 +334,6 @@ async def receive_codex_oauth_callback(
     )
 
 
-@router.get("/status", response_model=AuthStatusResponse)
-async def auth_status(
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    dt_token: str | None = Cookie(default=None, alias=_COOKIE_NAME),
-) -> AuthStatusResponse:
-    """Return whether auth is enabled and whether the current request is authenticated."""
-    if not AUTH_ENABLED:
-        return AuthStatusResponse(
-            enabled=False,
-            authenticated=True,
-            user_id="local-admin",
-            username="local",
-            role="admin",
-            is_admin=True,
-            preset="standard",
-        )
-
-    token = _extract_token(authorization, dt_token)
-    payload = decode_token(token) if token else None
-    avatar = ""
-    preset: AccountPreset | None = None
-    learning_policy = None
-    if payload is not None:
-        info = get_user_info(payload.username)
-        if info:
-            avatar = str(info.get("avatar") or "")
-            raw_preset = str(info.get("preset") or "standard")
-            if raw_preset == "learner":
-                preset = "learner"
-            elif raw_preset == "custom":
-                preset = "custom"
-            else:
-                preset = "standard"
-        learning_policy = learning_policy_for_user(
-            payload.user_id,
-            is_admin=payload.role == "admin",
-        )
-    return AuthStatusResponse(
-        enabled=True,
-        authenticated=payload is not None,
-        user_id=payload.user_id if payload else None,
-        username=payload.username if payload else None,
-        role=payload.role if payload else None,
-        is_admin=payload.role == "admin" if payload else False,
-        avatar=avatar,
-        preset=preset,
-        learning_policy=learning_policy,
-    )
-
-
-@router.post("/login")
-async def login(body: LoginRequest, response: Response) -> dict:
-    """Validate credentials and set a JWT cookie."""
-    if not AUTH_ENABLED:
-        return {"ok": True, "message": "Auth is disabled — no login required."}
-
-    if POCKETBASE_ENABLED:
-        # PocketBase mode: email = username field for backwards-compat with the
-        # existing LoginRequest schema; users can pass their email as "username".
-        pb_result = authenticate_pb(body.username, body.password)
-        if not pb_result:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password",
-            )
-        payload, pb_token = pb_result
-        response.set_cookie(value=pb_token, max_age=_COOKIE_MAX_AGE, **_cookie_attrs())
-        logger.info(f"User '{payload.username}' logged in via PocketBase (role={payload.role!r})")
-        return {
-            "ok": True,
-            "user_id": payload.user_id,
-            "username": payload.username,
-            "role": payload.role,
-            "is_admin": payload.role == "admin",
-        }
-
-    # Standard JWT + bcrypt mode
-    result = authenticate(body.username, body.password)
-    if not result:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-        )
-
-    token = create_token(result.username, result.role, result.user_id)
-    response.set_cookie(value=token, max_age=_COOKIE_MAX_AGE, **_cookie_attrs())
-
-    logger.info(f"User '{result.username}' logged in (role={result.role!r})")
-    return {
-        "ok": True,
-        "user_id": result.user_id,
-        "username": result.username,
-        "role": result.role,
-        "is_admin": result.role == "admin",
-    }
-
-
-def _require_builtin_device_auth() -> None:
-    if not AUTH_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Device credentials require built-in authentication.",
-        )
-    if POCKETBASE_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Device credentials are not supported in PocketBase mode.",
-        )
-
-
-@router.post("/device-login")
-async def device_login(body: DeviceLoginRequest, response: Response) -> dict:
-    """Exchange a device pairing code and PIN for the account's normal cookie."""
-
-    _require_builtin_device_auth()
-    payload = authenticate_device(body.pairing_code, body.pin)
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect device credentials",
-        )
-
-    token = create_token(
-        payload.username,
-        payload.role,
-        payload.user_id,
-        device_credential_id=payload.device_credential_id,
-        device_session_nonce=payload.device_session_nonce,
-    )
-    response.set_cookie(value=token, max_age=_COOKIE_MAX_AGE, **_cookie_attrs())
-    logger.info(f"User '{payload.username}' logged in with a device credential")
-    return {
-        "ok": True,
-        "user_id": payload.user_id,
-        "username": payload.username,
-        "role": payload.role,
-        "is_admin": payload.role == "admin",
-        "device_credential_id": payload.device_credential_id,
-    }
-
-
-@router.post("/device/heartbeat")
-async def device_heartbeat(
-    response: Response,
-    payload: TokenPayload | None = Depends(require_auth),
-) -> dict:
-    """Refresh a device lease and account bounded daily usage."""
-
-    if not AUTH_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Device credentials require built-in authentication.",
-        )
-    if payload is None or not payload.device_credential_id or not payload.device_session_nonce:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This session does not use a device credential.",
-        )
-    try:
-        device = heartbeat_device_credential(
-            payload.device_credential_id,
-            user_id=payload.user_id,
-            session_nonce=payload.device_session_nonce,
-        )
-    except ValueError:
-        response.delete_cookie(**_cookie_attrs())
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Device session is no longer active",
-        ) from None
-    return {"ok": not device.pop("limit_reached"), **device}
-
-
-@router.post("/logout")
-async def logout(response: Response) -> dict:
-    """Clear the JWT cookie.
-
-    Deletion attributes mirror ``login`` structurally via ``_cookie_attrs()``
-    (see the rationale there and #623).
-    """
-    response.delete_cookie(**_cookie_attrs())
-    return {"ok": True}
-
-
-@router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest) -> dict:
-    """
-    Bootstrap-only registration.
-
-    Public endpoint that creates the *first* admin account when the user store
-    is empty. Once an admin exists, this endpoint is closed; further accounts
-    must be created by an admin via ``POST /api/auth/users``.
-
-    Only available when AUTH_ENABLED=true.
-    """
-    if not AUTH_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Auth is disabled — registration is not available.",
-        )
-
-    if POCKETBASE_ENABLED:
-        # PocketBase deployments are documented as single-user. Keep registration
-        # closed and require admins to provision users in the PocketBase admin UI.
-        if not is_first_user():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Self-registration is closed. Ask an administrator to create your account.",
-            )
-        result = register_pb(username=body.username, email=body.username, password=body.password)
-        if not result:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Registration failed — username or email may already be taken.",
-            )
-        logger.info(f"First user registered via PocketBase: '{body.username}'")
-        return {
-            "ok": True,
-            "user_id": result.get("id", ""),
-            "username": body.username,
-            "role": "user",
-            "is_first_user": True,
-            "is_admin": False,
-        }
-
-    # Standard mode — only allowed before the first admin exists.
-    if not is_first_user():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Self-registration is closed. Ask an administrator to create your account.",
-        )
-
-    existing = {u["username"] for u in list_users()}
-    if body.username in existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already taken",
-        )
-
-    add_user(body.username, body.password)
-    user_id = ""
-    role = "user"
-    for item in list_users():
-        if item.get("username") == body.username:
-            user_id = str(item.get("id") or "")
-            role = str(item.get("role") or "user")
-            break
-    logger.info(f"First user (admin) registered: '{body.username}'")
-    return {
-        "ok": True,
-        "user_id": user_id,
-        "username": body.username,
-        "role": role,
-        "is_first_user": True,
-        "is_admin": role == "admin",
-    }
-
-
-@router.get("/is_first_user")
-async def check_is_first_user() -> dict:
-    """Return whether the user store is empty (used by the register UI)."""
-    return {"is_first_user": is_first_user() if AUTH_ENABLED else False}
-
-
-# ---------------------------------------------------------------------------
-# Profile endpoints (any authenticated user, self-service)
-# ---------------------------------------------------------------------------
-
-_AVATAR_MAX_BYTES = 1 * 1024 * 1024
-_AVATAR_MEDIA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
-
-
 def _sniff_image(data: bytes) -> str | None:
     """Detect a supported raster image format from its magic bytes.
 
@@ -769,486 +351,347 @@ def _sniff_image(data: bytes) -> str | None:
     return None
 
 
-def _require_profile_identity(payload: TokenPayload | None) -> TokenPayload:
-    """Shared guard for the self-service profile endpoints."""
-    if not AUTH_ENABLED or payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Auth is disabled — profiles are not available.",
+@router.get("/status", response_model=AuthStatusResponse)
+async def auth_status(
+    connection: HTTPConnection,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    dt_token: str | None = Cookie(default=None),
+):
+    token = _extract_token(authorization, dt_token)
+    provider = _provider(connection)
+    if not token:
+        return AuthStatusResponse(enabled=True, authenticated=False)
+    try:
+        payload = await provider.decode(token)
+        info = await provider.identity.profile(token)
+    except PermissionError:
+        return AuthStatusResponse(enabled=True, authenticated=False)
+    except Exception:
+        raise HTTPException(503, "Account service unavailable") from None
+    return AuthStatusResponse(
+        enabled=True,
+        authenticated=True,
+        user_id=payload.user_id,
+        username=payload.username,
+        role=payload.role,
+        is_admin=payload.role == "tenant_admin",
+        avatar=info["avatar"],
+        preset=info["preset"],
+        learning_policy=payload.learning_policy,
+    )
+
+
+async def _logged_in(provider, token, response):
+    actor = await provider.decode(token)
+    response.set_cookie(
+        value=token, max_age=provider.identity.token_seconds, **_cookie_attrs(provider)
+    )
+    return {
+        "ok": True,
+        "user_id": actor.user_id,
+        "username": actor.username,
+        "role": actor.role,
+        "is_admin": actor.role == "tenant_admin",
+    }
+
+
+@router.post("/login")
+async def login(body: LoginRequest, response: Response, request: Request):
+    provider = _provider(request)
+    from deeptutor.persistence.postgres.identity.service import LoginRateLimited
+
+    try:
+        token = await provider.identity.login(
+            body.username,
+            body.password,
+            client=request.client.host if request.client else "unknown",
         )
-    return payload
+        return await _logged_in(provider, token, response)
+    except LoginRateLimited:
+        raise HTTPException(429, "Authentication temporarily limited") from None
+    except PermissionError:
+        raise HTTPException(401, "Incorrect username or password") from None
+    except Exception:
+        raise HTTPException(503, "Account service unavailable") from None
+
+
+@router.post("/logout")
+async def logout(
+    response: Response,
+    connection: HTTPConnection,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    dt_token: str | None = Cookie(default=None),
+):
+    provider = _provider(connection)
+    token = _extract_token(authorization, dt_token)
+    if token:
+        try:
+            await provider.identity.logout(token)
+        except PermissionError:
+            pass  # 已撤销/无效 token 的退出幂等；数据库故障不伪报成功。
+        except Exception:
+            raise HTTPException(503, "Account service unavailable") from None
+    response.delete_cookie(**_cookie_attrs(provider))
+    return {"ok": True}
+
+
+@router.post("/register", status_code=201)
+async def register(body: RegisterRequest):
+    raise HTTPException(403, "Public registration is disabled; use controlled account provisioning")
+
+
+@router.get("/is_first_user")
+async def check_is_first_user():
+    return {"is_first_user": False}
 
 
 @router.get("/profile", response_model=UserInfo)
-async def get_profile(
-    payload: TokenPayload | None = Depends(require_auth),
-) -> UserInfo:
-    """Return the current user's own account info."""
-    current = _require_profile_identity(payload)
-    info = get_user_info(current.username)
-    if info is None:
-        # PocketBase-backed identities have no local record; fall back to the
-        # token claims so the profile page still renders.
-        return UserInfo(
-            id=current.user_id,
-            username=current.username,
-            role=current.role,
-            created_at="",
+async def get_profile(current: TokenPayload = Depends(require_auth)):
+    async with _errors():
+        return UserInfo(**await current.provider.identity.profile(current.token))
+
+
+async def _replace_avatar(current, marker, object_id=""):
+    provider = current.provider
+    try:
+        result = await provider.identity.set_avatar(current.token, marker, object_id)
+        previous, marker = result["previous"], result["marker"]
+    except (PermissionError, LookupError, ValueError):
+        # 仅已知拒绝可立即删候选对象；提交/取消结果不确定时保留，不能破坏已提交引用。
+        if object_id:
+            await asyncio.to_thread(
+                provider.resources.delete_avatar, current.tenant_id, current.user_id, object_id
+            )
+        raise
+    if previous and previous != object_id:
+        await asyncio.to_thread(
+            provider.resources.delete_avatar, current.tenant_id, current.user_id, previous
         )
-    return UserInfo(**info)
+    return {"ok": True, "avatar": marker}
 
 
 @router.put("/profile")
-async def update_profile(
-    body: UpdateProfileRequest,
-    payload: TokenPayload | None = Depends(require_auth),
-) -> dict:
-    """Update the current user's own avatar marker (icon choice or reset).
-
-    Only the validated ``icon:<name>:<color>`` form (or empty string) is
-    accepted here; ``img:`` markers are owned by the upload endpoint.
-    """
-    current = _require_profile_identity(payload)
-    if not set_avatar(current.username, body.avatar):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    # The marker no longer references an uploaded image, so drop the file.
-    from deeptutor.multi_user.identity import delete_avatar_file
-
-    if current.user_id and _USER_ID_RE.match(current.user_id):
-        delete_avatar_file(current.user_id)
-    return {"ok": True, "avatar": body.avatar}
+async def update_profile(body: UpdateProfileRequest, current: TokenPayload = Depends(require_auth)):
+    async with _errors():
+        return await _replace_avatar(current, body.avatar)
 
 
 @router.put("/profile/avatar")
 async def upload_avatar(
-    file: UploadFile = File(...),
-    payload: TokenPayload | None = Depends(require_auth),
-) -> dict:
-    """Upload an avatar image for the current user.
-
-    The client is expected to crop/resize before uploading; the server only
-    enforces a size cap and validates the format by magic bytes. Not available
-    in PocketBase mode (those identities have no local user record).
-    """
-    current = _require_profile_identity(payload)
-    if POCKETBASE_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Avatar upload is not available in PocketBase mode.",
-        )
-    if not current.user_id or not _USER_ID_RE.match(current.user_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot store an avatar for this account.",
-        )
-    info = get_user_info(current.username)
-    if info is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
+    file: UploadFile = File(...), current: TokenPayload = Depends(require_auth)
+):
     data = await file.read(_AVATAR_MAX_BYTES + 1)
     if len(data) > _AVATAR_MAX_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Avatar image is too large (max 1 MB).",
+        raise HTTPException(413, "Avatar image is too large (max 1 MB).")
+    extension = _sniff_image(data)
+    if extension is None:
+        raise HTTPException(415, "Avatar must be a PNG, JPEG or WebP image.")
+    async with _errors():
+        object_id = await asyncio.to_thread(
+            current.provider.resources.write_avatar,
+            current.tenant_id,
+            current.user_id,
+            data,
+            extension,
         )
-    ext = _sniff_image(data)
-    if ext is None:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Avatar must be a PNG, JPEG or WebP image.",
-        )
-
-    from deeptutor.multi_user.identity import save_avatar_file
-
-    # Bump the version embedded in the marker so clients cache-bust the URL.
-    previous = str(info.get("avatar") or "")
-    version = 1
-    if previous.startswith("img:"):
-        try:
-            version = int(previous.split(":", 1)[1]) + 1
-        except ValueError:
-            version = 1
-    marker = f"img:{version}"
-
-    save_avatar_file(current.user_id, data, ext)
-    if not set_avatar(current.username, marker):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    logger.info(f"User '{current.username}' uploaded a new avatar ({ext}, {len(data)} bytes)")
-    return {"ok": True, "avatar": marker}
+        # 数字版本在 PG 行锁内递增；对象名保持不可变。
+        marker = "img:1"
+        return await _replace_avatar(current, marker, object_id)
 
 
 @router.delete("/profile/avatar")
-async def remove_avatar(
-    payload: TokenPayload | None = Depends(require_auth),
-) -> dict:
-    """Remove the current user's uploaded avatar image and reset the marker."""
-    current = _require_profile_identity(payload)
-    from deeptutor.multi_user.identity import delete_avatar_file
-
-    if current.user_id and _USER_ID_RE.match(current.user_id):
-        delete_avatar_file(current.user_id)
-    set_avatar(current.username, "")
-    return {"ok": True, "avatar": ""}
+async def remove_avatar(current: TokenPayload = Depends(require_auth)):
+    async with _errors():
+        return await _replace_avatar(current, "")
 
 
 @router.get("/avatar/{user_id}")
-async def get_avatar_image(
-    user_id: str,
-    _: TokenPayload | None = Depends(require_auth),
-) -> FileResponse:
-    """Serve a stored avatar image. Any authenticated user may view avatars
-    (they appear in the admin table and next to the viewer's own profile)."""
-    if not _USER_ID_RE.match(user_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found")
+async def get_avatar_image(user_id: str, current: TokenPayload = Depends(require_auth)):
+    async with _errors():
+        record = await current.provider.identity.avatar_record(current.token, user_id)
+        if not record["avatar_object"]:
+            raise HTTPException(404, "Avatar not found")
+        try:
+            data = await asyncio.to_thread(
+                current.provider.resources.read_avatar,
+                current.tenant_id,
+                user_id,
+                record["avatar_object"],
+            )
+        except FileNotFoundError:
+            raise HTTPException(404, "Avatar not found") from None
+        return Response(
+            data,
+            media_type=_AVATAR_MEDIA_TYPES[record["avatar_object"].split(".")[-1]],
+            headers={
+                "Cache-Control": "private, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": "inline",
+            },
+        )
 
-    from deeptutor.multi_user.identity import get_avatar_file
 
-    target = get_avatar_file(user_id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Avatar not found")
-
-    media_type = _AVATAR_MEDIA_TYPES.get(target.suffix.lstrip("."), "application/octet-stream")
-    headers = {
-        # Private user content; the marker version in the URL handles busting.
-        "Cache-Control": "private, max-age=86400",
-        "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": "inline",
-    }
-    return FileResponse(path=str(target), media_type=media_type, headers=headers)
+@router.get("/users", response_model=list[UserInfo])
+async def get_users(current: TokenPayload = Depends(require_admin)):
+    async with _errors():
+        return [
+            UserInfo(**row) for row in await current.provider.identity.list_users(current.token)
+        ]
 
 
-# ---------------------------------------------------------------------------
-# Admin-only endpoints
-# ---------------------------------------------------------------------------
+@router.post("/users", status_code=201)
+async def admin_create_user(
+    body: AdminCreateUserRequest, current: TokenPayload = Depends(require_admin)
+):
+    async with _errors():
+        try:
+            user = await current.provider.identity.create_user(
+                current.token, body.username, body.password, preset=body.preset
+            )
+        except ValueError:
+            raise HTTPException(409, "Username already taken") from None
+        return {
+            "ok": True,
+            "user_id": user["id"],
+            "username": user["username"],
+            "role": user["role"],
+            "is_admin": False,
+            "preset": body.preset,
+        }
+
+
+@router.delete("/users/{username}")
+async def remove_user(username: str, current: TokenPayload = Depends(require_admin)):
+    async with _errors():
+        old = await current.provider.identity.delete_user(current.token, username)
+        if old["avatar_object"]:
+            await asyncio.to_thread(
+                current.provider.resources.delete_avatar,
+                current.tenant_id,
+                old["id"],
+                old["avatar_object"],
+            )
+        return {"ok": True}
+
+
+@router.put("/users/{username}/role")
+async def update_user_role(
+    username: str, body: SetRoleRequest, current: TokenPayload = Depends(require_admin)
+):
+    async with _errors():
+        await current.provider.identity.set_role(current.token, username, body.role)
+        return {"ok": True, "username": username, "role": body.role}
+
+
+async def _learner(current, username=None):
+    row = await current.provider.identity.profile(current.token, username=username)
+    if row["role"] != "user" or row["preset"] != "learner":
+        raise HTTPException(404 if username else 403, "Learner profile required")
+    return {"learner_profile": row["learner_profile"]}
+
+
+@router.get("/profile/learner-profile")
+async def get_current_learner_profile(current: TokenPayload = Depends(require_auth)):
+    async with _errors():
+        return await _learner(current)
+
+
+@router.put("/profile/learner-profile")
+async def put_current_learner_profile(
+    body: LearnerProfileRequest, current: TokenPayload = Depends(require_auth)
+):
+    async with _errors():
+        await _learner(current)
+        return {
+            "learner_profile": await current.provider.identity.update_learner_profile(
+                current.token, body.model_dump(exclude_none=True)
+            )
+        }
+
+
+@router.get("/users/{username}/learner-profile")
+async def get_learner_profile(username: str, current: TokenPayload = Depends(require_admin)):
+    async with _errors():
+        return await _learner(current, username)
+
+
+@router.put("/users/{username}/learner-profile")
+async def put_learner_profile(
+    username: str, body: LearnerProfileRequest, current: TokenPayload = Depends(require_admin)
+):
+    async with _errors():
+        await _learner(current, username)
+        return {
+            "learner_profile": await current.provider.identity.update_learner_profile(
+                current.token, body.model_dump(exclude_none=True), username=username
+            )
+        }
+
+
+@router.post("/device-login")
+async def device_login(body: DeviceLoginRequest, response: Response, request: Request):
+    provider = _provider(request)
+    from deeptutor.persistence.postgres.identity.service import LoginRateLimited
+
+    try:
+        token = await provider.identity.device_login(
+            body.pairing_code, body.pin, client=request.client.host if request.client else "unknown"
+        )
+        result = await _logged_in(provider, token, response)
+        actor = await provider.decode(token)
+        return {**result, "device_credential_id": actor.device_credential_id}
+    except LoginRateLimited:
+        raise HTTPException(429, "Authentication temporarily limited") from None
+    except PermissionError:
+        raise HTTPException(401, "Invalid device credentials") from None
+    except Exception:
+        raise HTTPException(503, "Account service unavailable") from None
+
+
+@router.post("/device/heartbeat")
+async def device_heartbeat(current: TokenPayload = Depends(require_auth)):
+    async with _errors():
+        device = await current.provider.identity.device_heartbeat(current.token)
+        if device is None:
+            raise HTTPException(400, "This session does not use a device credential.")
+        return {"ok": not device.pop("limit_reached"), **device}
 
 
 @router.get("/devices")
 async def list_devices(
     user_id: str | None = None,
     include_revoked: bool = False,
-    _: TokenPayload = Depends(require_admin),
-) -> dict:
-    """List local device credential metadata without credential secrets."""
-
-    _require_builtin_device_auth()
-    credentials = list_device_credentials(user_id=user_id, include_revoked=include_revoked)
-    users = {str(user.get("id") or ""): str(user.get("username") or "") for user in list_users()}
-    return {
-        "devices": [
-            {**device, "username": users.get(device["user_id"], "")} for device in credentials
-        ]
-    }
-
-
-@router.post("/devices", status_code=status.HTTP_201_CREATED)
-async def issue_device(
-    body: DeviceCredentialCreateRequest,
     current: TokenPayload = Depends(require_admin),
-) -> dict:
-    """Issue a revocable device credential for an ordinary local account."""
+):
+    async with _errors():
+        return {
+            "devices": await current.provider.identity.list_devices(
+                current.token, user_id=user_id, include_revoked=include_revoked
+            )
+        }
 
-    _require_builtin_device_auth()
-    if get_user_by_id(body.user_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    try:
-        device, pairing_code, pin = issue_device_credential(
-            user_id=body.user_id,
-            device_name=body.device_name,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=body.expires_in_days),
-            daily_limit_minutes=body.daily_limit_minutes,
+
+@router.post("/devices", status_code=201)
+async def issue_device(
+    body: DeviceCredentialCreateRequest, current: TokenPayload = Depends(require_admin)
+):
+    async with _errors():
+        device, code, pin = await current.provider.identity.issue_device(
+            current.token,
+            body.user_id,
+            body.device_name,
+            body.expires_in_days,
+            body.daily_limit_minutes,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    log_admin_action(
-        "device_credential_issue",
-        target_user_id=body.user_id,
-        summary={
-            "device_credential_id": device["id"],
-            "device_name": device["device_name"],
-            "expires_at": device["expires_at"],
-            "daily_limit_minutes": device["daily_limit_minutes"],
-        },
-    )
-    logger.info(
-        f"Admin '{current.username if current else 'local'}' issued device "
-        f"credential {device['id']} for user id '{body.user_id}'"
-    )
-    return {
-        "device": device,
-        "pairing_code": pairing_code,
-        "pin": pin,
-    }
+        return {"device": device, "pairing_code": code, "pin": pin}
 
 
 @router.delete("/devices/{device_credential_id}")
-async def revoke_device(
-    device_credential_id: str,
-    current: TokenPayload = Depends(require_admin),
-) -> dict:
-    _require_builtin_device_auth()
-    device = revoke_device_credential(
-        device_credential_id,
-        revoked_by=str(current.user_id if current else ""),
-    )
-    if device is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Device credential not found",
-        )
-    log_admin_action(
-        "device_credential_revoke",
-        target_user_id=device["user_id"],
-        summary={"device_credential_id": device["id"]},
-    )
-    return {"device": device, "ok": True}
-
-
-@router.get("/users", response_model=list[UserInfo])
-async def get_users(_: TokenPayload = Depends(require_admin)) -> list[UserInfo]:
-    """List all registered users. Requires admin role."""
-    return [UserInfo(**u) for u in list_users()]
-
-
-def _require_local_learner(current: TokenPayload) -> tuple[str, dict]:
-    """Resolve a self-service profile request to its local learner account."""
-
-    if current.role != "user":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Learner profile required"
-        )
-    account = get_user_by_id(current.user_id)
-    if account is None or account[0] != current.username:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if str(account[1].get("preset") or "standard") != "learner":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Learner profile required"
-        )
-    return account
-
-
-@router.get("/profile/learner-profile")
-async def get_current_learner_profile(current: TokenPayload = Depends(require_auth)) -> dict:
-    """Return the authenticated learner's own profile."""
-    _require_local_learner(current)
-    profile = load_learner_profile(current.username)
-    return {"learner_profile": profile}
-
-
-@router.put("/profile/learner-profile")
-async def put_current_learner_profile(
-    body: LearnerProfileRequest,
-    current: TokenPayload = Depends(require_auth),
-) -> dict:
-    """Update only the authenticated learner's own profile."""
-    _require_local_learner(current)
-    from deeptutor.multi_user.learner_profile import normalize_profile
-
-    try:
-        profile = normalize_profile(body.model_dump(exclude_none=True))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-    updated = set_learner_profile(current.username, profile)
-    log_usage(
-        "learner_profile",
-        current.user_id,
-        "self_update",
-        {"fields": sorted(profile or {})},
-    )
-    return {"learner_profile": updated}
-
-
-@router.get("/users/{username}/learner-profile")
-async def get_learner_profile(username: str, _: TokenPayload = Depends(require_admin)) -> dict:
-    """Return the structured profile managed for an ordinary learner."""
-    from deeptutor.multi_user.identity import get_user
-
-    user = get_user(username)
-    if (
-        user is None
-        or str(user.get("role") or "user") != "user"
-        or str(user.get("preset") or "standard") != "learner"
-    ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return {"learner_profile": user.get("learner_profile")}
-
-
-@router.put("/users/{username}/learner-profile")
-async def put_learner_profile(
-    username: str,
-    body: LearnerProfileRequest,
-    current: TokenPayload = Depends(require_admin),
-) -> dict:
-    from deeptutor.multi_user.identity import get_user
-    from deeptutor.multi_user.learner_profile import normalize_profile
-
-    user = get_user(username)
-    if (
-        user is None
-        or str(user.get("role") or "user") != "user"
-        or str(user.get("preset") or "standard") != "learner"
-    ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    try:
-        profile = normalize_profile(body.model_dump(exclude_none=True))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-    updated = set_learner_profile(username, profile)
-    log_admin_action(
-        "learner_profile_update",
-        target_user_id=str(user.get("id") or ""),
-        summary={"fields": sorted(profile or {})},
-    )
-    logger.info("Admin '%s' updated learner profile for '%s'", current.username, username)
-    return {"learner_profile": updated}
-
-
-@router.post("/users", status_code=status.HTTP_201_CREATED)
-async def admin_create_user(
-    body: AdminCreateUserRequest,
-    current: TokenPayload = Depends(require_admin),
-) -> dict:
-    """Admin-only: create a new user account.
-
-    Replaces the public ``/register`` flow once the first admin exists. The
-    new account is always created with role=``user``; admins can promote
-    later via ``PUT /users/{username}/role``.
-    """
-    if not AUTH_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Auth is disabled — user creation is not available.",
-        )
-
-    if POCKETBASE_ENABLED:
-        if body.preset != "standard":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only the standard preset is available in PocketBase mode.",
-            )
-        result = register_pb(username=body.username, email=body.username, password=body.password)
-        if not result:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Failed to create user — username may already be taken.",
-            )
-        logger.info(
-            f"Admin '{current.username if current else 'local'}' created PocketBase user "
-            f"'{body.username}'"
-        )
+async def revoke_device(device_credential_id: str, current: TokenPayload = Depends(require_admin)):
+    async with _errors():
         return {
             "ok": True,
-            "user_id": result.get("id", ""),
-            "username": body.username,
-            "role": "user",
-            "is_admin": False,
-            "preset": "standard",
+            "device": await current.provider.identity.revoke_device(
+                current.token, device_credential_id
+            ),
         }
-
-    existing = {u["username"] for u in list_users()}
-    if body.username in existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already taken",
-        )
-
-    add_user(body.username, body.password, preset=body.preset)
-    user_id = ""
-    role = "user"
-    preset = "standard"
-    for item in list_users():
-        if item.get("username") == body.username:
-            user_id = str(item.get("id") or "")
-            role = str(item.get("role") or "user")
-            preset = str(item.get("preset") or "standard")
-            break
-    if preset == "learner":
-        from deeptutor.multi_user.grants import learner_grant, save_grant
-
-        try:
-            save_grant(user_id, learner_grant(user_id))
-        except Exception as exc:
-            rolled_back = False
-            try:
-                rolled_back = delete_user(body.username)
-            except Exception:
-                logger.exception(
-                    "Failed to roll back user '%s' after learner grant initialization failed",
-                    body.username,
-                )
-            if not rolled_back:
-                logger.error(
-                    "Learner account '%s' may remain after grant initialization failed",
-                    body.username,
-                )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="The learner preset could not be initialized.",
-            ) from exc
-    logger.info(
-        f"Admin '{current.username if current else 'local'}' created user '{body.username}' "
-        f"(role={role!r}, preset={preset!r})"
-    )
-    return {
-        "ok": True,
-        "user_id": user_id,
-        "username": body.username,
-        "role": role,
-        "is_admin": role == "admin",
-        "preset": preset,
-    }
-
-
-@router.delete("/users/{username}", status_code=status.HTTP_200_OK)
-async def remove_user(
-    username: str,
-    current: TokenPayload = Depends(require_admin),
-) -> dict:
-    """Delete a user. Admins cannot delete their own account."""
-    if current and username == current.username:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot delete your own account",
-        )
-
-    # Capture the id before the record disappears so the avatar file can go too.
-    info = get_user_info(username)
-
-    removed = delete_user(username)
-    if not removed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    user_id = str(info.get("id") or "") if info else ""
-    if user_id and _USER_ID_RE.match(user_id):
-        from deeptutor.multi_user.identity import delete_avatar_file
-
-        delete_avatar_file(user_id)
-
-    logger.info(f"Admin '{current.username if current else 'local'}' deleted user '{username}'")
-    return {"ok": True}
-
-
-@router.put("/users/{username}/role", status_code=status.HTTP_200_OK)
-async def update_user_role(
-    username: str,
-    body: SetRoleRequest,
-    current: TokenPayload = Depends(require_admin),
-) -> dict:
-    """Change a user's role. Admins cannot change their own role."""
-    if current and username == current.username:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot change your own role",
-        )
-
-    updated = set_role(username, body.role)
-    if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    logger.info(
-        f"Admin '{current.username if current else 'local'}' set '{username}' role to {body.role!r}"
-    )
-    return {"ok": True, "username": username, "role": body.role}

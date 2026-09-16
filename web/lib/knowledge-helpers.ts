@@ -425,6 +425,7 @@ export const kbRequiresLightRagRebuildBeforeAppend = (
 
 export const kbIsUploadable = (kb: KnowledgeBase): boolean =>
   resolveKbStatus(kb) === "ready" &&
+  !kb.read_only &&
   !kbNeedsReindex(kb) &&
   !kbRequiresLightRagRebuildBeforeAppend(kb);
 
@@ -434,6 +435,7 @@ export const kbCanUploadDocuments = (
 ): boolean =>
   kbIsUploadable(kb) ||
   (resolveKbStatus(kb) === "error" &&
+    !kb.read_only &&
     !indexingActive &&
     !kbRequiresLightRagRebuildBeforeAppend(kb));
 

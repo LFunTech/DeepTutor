@@ -19,6 +19,8 @@ import uuid
 
 from deeptutor.core.context import WorkspaceRuntimeContext
 from deeptutor.multi_user.context import get_current_user
+from deeptutor.runtime.home import get_runtime_data_root
+from deeptutor.services.config import get_runtime_settings_dir
 from deeptutor.services.path_service import get_path_service
 from deeptutor.services.settings.interface_settings import atomic_update
 from deeptutor.utils.secret_files import ensure_private_directory
@@ -30,6 +32,7 @@ _ALLOWED_ROOTS_ENV = "DEEPTUTOR_WORKSPACE_ALLOWED_ROOTS"
 _INTERNAL_DIR = ".deeptutor"
 _MAX_SEARCH_SCAN_ENTRIES = 10_000
 _SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 class WorkspaceError(ValueError):
@@ -118,14 +121,33 @@ def _normalise_relative(path: str) -> str:
     return PurePosixPath(*parts).as_posix()
 
 
+def _path_service_or_none():
+    try:
+        return get_path_service()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return None
+        raise
+
+
+def _runtime_user_data_dir() -> Path:
+    return (get_runtime_data_root() / "user").resolve()
+
+
 class ContentWorkspaceService:
     """Resolve the current user's one active content workspace."""
 
     def _settings_file(self) -> Path:
-        return get_path_service().get_settings_file(_SETTINGS_NAME)
+        path_service = _path_service_or_none()
+        if path_service is not None:
+            return path_service.get_settings_file(_SETTINGS_NAME)
+        return get_runtime_settings_dir() / f"{_SETTINGS_NAME}.json"
 
     def _default_root(self) -> Path:
-        return get_path_service().get_workspace_dir().resolve()
+        path_service = _path_service_or_none()
+        if path_service is not None:
+            return path_service.get_workspace_dir().resolve()
+        return (_runtime_user_data_dir() / "workspace").resolve()
 
     def _deployment_root(self) -> Path | None:
         raw = os.environ.get(_DEPLOYMENT_ROOT_ENV, "").strip()
@@ -236,7 +258,9 @@ class ContentWorkspaceService:
     def _ensure_ready(self, binding: WorkspaceBinding) -> None:
         root = binding.root
         if not root.exists() or not root.is_dir():
-            raise WorkspaceError("The selected workspace folder does not exist.")
+            if not binding.is_default:
+                raise WorkspaceError("The selected workspace folder does not exist.")
+            root.mkdir(parents=True, exist_ok=True)
         self._assert_allowed_root(root)
         if not os.access(root, os.R_OK):
             raise WorkspaceError("The selected workspace folder is not readable.")
@@ -385,7 +409,12 @@ class ContentWorkspaceService:
 
         if not re.fullmatch(r"ws_[0-9a-f]{32}", binding.workspace_id):
             raise WorkspaceError("Invalid workspace id.")
-        base = get_path_service().get_runtime_state_dir()
+        path_service = _path_service_or_none()
+        base = (
+            path_service.get_runtime_state_dir()
+            if path_service is not None
+            else _runtime_user_data_dir() / ".runtime"
+        )
         presentations = base / "workspace_presentations"
         root = presentations / binding.workspace_id
         if create:

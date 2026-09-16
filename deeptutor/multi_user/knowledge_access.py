@@ -15,6 +15,7 @@ from deeptutor.knowledge.manifest import (
     build_manifest,
     document_root,
 )
+from deeptutor.runtime.home import get_runtime_data_root
 
 from .context import get_current_user
 from .grants import load_grant
@@ -24,6 +25,7 @@ from .paths import get_admin_path_service, get_current_path_service
 ADMIN_PREFIX = "admin:kb:"
 USER_PREFIX = "user:kb:"
 DEFAULT_KB_ALIASES = {"", "default", "current", "selected", "默认", "默认知识库", "当前知识库"}
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 @lru_cache(maxsize=128)
@@ -32,7 +34,12 @@ def _manager_for(base_dir: str) -> KnowledgeBaseManager:
 
 
 def current_kb_base_dir() -> Path:
-    return get_current_path_service().get_knowledge_bases_root()
+    try:
+        return get_current_path_service().get_knowledge_bases_root()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_data_root() / "knowledge_bases"
+        raise
 
 
 def admin_kb_base_dir() -> Path:

@@ -45,11 +45,13 @@ class ChannelManager:
         bus: MessageBus,
         groq_api_key: str = "",
         partner_id: str = "",
+        owner_id: str = "",
     ):
         self.channels_config = channels_config
         self.bus = bus
         self._groq_api_key = groq_api_key
         self._partner_id = str(partner_id or "")
+        self._owner_id = str(owner_id or "")
         self.channels: dict[str, BaseChannel] = {}
         self._configured_status: dict[str, dict[str, Any]] = {}
         self._dispatch_task: asyncio.Task | None = None
@@ -90,6 +92,7 @@ class ChannelManager:
                 with constructing_for(self._partner_id):
                     channel = cls(section, self.bus)
                 channel.partner_id = self._partner_id
+                channel.owner_id = self._owner_id
                 channel.transcription_api_key = self._groq_api_key
                 # Effective delivery flags are per-channel only. Historical
                 # top-level channel config keys are ignored at runtime.

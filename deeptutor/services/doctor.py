@@ -528,30 +528,18 @@ async def run_runtime_diagnostics() -> DoctorReport:
             )
         )
 
-    try:
-        from deeptutor.services.session.legacy_migration import (
-            migrate_all_legacy_chat_scopes,
+    checks.append(
+        DoctorCheck(
+            key="legacy_chat_migration",
+            label="Legacy chat migration",
+            status="skip",
+            detail=(
+                "Disabled in PostgreSQL-only runtime; use the controlled offline "
+                "import tooling for historical SQLite/PocketBase data before cutover."
+            ),
+            required=False,
         )
-
-        reports = await migrate_all_legacy_chat_scopes(dry_run=True)
-        pending_sessions = sum(int(report.get("imported") or 0) for report in reports)
-        checks.append(
-            DoctorCheck(
-                key="legacy_chat_migration",
-                label="Legacy chat migration",
-                status="pass",
-                detail=f"Preflight succeeded; {pending_sessions} session(s) pending migration.",
-            )
-        )
-    except Exception as exc:
-        checks.append(
-            DoctorCheck(
-                key="legacy_chat_migration",
-                label="Legacy chat migration",
-                status="fail",
-                detail=_redact_error(exc, None),
-            )
-        )
+    )
 
     return DoctorReport(online=False, checks=checks)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import inspect
 from typing import Any
 
 from deeptutor.services.cron import (
@@ -74,22 +75,53 @@ def _build_schedule(kwargs: dict[str, Any]) -> CronSchedule:
 
 
 def run_cron_action(kwargs: dict[str, Any]) -> CronActionOutcome:
+    def call(value):
+        if inspect.isawaitable(value):
+            if inspect.iscoroutine(value):
+                value.close()
+            raise RuntimeError("cron service requires async execution")
+        return value
+
+    return _run_cron_action_sync(kwargs, call=call)
+
+
+async def run_cron_action_async(kwargs: dict[str, Any]) -> CronActionOutcome:
+    async def call(value):
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    return await _run_cron_action_async(kwargs, call=call)
+
+
+def _owner_from_kwargs(kwargs: dict[str, Any]) -> CronActionOutcome | CronOwner:
     owner_raw = kwargs.get("_cron_owner")
     if not isinstance(owner_raw, dict) or not owner_raw.get("kind"):
         return CronActionOutcome(
             ok=False,
             text="Scheduling is not available in this context.",
         )
-    owner = CronOwner(**owner_raw)
-    service = get_cron_service()
-    action = str(kwargs.get("action") or "").strip().lower()
+    return CronOwner(**owner_raw)
+
+
+def _normalize_action(value: Any) -> str:
+    action = str(value or "").strip().lower()
     if action == "add":
-        action = "schedule"
-    elif action == "remove":
-        action = "cancel"
+        return "schedule"
+    if action == "remove":
+        return "cancel"
+    return action
+
+
+def _run_cron_action_sync(kwargs: dict[str, Any], *, call) -> CronActionOutcome:
+    owner = _owner_from_kwargs(kwargs)
+    if isinstance(owner, CronActionOutcome):
+        return owner
+    service = get_cron_service()
+    action = _normalize_action(kwargs.get("action"))
 
     if action == "list":
-        jobs = service.list_jobs(owner_key=owner.key)
+        jobs = call(service.list_jobs(owner_key=owner.key))
         if not jobs:
             return CronActionOutcome(ok=True, text="No scheduled tasks for this conversation.")
         lines = [f"{len(jobs)} scheduled task(s):"] + [_render_job(job) for job in jobs]
@@ -99,8 +131,21 @@ def run_cron_action(kwargs: dict[str, Any]) -> CronActionOutcome:
         job_id = str(kwargs.get("job_id") or "").strip()
         if not job_id:
             return CronActionOutcome(ok=False, text="cancel needs a job_id (see action='list').")
-        if service.cancel_job(job_id, owner_key=owner.key):
+        if call(service.cancel_job(job_id, owner_key=owner.key)):
             return CronActionOutcome(ok=True, text=f"Task `{job_id}` cancelled.")
+        return CronActionOutcome(ok=False, text=f"No task `{job_id}` found for this conversation.")
+
+    if action in {"pause", "resume"}:
+        job_id = str(kwargs.get("job_id") or "").strip()
+        if not job_id:
+            return CronActionOutcome(ok=False, text=f"{action} needs a job_id (see action='list').")
+        mutator = getattr(service, "set_job_enabled", None)
+        if mutator is None:
+            return CronActionOutcome(ok=False, text="Pause/resume is not available.")
+        enabled = action == "resume"
+        if call(mutator(job_id, enabled, owner_key=owner.key)):
+            verb = "resumed" if enabled else "paused"
+            return CronActionOutcome(ok=True, text=f"Task `{job_id}` {verb}.")
         return CronActionOutcome(ok=False, text=f"No task `{job_id}` found for this conversation.")
 
     if action == "schedule":
@@ -117,12 +162,16 @@ def run_cron_action(kwargs: dict[str, Any]) -> CronActionOutcome:
         try:
             schedule = _build_schedule(kwargs)
             delete_after_run = kwargs.get("delete_after_run")
-            job = service.add_job(
-                name=str(kwargs.get("name") or "").strip(),
-                message=message,
-                schedule=schedule,
-                owner=owner,
-                delete_after_run=(bool(delete_after_run) if delete_after_run is not None else None),
+            job = call(
+                service.add_job(
+                    name=str(kwargs.get("name") or "").strip(),
+                    message=message,
+                    schedule=schedule,
+                    owner=owner,
+                    delete_after_run=(
+                        bool(delete_after_run) if delete_after_run is not None else None
+                    ),
+                )
             )
         except (ValueError, TypeError) as exc:
             return CronActionOutcome(ok=False, text=f"Could not schedule: {exc}")
@@ -139,4 +188,79 @@ def run_cron_action(kwargs: dict[str, Any]) -> CronActionOutcome:
     return CronActionOutcome(ok=False, text=f"Unknown action {action!r}.")
 
 
-__all__ = ["CronActionOutcome", "run_cron_action"]
+async def _run_cron_action_async(kwargs: dict[str, Any], *, call) -> CronActionOutcome:
+    owner = _owner_from_kwargs(kwargs)
+    if isinstance(owner, CronActionOutcome):
+        return owner
+    service = get_cron_service()
+    action = _normalize_action(kwargs.get("action"))
+
+    if action == "list":
+        jobs = await call(service.list_jobs(owner_key=owner.key))
+        if not jobs:
+            return CronActionOutcome(ok=True, text="No scheduled tasks for this conversation.")
+        lines = [f"{len(jobs)} scheduled task(s):"] + [_render_job(job) for job in jobs]
+        return CronActionOutcome(ok=True, text="\n".join(lines), meta={"count": len(jobs)})
+
+    if action == "cancel":
+        job_id = str(kwargs.get("job_id") or "").strip()
+        if not job_id:
+            return CronActionOutcome(ok=False, text="cancel needs a job_id (see action='list').")
+        if await call(service.cancel_job(job_id, owner_key=owner.key)):
+            return CronActionOutcome(ok=True, text=f"Task `{job_id}` cancelled.")
+        return CronActionOutcome(ok=False, text=f"No task `{job_id}` found for this conversation.")
+
+    if action in {"pause", "resume"}:
+        job_id = str(kwargs.get("job_id") or "").strip()
+        if not job_id:
+            return CronActionOutcome(ok=False, text=f"{action} needs a job_id (see action='list').")
+        mutator = getattr(service, "set_job_enabled", None)
+        if mutator is None:
+            return CronActionOutcome(ok=False, text="Pause/resume is not available.")
+        enabled = action == "resume"
+        if await call(mutator(job_id, enabled, owner_key=owner.key)):
+            verb = "resumed" if enabled else "paused"
+            return CronActionOutcome(ok=True, text=f"Task `{job_id}` {verb}.")
+        return CronActionOutcome(ok=False, text=f"No task `{job_id}` found for this conversation.")
+
+    if action == "schedule":
+        if bool(kwargs.get("_cron_in_context")):
+            return CronActionOutcome(
+                ok=False,
+                text="Cannot schedule new tasks from inside a running scheduled task.",
+            )
+        message = str(kwargs.get("message") or "").strip()
+        if not message:
+            return CronActionOutcome(
+                ok=False, text="schedule needs a message — the instruction to run when due."
+            )
+        try:
+            schedule = _build_schedule(kwargs)
+            delete_after_run = kwargs.get("delete_after_run")
+            job = await call(
+                service.add_job(
+                    name=str(kwargs.get("name") or "").strip(),
+                    message=message,
+                    schedule=schedule,
+                    owner=owner,
+                    delete_after_run=(
+                        bool(delete_after_run) if delete_after_run is not None else None
+                    ),
+                )
+            )
+        except (ValueError, TypeError, PermissionError) as exc:
+            return CronActionOutcome(ok=False, text=f"Could not schedule: {exc}")
+        return CronActionOutcome(
+            ok=True,
+            text=(
+                f"Scheduled **{job.name}** (`{job.id}`) — {_describe_schedule(job.schedule)}; "
+                f"first run {_fmt_ms(job.state.next_run_at_ms)}. The result will be "
+                "delivered to this conversation."
+            ),
+            meta={"job_id": job.id},
+        )
+
+    return CronActionOutcome(ok=False, text=f"Unknown action {action!r}.")
+
+
+__all__ = ["CronActionOutcome", "run_cron_action", "run_cron_action_async"]

@@ -234,9 +234,12 @@ class AgenticLoopPipeline:
         event_source: str = "chat",
         event_stage: str = "responding",
         emit_result: bool = True,
+        llm_config: Any | None = None,
+        chat_params: dict[str, Any] | None = None,
+        tool_registry: ToolLookup | None = None,
     ) -> None:
         self.language = "zh" if language.lower().startswith("zh") else "en"
-        self.llm_config = get_llm_config()
+        self.llm_config = llm_config if llm_config is not None else get_llm_config()
         self.binding = getattr(self.llm_config, "binding", None) or "openai"
         self.model = getattr(self.llm_config, "model", None)
         self.api_key = getattr(self.llm_config, "api_key", None)
@@ -246,7 +249,9 @@ class AgenticLoopPipeline:
         self.reasoning_effort = getattr(self.llm_config, "reasoning_effort", None)
         # Process-wide registry. Stays the base for the whole turn; the
         # per-turn scoped view lives on ``_tool_view`` (see ``tool_lookup``).
-        self.registry: ToolLookup = get_tool_registry()
+        self.registry: ToolLookup = (
+            tool_registry if tool_registry is not None else get_tool_registry()
+        )
         self._usage = UsageTracker(model=self.model)
         self._tool_view: ProviderToolView | None = None
         self._deferred_loader: DeferredToolLoader | None = None
@@ -268,7 +273,7 @@ class AgenticLoopPipeline:
         self.last_result: dict[str, Any] | None = None
 
         try:
-            chat_cfg = get_chat_params()
+            chat_cfg = chat_params if chat_params is not None else get_chat_params()
         except Exception as exc:
             logger.warning("Failed to load chat params, using defaults: %s", exc)
             chat_cfg = {}
@@ -308,6 +313,9 @@ class AgenticLoopPipeline:
             reasoning_effort=self.reasoning_effort,
             wire_api=getattr(self.llm_config, "wire_api", None) or "auto",
             api_format=getattr(self.llm_config, "api_format", None) or "auto",
+            disable_ssl_verify=getattr(
+                getattr(self.llm_config, "transport", None), "disable_ssl_verify", None
+            ),
         )
 
     def _load_prompt_pack(self) -> dict[str, Any]:
@@ -389,7 +397,12 @@ class AgenticLoopPipeline:
         return self.respond_max_tokens
 
     async def run(self, context: UnifiedContext, stream: StreamBus) -> dict[str, Any]:
-        if context.runtime.workspace is None:
+        context.metadata["_mastery_nav_available"] = (
+            await user_has_mastery_topics()
+            if context.runtime.resource_capabilities is None
+            else False
+        )
+        if context.runtime.workspace is None and context.runtime.resource_capabilities is None:
             from deeptutor.services.workspace import get_content_workspace_service
 
             context.runtime.workspace = get_content_workspace_service().create_runtime_context(
@@ -438,7 +451,11 @@ class AgenticLoopPipeline:
             deferred_tools_manifest=(
                 self._deferred_tools_manifest() if include_tool_manifest else ""
             ),
-            notebook_manifest=self._build_notebook_manifest(),
+            notebook_manifest=(
+                self._build_notebook_manifest()
+                if context.runtime.resource_capabilities is None
+                else ""
+            ),
             workspace_note=self._workspace_system_note(context),
             capability_blocks=self._capability_system_blocks(context),
             include_tool_manifest=include_tool_manifest,
@@ -558,6 +575,9 @@ class AgenticLoopPipeline:
         ``runtime.providers``. All the pipeline owns is translating the turn's
         context into a :class:`ToolScope`.
         """
+        if context.runtime.resource_capabilities is not None:
+            self._tool_view = ProviderToolView.empty(self.registry)
+            return
         self._pageindex_providers: set[str] = set()
         self._pageindex_cloud_instructions = ""
         self._pageindex_oss_instructions = ""
@@ -650,6 +670,8 @@ class AgenticLoopPipeline:
         return view.manifest if view is not None else ""
 
     async def _exec_allowed(self, context: UnifiedContext) -> bool:
+        if context.runtime.resource_capabilities is not None:
+            return False
         try:
             from deeptutor.services.sandbox import IsolationLevel, get_sandbox_service
 
@@ -683,6 +705,10 @@ class AgenticLoopPipeline:
             return False
 
     def _compose_enabled_tools(self, context: UnifiedContext) -> list[str]:
+        if context.runtime.resource_capabilities is not None:
+            # 仅使用显式授权且确实装配的工具；不探测本地资源或加载插件。
+            allowed = set(context.allowed_builtin_tools or [])
+            return [tool.name for tool in self.registry.get_enabled(list(allowed))]
         is_partner = self._is_partner_turn(context)
         composed = compose_enabled_tools(
             registry=self.tool_lookup,
@@ -737,20 +763,14 @@ class AgenticLoopPipeline:
         return list(dict.fromkeys(composed))
 
     def _mastery_nav_available(self, context: UnifiedContext) -> bool:
-        """Whether this turn should be able to point at a mastery topic.
-
-        Resolved once per turn and cached on the context: the gate opens a
-        SQLite connection, and the two flags derived from it are read
-        independently.
-        """
         cached = context.metadata.get("_mastery_nav_available")
-        if isinstance(cached, bool):
-            return cached
-        available = user_has_mastery_topics()
-        context.metadata["_mastery_nav_available"] = available
-        return available
+        if not isinstance(cached, bool):
+            raise RuntimeError("PG mastery navigation probe has not completed")
+        return cached
 
     def _active_loop_capabilities(self, context: UnifiedContext) -> tuple[LoopExtension, ...]:
+        if context.runtime.resource_capabilities is not None:
+            return ()
         return active_loop_capabilities(context)
 
     @staticmethod
@@ -950,7 +970,9 @@ class AgenticLoopPipeline:
     ) -> list[dict[str, Any]]:
         schemas = self.tool_lookup.build_openai_schemas(enabled_tools)
         kb_choices = self._coexisting_rag_kbs(context)
-        notebook_choices = self._notebook_choices()
+        notebook_choices = (
+            self._notebook_choices() if context.runtime.resource_capabilities is None else []
+        )
         for schema in schemas:
             function = schema.get("function") if isinstance(schema, dict) else None
             if not isinstance(function, dict):
@@ -1274,6 +1296,8 @@ class AgenticLoopPipeline:
         args: dict[str, Any],
         context: UnifiedContext,
     ) -> dict[str, Any]:
+        if context.runtime.resource_capabilities is not None:
+            return dict(args)
         runtime_workspace = context.runtime.workspace
         if runtime_workspace is not None:
             task_dir = None
@@ -1331,8 +1355,9 @@ class AgenticLoopPipeline:
                 user = get_current_user()
                 kwargs["_cron_owner"] = {
                     "kind": "chat",
+                    "tenant_id": getattr(user.scope, "tenant_id", "") or "",
                     "user_id": user.id,
-                    "is_admin": user.is_admin,
+                    "is_admin": user.can_manage_accounts,
                     "session_id": context.session_id,
                     "language": context.language or "en",
                 }

@@ -73,6 +73,34 @@ def test_admin_is_never_restricted(as_user):
         assert exec_override() is None
 
 
+def test_tenant_admin_is_never_restricted(monkeypatch):
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+
+    def fail_load_grant(_user_id):
+        raise AssertionError("tenant admin must not resolve local grants")
+
+    monkeypatch.setattr("deeptutor.multi_user.tool_access.load_grant", fail_load_grant)
+    user = CurrentUser(
+        id="tenant-admin",
+        username="admin",
+        role="tenant_admin",
+        scope=UserScope(
+            kind="tenant",
+            user_id="tenant-admin",
+            tenant_id="00000000-0000-0000-0000-000000000001",
+            root=None,
+        ),
+    )
+    token = set_current_user(user)
+    try:
+        assert allowed_optional_tools() is None
+        assert allowed_mcp_tools() is None
+        assert exec_override() is None
+    finally:
+        reset_current_user(token)
+
+
 def test_user_without_grant_keeps_builtins_unrestricted_but_denies_mcp(as_user, mu_isolated_root):
     with as_user("u_alice"):
         assert allowed_optional_tools() is None

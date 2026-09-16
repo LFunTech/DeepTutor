@@ -23,10 +23,10 @@ from deeptutor.learning.models import (
     TopicMetadata,
     TopicSource,
 )
-from deeptutor.learning.storage import LearningStore
 
 if TYPE_CHECKING:
     from deeptutor.learning.scheduler import SpacedRepetitionScheduler
+    from deeptutor.learning.storage import LearningStore
 
 
 # Long enough for a course title, short enough that a list row stays a row.
@@ -67,7 +67,9 @@ class StaleInteractionError(MasteryInteractionError):
 
 class LearningService:
     def __init__(self, store: LearningStore | None = None) -> None:
-        self._store = store or LearningStore()
+        if store is None:
+            raise RuntimeError("LearningService requires an explicit PG learning unit")
+        self._store = store
 
     @property
     def store(self) -> LearningStore:
@@ -628,6 +630,7 @@ class LearningService:
             interaction.session_id = session_id or interaction.session_id
             interaction.turn_id = turn_id or interaction.turn_id
             interaction.result = {
+                **interaction.result,
                 "is_correct": is_correct,
                 "knowledge_point_id": pending.knowledge_point_id,
             }
@@ -772,10 +775,19 @@ class LearningService:
         modules: list[LearningModule],
         metadata: TopicMetadata,
         sources: list[TopicSource],
+        reserved_operation: bool = False,
     ) -> LearningProgress:
         """Create a confirmed topic, sources, and route in one transaction."""
 
-        if self._store.exists(book_id):
+        if reserved_operation:
+            authority = self._store._authority()
+            lease = self._store.get_path_lease(book_id)
+            if not authority.operation_id or lease is None or not self._store._owns(lease):
+                raise RuntimeError("owned topic reservation operation required")
+            progress = self._store.load(book_id)
+            if progress.version != 1 or progress.modules or progress.name:
+                raise ValueError("topic reservation is no longer empty")
+        elif self._store.exists(book_id):
             raise ValueError(f"Mastery topic {book_id!r} already exists")
 
         def create(tx):

@@ -11,6 +11,7 @@ from .turns import (
     TurnLifecycle,
     TurnRequestPreparer,
 )
+from .turns.configured import ConfiguredTurnRuntime
 
 
 # Preserve direct imports of normalization helpers during the v2 transition.
@@ -24,6 +25,7 @@ def __getattr__(name: str):
 
 
 class TurnRuntimeManager(
+    ConfiguredTurnRuntime,
     TurnRequestPreparer,
     TurnContextAssembler,
     LearningTurnAdapter,

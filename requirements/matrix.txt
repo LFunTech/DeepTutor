@@ -7,12 +7,13 @@
 # Preferred install (from a source clone): pip install -e ".[matrix]"
 # Use this file for Docker/CI when pyproject.toml/source code aren't yet available.
 #
-# This default profile is non-E2EE and does not require libolm/python-olm.
-# For encrypted rooms, install requirements/matrix-e2e.txt or `deeptutor[matrix-e2e]`.
+# This default profile is non-E2EE. The Matrix client protocol is locked to
+# matrix-nio 0.26.0 by task 1.23; encrypted rooms additionally use vodozemac
+# via requirements/matrix-e2e.txt or `deeptutor[matrix-e2e]`.
 
 -r partners.txt
 
 # --- Matrix channel ---
-matrix-nio>=0.25.2,<1.0.0
+matrix-nio==0.26.0
 mistune>=3.0.0,<4.0.0
 nh3>=0.2.18,<1.0.0

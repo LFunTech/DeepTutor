@@ -125,12 +125,24 @@ async def _execute_chat_job(job: CronJob) -> tuple[str, str | None]:
     originating session, so the result is waiting in their chat history."""
     from deeptutor.core.context import UnifiedContext
     from deeptutor.core.stream import StreamEventType
-    from deeptutor.multi_user.models import CurrentUser
+    from deeptutor.multi_user.models import CurrentUser, UserScope
     from deeptutor.multi_user.paths import local_admin_user, scope_for_user, user_context
     from deeptutor.runtime.turn_engine import get_turn_engine
-    from deeptutor.services.session import get_sqlite_session_store
+    from deeptutor.services.session import get_session_store
 
-    if job.owner.is_admin:
+    if job.owner.tenant_id:
+        user = CurrentUser(
+            id=job.owner.user_id,
+            username=job.owner.user_id,
+            role="tenant_admin" if job.owner.is_admin else "user",
+            scope=UserScope(
+                kind="tenant",
+                tenant_id=job.owner.tenant_id,
+                user_id=job.owner.user_id,
+                root=None,
+            ),
+        )
+    elif job.owner.is_admin:
         user = local_admin_user()
     else:
         user = CurrentUser(
@@ -142,7 +154,7 @@ async def _execute_chat_job(job: CronJob) -> tuple[str, str | None]:
 
     prompt = _reminder_prompt(job)
     with user_context(user):
-        store = get_sqlite_session_store()
+        store = get_session_store()
         session = await store.get_session(job.owner.session_id)
         if session is None:
             return "error", "session no longer exists"

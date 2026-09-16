@@ -48,3 +48,16 @@ test("the retired Settings Context path cannot return", () => {
     .map((file) => path.relative(process.cwd(), file));
   assert.deepEqual(violations, []);
 });
+
+test("workspace root avoids server-component redirect timing crash", () => {
+  const page = path.resolve(process.cwd(), "app/(workspace)/page.tsx");
+  const source = fs.readFileSync(page, "utf8");
+
+  // Next/React dev User Timing can call performance.measure with a negative
+  // server-component end timestamp when a root Server Component consists only
+  // of redirect("/chat"). Keep this entry as a client-side replace so loading
+  // "/" never trips that development overlay crash.
+  assert.match(source, /^["']use client["'];?/);
+  assert.equal(/import\s+\{[^}]*\bredirect\b[^}]*\}\s+from\s+["']next\/navigation["']/.test(source), false);
+  assert.equal(/^\s*redirect\s*\(/m.test(source), false);
+});

@@ -27,6 +27,13 @@ from typing import Any, TypeVar
 
 from pydantic import ValidationError
 
+from deeptutor.learning.contracts import (
+    _ACTIVE_INTERACTION_STATES,
+    _ALLOWED_INTERACTION_TRANSITIONS,
+    LearningConflictError,
+    LearningStoreError,
+    PathLeaseConflictError,
+)
 from deeptutor.learning.models import (
     InteractionStatus,
     LearningProgress,
@@ -45,59 +52,6 @@ logger = logging.getLogger(__name__)
 _schema_lock = threading.RLock()
 _initialized_db_paths: set[Path] = set()
 _T = TypeVar("_T")
-_ACTIVE_INTERACTION_STATES = (
-    InteractionStatus.REGISTERED.value,
-    InteractionStatus.AWAITING_INPUT.value,
-    InteractionStatus.ANSWERED.value,
-)
-_ALLOWED_INTERACTION_TRANSITIONS: dict[InteractionStatus, frozenset[InteractionStatus]] = {
-    InteractionStatus.REGISTERED: frozenset(InteractionStatus),
-    InteractionStatus.AWAITING_INPUT: frozenset(
-        {
-            InteractionStatus.AWAITING_INPUT,
-            InteractionStatus.ANSWERED,
-            InteractionStatus.GRADED,
-            InteractionStatus.ABANDONED,
-        }
-    ),
-    InteractionStatus.ANSWERED: frozenset(
-        {
-            InteractionStatus.ANSWERED,
-            InteractionStatus.GRADED,
-            InteractionStatus.ABANDONED,
-        }
-    ),
-    InteractionStatus.GRADED: frozenset({InteractionStatus.GRADED}),
-    InteractionStatus.ABANDONED: frozenset({InteractionStatus.ABANDONED}),
-}
-
-
-class LearningStoreError(RuntimeError):
-    """Base error for durable mastery state operations."""
-
-
-class LearningConflictError(LearningStoreError):
-    """Raised when a stale aggregate revision attempts to overwrite a path."""
-
-    def __init__(self, path_id: str, expected: int, actual: int) -> None:
-        self.path_id = path_id
-        self.expected = expected
-        self.actual = actual
-        super().__init__(
-            f"Mastery path {path_id!r} changed concurrently "
-            f"(expected revision {expected}, current revision {actual})"
-        )
-
-
-class PathLeaseConflictError(LearningStoreError):
-    """Raised when another turn already owns a path's mutation lease."""
-
-    def __init__(self, lease: MasteryPathLease) -> None:
-        self.lease = lease
-        super().__init__(
-            f"Mastery path {lease.path_id!r} is active in session {lease.session_id!r} "
-            f"(turn {lease.turn_id!r})"
-        )
 
 
 class LearningTransaction:

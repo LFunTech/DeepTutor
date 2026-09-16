@@ -178,6 +178,7 @@ class OpenAICompatProvider(LLMProvider):
         provider_name: str | None = None,
         wire_api: str = "auto",
         configure_env: bool = True,
+        disable_ssl_verify: bool | None = None,
     ):
         keys = api_key if isinstance(api_key, list) else [api_key]
         keys = [str(key).strip() for key in keys if str(key or "").strip()]
@@ -214,6 +215,7 @@ class OpenAICompatProvider(LLMProvider):
                 base_url=effective_base,
                 extra_headers=extra_headers,
                 spec=spec,
+                disable_ssl_verify=disable_ssl_verify,
                 sdk_max_retries=0,
             )
         )

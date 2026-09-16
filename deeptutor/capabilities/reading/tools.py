@@ -79,19 +79,55 @@ class _ReadingToolBase(BaseTool):
         return material_id
 
     @staticmethod
-    def _store():
+    def _store(*materials: Any):
         # Imported inside the call: ``reading.store`` reaches the path service,
         # which reaches the runtime and the tool registry — importing it at
         # module scope would close that cycle through the builtin registry.
         from deeptutor.reading import ReadingStore
 
-        return ReadingStore()
+        cache = {row.material_id: row for row in materials if row is not None}
+
+        def resolve(material_id: str) -> Any | None:
+            return cache.get(material_id)
+
+        return ReadingStore(material_resolver=resolve if cache else None)
 
     @staticmethod
     def _catalog():
         from deeptutor.reading import ReadingCatalogStore
 
         return ReadingCatalogStore()
+
+    @staticmethod
+    def _pg_catalog():
+        from deeptutor.core.providers import get_providers
+
+        providers = get_providers()
+        provider = getattr(providers, "reading", None) if providers is not None else None
+        if provider is None or not callable(getattr(provider, "get", None)):
+            raise RuntimeError("PostgreSQL reading provider required")
+        catalog = provider.get()
+        if not callable(getattr(catalog, "run", None)):
+            raise RuntimeError("PostgreSQL reading provider required")
+        return catalog
+
+    async def _catalog_run(self, callback):
+        try:
+            return await self._pg_catalog().run(callback)
+        except RuntimeError as exc:
+            if "PostgreSQL reading provider required" not in str(exc):
+                raise
+            return await asyncio.to_thread(lambda: callback(self._catalog()))
+
+    async def _store_for_material(self, material_id: str):
+        record = await self._catalog_run(lambda catalog: catalog.get_material(material_id))
+        if record is None:
+            return self._store()
+        try:
+            return self._store(record)
+        except TypeError:
+            # Older tests monkeypatch _store with a zero-argument factory.
+            return self._store()
 
     @staticmethod
     def _failure(message: str) -> ToolResult:
@@ -144,7 +180,7 @@ class ReadingListTabsTool(_ReadingToolBase):
         workspace_id = str(kwargs.get(WORKSPACE_KWARG) or "").strip()
         if not workspace_id:
             return self._failure("No reading workspace is open.")
-        workspace = await asyncio.to_thread(self._catalog().get_workspace, workspace_id)
+        workspace = await self._catalog_run(lambda catalog: catalog.get_workspace(workspace_id))
         if workspace is None:
             return self._failure("The reading workspace is unavailable.")
         lines = [f"Reading table “{workspace.title}” has {len(workspace.tabs)} material(s):"]
@@ -200,8 +236,8 @@ class ReadingSwitchTabTool(_ReadingToolBase):
             return self._failure("No reading workspace is open.")
         if not material_id:
             return self._failure("reading_switch_tab needs a material id.")
-        workspace = await asyncio.to_thread(
-            self._catalog().set_active_material, workspace_id, material_id
+        workspace = await self._catalog_run(
+            lambda catalog: catalog.set_active_material(workspace_id, material_id)
         )
         binding = kwargs.get(BINDING_KWARG)
         if isinstance(binding, dict):
@@ -242,7 +278,7 @@ class MaterialOutlineTool(_ReadingToolBase):
         from deeptutor.reading import render_outline
 
         material_id = self._material_id(kwargs)
-        store = self._store()
+        store = await self._store_for_material(material_id)
         text = await asyncio.to_thread(render_outline, store, material_id)
         return ToolResult(content=text, metadata={"material_id": material_id})
 
@@ -290,7 +326,7 @@ class SearchMaterialTool(_ReadingToolBase):
             return self._failure("search_material needs a non-empty query.")
         limit = _clamp_int(kwargs.get("limit"), _SEARCH_DEFAULT_LIMIT, 1, _SEARCH_MAX_LIMIT)
 
-        store = self._store()
+        store = await self._store_for_material(material_id)
         manifest = await asyncio.to_thread(store.manifest, material_id)
         result = await asyncio.to_thread(search_material, store, material_id, query, limit=limit)
 
@@ -396,7 +432,7 @@ class ReadMaterialTool(_ReadingToolBase):
         if spec is None or (isinstance(spec, str) and not spec.strip()):
             return self._failure("read_material needs a locator, e.g. '12' or '12-14'.")
 
-        store = self._store()
+        store = await self._store_for_material(material_id)
         manifest = await asyncio.to_thread(store.manifest, material_id)
         rendered = await asyncio.to_thread(render_units, store, material_id, spec)
 
@@ -489,7 +525,7 @@ class ReaderGotoTool(_ReadingToolBase):
         from deeptutor.reading import unit_timestamps, verify_quote
 
         material_id = self._material_id(kwargs)
-        store = self._store()
+        store = await self._store_for_material(material_id)
         manifest = await asyncio.to_thread(store.manifest, material_id)
         # Timed media is cited by clock time, so say where the reader landed in
         # the same units the answer has to use.
@@ -583,7 +619,7 @@ class ReaderAnnotateTool(_ReadingToolBase):
         from deeptutor.reading import ANNOTATION_COLORS, Annotation, verify_quote
 
         material_id = self._material_id(kwargs)
-        store = self._store()
+        store = await self._store_for_material(material_id)
         manifest = await asyncio.to_thread(store.manifest, material_id)
 
         locator = _as_locator(kwargs.get("locator"))

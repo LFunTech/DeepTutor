@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from .context import get_current_user
 from .grants import load_grant
 from .paths import get_admin_path_service
+from .roles import can_manage_deployment
 
 
 def assigned_skill_ids(user_id: str | None = None) -> set[str]:
@@ -69,7 +70,7 @@ def assert_skill_allowed(name: str) -> None:
     already knows whether the name exists in the user's own workspace).
     """
     user = get_current_user()
-    if user.is_admin:
+    if can_manage_deployment(user):
         return
     if name not in assigned_skill_ids(user.id):
         raise HTTPException(status_code=403, detail="Skill is not assigned to you")

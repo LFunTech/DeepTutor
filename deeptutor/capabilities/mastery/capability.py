@@ -22,10 +22,7 @@ decides *whether the learner may advance* is a deterministic engine call.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from typing import cast
-import uuid
 
 from deeptutor.capabilities.mastery.pipeline import MasteryLoopPipeline
 from deeptutor.capabilities.mastery.tools import MASTERY_TOOL_NAMES
@@ -74,39 +71,42 @@ class MasteryPathCapability(TurnCapability):
         )
         context.metadata["mastery_mode"] = True
         context.metadata["mastery_path_id"] = binding.path_id
+        from deeptutor.learning.runtime import get_learning_runtime
+
+        base = get_learning_runtime()
+        await base.authorize()
+        turn_id = str(context.runtime.turn_id or context.metadata.get("turn_id") or "")
+        session_id = str(context.session_id or "")
+        managed = bool(context.metadata.get("mastery_path_lease_managed"))
+        if managed:
+            authority = base.authority
+            if (
+                authority is None
+                or not authority.turn_id
+                or (authority.session_id, authority.turn_id) != (session_id, turn_id)
+            ):
+                raise RuntimeError("Live learning turn authority is required")
+            # 在进入模型配置/loop 前复验真实 PG executor 与 turn 栅栏。
+            await base.run(lambda unit: bool(unit._authority()))
+            runtime = base
+        else:
+            runtime = await base.for_turn(session_id, turn_id)
         pipeline = MasteryLoopPipeline(language=context.language)
         concrete_stream = cast(StreamBus, stream)
-        if context.metadata.get("mastery_path_lease_managed"):
+        if managed:
             await pipeline.run(context, concrete_stream)
             return
 
-        # CLI and SDK calls bypass TurnRuntimeManager, so the capability owns
-        # the same path lease for those entry points. Runtime-managed web turns
-        # keep their lease until message/event persistence has also completed.
-        from deeptutor.learning.storage import LearningStore
+        def acquire(unit):
+            unit.acquire_path_lease(binding.path_id, session_id, turn_id)
+            unit.bind_session(binding.path_id, session_id, owns_path=binding.owned_by_session)
 
-        store = LearningStore()
-        turn_id = str(context.metadata.get("turn_id") or f"direct-{uuid.uuid4().hex}")
-        context.metadata["turn_id"] = turn_id
-        await asyncio.to_thread(
-            store.bind_session,
-            binding.path_id,
-            str(context.session_id or "direct"),
-            owns_path=binding.owned_by_session,
-        )
-        await asyncio.to_thread(
-            store.acquire_path_lease,
-            binding.path_id,
-            str(context.session_id or "direct"),
-            turn_id,
-        )
         try:
-            await pipeline.run(context, concrete_stream)
+            await runtime.run(acquire)
+            async with runtime.bind():
+                await pipeline.run(context, concrete_stream)
         finally:
-            # Released by turn: ``mastery_switch`` may have moved this turn onto
-            # a different path since the lease was taken.
-            with contextlib.suppress(Exception):
-                await asyncio.shield(asyncio.to_thread(store.release_leases_for_turn, turn_id))
+            await runtime.release_turn_lease()
 
 
 __all__ = ["MasteryPathCapability", "resolve_mastery_path_id"]

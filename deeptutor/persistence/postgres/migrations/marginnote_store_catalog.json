@@ -1,0 +1,37 @@
+{
+  "columns": {
+    "marginnote_devices": "tenant_id:uuid! owner_id:text! kb_id:text! device_id:text! device_name:text! device_kind:text! token_hash:text! paired_at:text! last_seen:text! active:bool!",
+    "marginnote_cursors": "tenant_id:uuid! owner_id:text! kb_id:text! device_id:text! cursor:text! updated_at:text!",
+    "marginnote_objects": "tenant_id:uuid! owner_id:text! kb_id:text! device_id:text! object_id:text! object_type:text! title:text! content:text! excerpt:text document_id:text document_title:text page:int4 tags:jsonb! links:jsonb! color:text created_at:text! updated_at:text! synced_at:text! raw:jsonb!",
+    "marginnote_tombstones": "tenant_id:uuid! owner_id:text! kb_id:text! device_id:text! object_id:text! deleted_at:text!"
+  },
+  "constraints": {
+    "marginnote_devices": [
+      "CHECK (((length(kb_id) > 0) AND (length(kb_id) <= 255)))",
+      "CHECK ((length(device_id) > 0))",
+      "CHECK ((length(device_kind) > 0))",
+      "CHECK ((length(token_hash) = 64))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, kb_id, device_id)"
+    ],
+    "marginnote_cursors": [
+      "FOREIGN KEY (tenant_id, owner_id, kb_id, device_id) REFERENCES enterprise.marginnote_devices(tenant_id, owner_id, kb_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, kb_id, device_id)"
+    ],
+    "marginnote_objects": [
+      "CHECK (((page IS NULL) OR (page >= 0)))",
+      "CHECK ((jsonb_typeof(links) = 'array'::text))",
+      "CHECK ((jsonb_typeof(raw) = 'object'::text))",
+      "CHECK ((jsonb_typeof(tags) = 'array'::text))",
+      "CHECK ((length(object_id) > 0))",
+      "CHECK ((object_type = ANY (ARRAY['note'::text, 'excerpt'::text, 'card'::text, 'mindmap_node'::text, 'document'::text, 'comment'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id, kb_id, device_id) REFERENCES enterprise.marginnote_devices(tenant_id, owner_id, kb_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, kb_id, device_id, object_id)"
+    ],
+    "marginnote_tombstones": [
+      "CHECK ((length(object_id) > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, kb_id, device_id) REFERENCES enterprise.marginnote_devices(tenant_id, owner_id, kb_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, kb_id, device_id, object_id)"
+    ]
+  }
+}

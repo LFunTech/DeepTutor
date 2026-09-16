@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 from deeptutor.core.context import UnifiedContext
 from deeptutor.core.stream import StreamEvent
@@ -19,13 +20,26 @@ class TurnEngine:
         # boot and leaves one stable patch point for tests and embedders.
         from deeptutor.runtime.orchestrator import ChatOrchestrator
 
-        orchestrator = (
-            ChatOrchestrator()
-            if self.capability_registry is None
-            else ChatOrchestrator(capability_registry=self.capability_registry)
-        )
-        async for event in orchestrator.handle(context):
-            yield event
+        if context.runtime.resource_capabilities is not None:
+            from deeptutor.runtime.registry.capability_registry import CapabilityRegistry
+
+            registry = self.capability_registry or CapabilityRegistry()
+            if self.capability_registry is None:
+                from deeptutor.agents.chat.capability import ChatCapability
+
+                registry.register(ChatCapability)
+            orchestrator = ChatOrchestrator(
+                capability_registry=registry, tool_registry=context.runtime.tool_registry
+            )
+        else:
+            orchestrator = (
+                ChatOrchestrator()
+                if self.capability_registry is None
+                else ChatOrchestrator(capability_registry=self.capability_registry)
+            )
+        async with aclosing(orchestrator.handle(context)) as events:
+            async for event in events:
+                yield event
 
 
 _default_engine: TurnEngine | None = None

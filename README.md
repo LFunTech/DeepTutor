@@ -271,18 +271,20 @@ shown as **best effort** in Workspace settings.
 <details>
 <summary><b>Option 1 — Install From PyPI</b> · full local Web app + CLI, no clone required</summary>
 
-Full local Web app + CLI, no clone required. Needs **Python 3.11–3.14** and a **Node.js 20+** runtime on PATH (the packaged Next.js standalone server is spawned by `deeptutor start`).
+Full local Web app + CLI, no clone required. Needs **Python 3.11–3.14**, a **Node.js 20+** runtime on PATH (the packaged Next.js standalone server is spawned by `deeptutor start`), and a reachable **PostgreSQL** deployment for all business use.
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
 pip install -U deeptutor
 deeptutor init     # prompts for ports + LLM provider + optional embedding/search
+# Prepare PostgreSQL config + Secret env refs before starting business runtime.
+# See docs/postgresql-runtime-runbook.md for schema apply and account bootstrap.
 deeptutor start    # starts backend + frontend; keep the terminal open
 ```
 
 `deeptutor init` prompts for backend port (default `8001`), frontend port (default `3782`), LLM provider / base URL / API key / model, an optional embedding provider for Knowledge Base / RAG, and an optional search provider for Web Search.
 
-After `deeptutor start`, open the frontend URL printed in the terminal — by default [http://127.0.0.1:3782](http://127.0.0.1:3782). Press `Ctrl+C` in that terminal to stop both backend and frontend. Skipping `deeptutor init` is fine for a quick trial; the app boots with default ports and empty model settings, configure them later in **Settings → Models**.
+After `deeptutor start`, open the frontend URL printed in the terminal — by default [http://127.0.0.1:3782](http://127.0.0.1:3782). Press `Ctrl+C` in that terminal to stop both backend and frontend. `--help`, `--version`, pure imports, schema planning, and offline source checks do not require a business database connection; Web/API/WS, `run`/`chat`, SDK business calls, background jobs, and tools require PostgreSQL and fail closed when config, schema, tenant, or permissions are missing.
 
 </details>
 
@@ -305,6 +307,8 @@ python -m pip install -e .
 ( cd web && npm ci --legacy-peer-deps )
 
 deeptutor init
+# Then prepare PostgreSQL config, run schema apply/verify, and bootstrap an
+# admin account as described in docs/postgresql-runtime-runbook.md.
 deeptutor start --dev
 ```
 
@@ -367,8 +371,20 @@ One container for the full Web app. Images on GitHub Container Registry:
 docker run --rm --name deeptutor \
   -p 127.0.0.1:3782:3782 \
   -v deeptutor-data:/app/data \
+  -v "$PWD/postgres.json:/run/deeptutor/postgres.json:ro" \
+  -e DEEPTUTOR_POSTGRES_CONFIG=/run/deeptutor/postgres.json \
+  -e DEEPTUTOR_DATABASE_URL \
+  -e DEEPTUTOR_MIGRATION_DATABASE_URL \
+  -e DEEPTUTOR_IDENTITY_SIGNING_KEY \
+  -e DEEPTUTOR_AUTH_EPOCH \
   ghcr.io/hkuds/deeptutor:latest
 ```
+
+The `-e NAME` form forwards values from your shell/secret manager without
+putting DSNs in this document. Do not put database URLs, auth tokens, or model
+keys in `NEXT_PUBLIC_*`, frontend settings, checked-in compose files, or
+examples. PostgreSQL schema apply and account bootstrap are maintenance steps;
+see [PostgreSQL runtime runbook](./docs/postgresql-runtime-runbook.md).
 
 To choose a host content folder at container startup, mount it at the stable
 container path and lock DeepTutor to that path:
@@ -379,6 +395,12 @@ docker run --rm --name deeptutor \
   -p 127.0.0.1:3782:3782 \
   -v deeptutor-data:/app/data \
   -v "$PWD/deeptutor-workspace:/workspace" \
+  -v "$PWD/postgres.json:/run/deeptutor/postgres.json:ro" \
+  -e DEEPTUTOR_POSTGRES_CONFIG=/run/deeptutor/postgres.json \
+  -e DEEPTUTOR_DATABASE_URL \
+  -e DEEPTUTOR_MIGRATION_DATABASE_URL \
+  -e DEEPTUTOR_IDENTITY_SIGNING_KEY \
+  -e DEEPTUTOR_AUTH_EPOCH \
   -e DEEPTUTOR_WORKSPACE_ROOT=/workspace \
   -e DEEPTUTOR_WORKSPACE_ALLOWED_ROOTS=/workspace \
   ghcr.io/hkuds/deeptutor:latest
@@ -391,7 +413,7 @@ appear locked in the Web settings page.
 
 > **Only `3782` needs to be published.** The browser talks exclusively to the frontend origin; the Next.js middleware (`web/proxy.ts`) forwards `/api/*` and `/ws/*` to the FastAPI backend **inside the container**. Publishing `8001` (`-p 127.0.0.1:8001:8001`) is optional — handy only for hitting the API directly with curl or scripts.
 
-Open [http://127.0.0.1:3782](http://127.0.0.1:3782). The container creates `/app/data/user/settings/*.json` on first boot; configure model providers from the Web Settings page. Config, API keys, logs, the default Content Workspace, memory, and knowledge bases persist in the `deeptutor-data` volume. A separately mounted Content Workspace persists at its host path instead. Optional extras belong on the deployment, not in a shell: set `DEEPTUTOR_EXTRAS` (and `DEEPTUTOR_APT_PACKAGES` for system libraries) and every container started from it re-applies them, where a `docker exec … pip install` would be lost at the next `compose down`.
+Open [http://127.0.0.1:3782](http://127.0.0.1:3782) after the PostgreSQL readiness check passes. The container creates `/app/data/user/settings/*.json` on first boot; configure model providers from the Web Settings page. Runtime settings, logs, the default Content Workspace, memory, and knowledge bases persist in the `deeptutor-data` volume; business state lives in PostgreSQL. A separately mounted Content Workspace persists at its host path instead. Optional extras belong on the deployment, not in a shell: set `DEEPTUTOR_EXTRAS` (and `DEEPTUTOR_APT_PACKAGES` for system libraries) and every container started from it re-applies them, where a `docker exec … pip install` would be lost at the next `compose down`.
 
 - **Different host ports:** change the left side of each `-p host:container` mapping (e.g. `-p 127.0.0.1:8088:3782`). If you change container-side ports in `/app/data/user/settings/system.json`, restart and update the right side of each mapping to match.
 - **Detached:** add `-d`, then `docker logs -f deeptutor` to follow, `docker stop deeptutor` to stop, `docker rm deeptutor` before reusing the name. The `deeptutor-data` volume keeps private runtime data and the default Content Workspace across restarts; a separately mounted Content Workspace persists at its host path.
@@ -412,9 +434,8 @@ uses to reach the backend (it's read server-side, never sent to the browser).
 ```
 
 `next_public_api_base_external` (and its alias `public_api_base`) are accepted as
-lower-precedence fallbacks. CORS uses frontend **origins**, not API URLs. With
-auth disabled, DeepTutor permits normal HTTP/HTTPS browser origins by default.
-With auth enabled, add exact frontend origins:
+lower-precedence fallbacks. CORS uses frontend **origins**, not API URLs. For
+PostgreSQL-backed authenticated deployments, add exact frontend origins:
 
 ```json
 {
@@ -432,6 +453,12 @@ docker run --rm --name deeptutor \
   -p 127.0.0.1:3782:3782 -p 127.0.0.1:8001:8001 \
   --add-host=host.docker.internal:host-gateway \
   -v deeptutor-data:/app/data \
+  -v "$PWD/postgres.json:/run/deeptutor/postgres.json:ro" \
+  -e DEEPTUTOR_POSTGRES_CONFIG=/run/deeptutor/postgres.json \
+  -e DEEPTUTOR_DATABASE_URL \
+  -e DEEPTUTOR_MIGRATION_DATABASE_URL \
+  -e DEEPTUTOR_IDENTITY_SIGNING_KEY \
+  -e DEEPTUTOR_AUTH_EPOCH \
   ghcr.io/hkuds/deeptutor:latest
 ```
 
@@ -523,8 +550,9 @@ Everything under `data/user/settings/` is plain JSON/YAML. The **Settings** page
 |:---|:---|
 | `model_catalog.json` | Provider connections plus LLM, task, embedding, search, TTS, STT, image, and video profiles, credentials, and active selections |
 | `system.json` | Backend/frontend ports, public API base, CORS, SSL verification, attachment directory and upload/extraction limits |
-| `auth.json` | Optional auth toggle, username, password hash, token/cookie settings |
-| `integrations.json` | Optional PocketBase and sidecar integration settings |
+| `auth.json` | UI/session cookie settings; business identities are stored in PostgreSQL and bootstrapped through controlled CLI commands |
+| `postgres.json` | PostgreSQL deployment config with **Secret environment references only**; values live in backend/maintenance process env such as `DEEPTUTOR_DATABASE_URL` |
+| `integrations.json` | External sidecar integration settings; PocketBase is a legacy read-only export/import source, not a runtime business backend |
 | `interface.json` | UI and model output language / theme / sidebar preferences |
 | `content_workspace.json` | Content Workspace folder bindings and the active workspace selection |
 | `video_learning.json` | Default YouTube/Invidious playback provider, Invidious origins, and optional transcript adapter |
@@ -548,7 +576,7 @@ an education-focused domain policy in `data/user/settings/system.json`:
 When `trusted_domains` is non-empty, references are limited to those domains
 and their subdomains; `blocked_domains` always takes precedence.
 
-Project-root `.env` is **not** read as an application config file. For a minimal model setup, open **Settings → Models**, add an LLM profile (Base URL / API key / model name), and save. Add an embedding profile only if you plan to use Knowledge Base / RAG features.
+Project-root `.env` is **not** read as an application config file. PostgreSQL DSNs and identity secrets must be supplied by the backend or maintenance process environment referenced from `postgres.json`; never put them in frontend code, `NEXT_PUBLIC_*`, browser settings, or examples. For a minimal model setup, open **Settings → Models**, add an LLM profile (Base URL / API key / model name), and save. Add an embedding profile only if you plan to use Knowledge Base / RAG features.
 
 LLM and task-model profiles expose an **API format** setting when their provider
 supports a choice. Keep `Auto` for normal routing and fallback, or choose
@@ -832,9 +860,9 @@ Remote-topology detection has a localhost boundary. If Web itself is reached thr
 </details>
 
 <details>
-<summary><b>👥 Multi-User — Shared Deployments</b> · optional auth, isolated per-user workspaces</summary>
+<summary><b>👥 Multi-User — Shared Deployments</b> · PostgreSQL identities, isolated per-user workspaces</summary>
 
-Authentication is **off by default** — DeepTutor runs single-user. Turn it on and one `data/` tree hosts an admin workspace, isolated per-user workspaces, and partner workspaces side by side:
+DeepTutor no longer creates a local first-admin or SQLite/PocketBase identity backend. One deployment tenant in PostgreSQL owns admin, user, learner, device, grant, and session state. The local `data/` tree still holds settings and file workspaces:
 
 ```text
 data/
@@ -845,11 +873,20 @@ data/
 └── system/                  # auth · grants · audit · user-secrets/<owner> (OAuth tokens)
 ```
 
-The **first registered user becomes admin** and owns model catalogs, provider credentials, shared knowledge bases, skills, canonical shared books, and per-user grants. Admin-created local users choose Standard, Learner, or Custom. Learner locks learning capabilities and material policy, adds an adaptive profile, and supports revocable device credentials with expiry and daily limits; authorized guardians can view reports, approve materials, and reset credentials. Other users get isolated workspaces plus scoped models, KBs, skills, partners, and shared-book access without receiving raw API keys. If `auth.json` already carries a `username` + `password_hash`, that account *is* the admin: `/register` stays closed and accounts created from `/admin/users` are always `role=user` until you promote them.
+The tenant admin is created only by the controlled PostgreSQL bootstrap command, for example:
 
-**Enable it:** turn auth on in `data/user/settings/auth.json`, restart `deeptutor start`, register the first admin at `/register`, then add users from `/admin/users` and assign models, KBs, skills, partners, tool/MCP/CLI-app policy, and code-execution access through grants; configure shared books under each user's **Book access** panel.
+```bash
+export DEEPTUTOR_ADMIN_PASSWORD='set-this-outside-git'
+deeptutor account bootstrap \
+  --config "$DEEPTUTOR_POSTGRES_CONFIG" \
+  --username admin \
+  --password-env DEEPTUTOR_ADMIN_PASSWORD
+unset DEEPTUTOR_ADMIN_PASSWORD
+```
 
-> PocketBase stays a single-user integration — keep `integrations.pocketbase_url` blank for multi-user deployments unless you've wired up an external user store.
+Admin-created users choose Standard, Learner, or Custom. Learner locks learning capabilities and material policy, adds an adaptive profile, and supports revocable device credentials with expiry and daily limits; authorized guardians can view reports, approve materials, and reset credentials. Other users get isolated workspaces plus scoped models, KBs, skills, partners, and shared-book access without receiving raw API keys.
+
+PocketBase is no longer a runtime business backend. Existing PocketBase data can be exported only through the read-only offline migration path and imported into PostgreSQL after explicit ownership mapping; do not configure it as a live fallback.
 
 </details>
 
@@ -879,7 +916,13 @@ Core workspace management is here too — knowledge bases (`kb`), sessions (`ses
 
 DeepTutor is built to be *operated by another agent*. Add `--format json` to any `run` and each turn streams **NDJSON — one event per line** (`content`, `tool_call`, `tool_result`, `done`, …), every line tagged with its `session_id`. Runs are headless-safe: an `ask_user` pause with no TTY auto-resolves with an empty reply instead of hanging.
 
+Business CLI commands use the same PostgreSQL runtime as Web/API. Provide
+`DEEPTUTOR_POSTGRES_CONFIG`, backend-only Secret env refs, and an auth token
+environment reference; otherwise the command fails rather than falling back to
+SQLite or anonymous local admin.
+
 ```bash
+# Set DEEPTUTOR_AUTH_TOKEN from your login/admin secret flow before running.
 # One shot, machine-readable
 deeptutor run deep_solve "Find d/dx[sin(x^2)]" --tool reason --format json
 
@@ -917,6 +960,9 @@ The repo ships a root [`SKILL.md`](SKILL.md) — a ~200-line handover doc that t
 | `deeptutor plugin list/info` | Inspect registered tools and capabilities |
 | `deeptutor config show` | Print configuration summary |
 | `deeptutor provider login <provider>` | Provider auth (`openai-codex` OAuth login; `github-copilot` validates an existing Copilot auth session; `codebuddy` validates CodeBuddy SDK auth and starts login when needed) |
+| `deeptutor account bootstrap/create/list/password/enable/disable/revoke/role/delete` | Controlled PostgreSQL account maintenance; passwords/tokens are passed by env var name, never inline |
+| `deeptutor migration sqlite snapshot/source-check/plan` | Offline read-only SQLite source artifact checks; not a runtime backend |
+| `deeptutor migration pocketbase export` | Offline read-only PocketBase export for migration; not a runtime backend |
 
 </details>
 
@@ -930,6 +976,26 @@ python -m pip install -e ./packaging/deeptutor-cli
 ```
 
 It isn't published to PyPI yet, so the main [Get Started](#-get-started) section keeps the source-install path.
+
+CLI-only installs include PostgreSQL runtime support and the SQL migration resources, but no Web assets or FastAPI server. `deeptutor --help` and offline source checks work without a database; `run`, `chat`, sessions, notebooks, books, learning, cron, and partner operations require the same `postgres.json` + Secret env refs as the full app.
+
+</details>
+
+<details>
+<summary><b>Python SDK</b> · PostgreSQL-backed default runtime</summary>
+
+The default SDK facade is PostgreSQL-only for business operations:
+
+```python
+from deeptutor.app import DeepTutorApp
+
+async with DeepTutorApp() as app:
+    # The process must already have DEEPTUTOR_POSTGRES_CONFIG,
+    # DEEPTUTOR_DATABASE_URL, and identity Secret env refs.
+    ...
+```
+
+For remote SDK/control clients, authenticate to a DeepTutor service that already owns the database connection; do not distribute PostgreSQL DSNs to browsers, notebooks, or untrusted clients.
 
 </details>
 

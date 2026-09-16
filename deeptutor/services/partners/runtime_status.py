@@ -12,7 +12,11 @@ from deeptutor.partners.config.paths import get_data_dir
 
 
 class PartnerRuntimeStatusRepository:
-    """WAL SQLite projection written by the leader and read by every worker."""
+    """Legacy explicit SQLite fixture for old Partner runtime status files.
+
+    Default runtime code no longer constructs this class implicitly; it remains
+    available only to legacy-format importer/fixture tests that pass a path.
+    """
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = (path or (get_data_dir() / "_runtime" / "status.sqlite3")).resolve()
@@ -50,14 +54,17 @@ class PartnerRuntimeStatusRepository:
         payload: dict[str, Any] | None = None,
         started_at: str | None = None,
         last_reload_error: str | None = None,
+        worker_id: str | None = None,
     ) -> dict[str, Any]:
         updated_at = time.time()
+        runtime_worker_id = worker_id or owner_id
         safe_payload = dict(payload or {})
         safe_payload.pop("channels", None)
         safe_payload.update(
             {
                 "partner_id": partner_id,
-                "runtime_owner_id": owner_id,
+                "runtime_owner_id": runtime_worker_id,
+                "runtime_worker_id": runtime_worker_id,
                 "running": bool(running),
                 "runtime_state": state,
                 "started_at": started_at,
@@ -116,13 +123,33 @@ class PartnerRuntimeStatusRepository:
             )
 
 
-_repository: PartnerRuntimeStatusRepository | None = None
+_repository: Any | None = None
 
 
-def get_partner_runtime_status_repository() -> PartnerRuntimeStatusRepository:
+def get_partner_runtime_status_repository() -> Any:
+    """Return the default PG runtime-status projection for the running app.
+
+    Explicit ``PartnerRuntimeStatusRepository(path)`` remains available for
+    legacy fixture/import tests, but the default application path must not create
+    or open ``status.sqlite3``.
+    """
+
     global _repository
     if _repository is None:
-        _repository = PartnerRuntimeStatusRepository()
+        from deeptutor.app.container import get_application_container
+        from deeptutor.persistence.postgres.partner_runtime_status import (
+            PostgresPartnerRuntimeStatusRepository,
+        )
+
+        container = get_application_container()
+        runtime = getattr(container, "postgres_runtime", None)
+        if runtime is None or getattr(runtime, "sync_db", None) is None:
+            raise RuntimeError("Partner runtime status requires PostgreSQL runtime")
+        _repository = PostgresPartnerRuntimeStatusRepository(
+            runtime.sync_db,
+            tenant_id=str(runtime.config.tenant_id),
+            worker_id=str(container.worker_id),
+        )
     return _repository
 
 

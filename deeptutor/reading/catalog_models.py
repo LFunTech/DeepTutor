@@ -48,6 +48,7 @@ class MaterialRecord:
     created_at: float = 0.0
     updated_at: float = 0.0
     last_opened_at: float = 0.0
+    version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +68,7 @@ class MaterialRecord:
             "error_detail": self.error_detail,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "version": self.version,
             "last_opened_at": self.last_opened_at,
         }
 
@@ -98,6 +100,7 @@ class WorkspaceRecord:
     created_at: float = 0.0
     updated_at: float = 0.0
     tabs: tuple[WorkspaceTab, ...] = field(default_factory=tuple)
+    version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +110,7 @@ class WorkspaceRecord:
             "active_material_id": self.active_material_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "version": self.version,
             "tabs": [row.to_dict() for row in self.tabs],
         }
 
@@ -119,6 +123,7 @@ class ReadingSessionRecord:
     active_material_id: str | None = None
     created_at: float = 0.0
     updated_at: float = 0.0
+    version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +133,7 @@ class ReadingSessionRecord:
             "active_material_id": self.active_material_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "version": self.version,
         }
 
 

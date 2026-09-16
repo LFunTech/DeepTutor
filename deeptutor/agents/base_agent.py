@@ -16,6 +16,7 @@ import time
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from deeptutor.config.settings import settings
+from deeptutor.core.context import execution_error_text
 from deeptutor.logging import LLMStats
 from deeptutor.services.config import get_agent_params
 from deeptutor.services.llm import complete as llm_complete
@@ -61,6 +62,7 @@ class BaseAgent(ABC):
         config: dict[str, Any] | None = None,
         token_tracker: Any | None = None,
         log_dir: str | None = None,
+        agent_params: dict[str, Any] | None = None,
     ):
         """
         Initialize base Agent.
@@ -78,6 +80,7 @@ class BaseAgent(ABC):
             token_tracker: Optional external TokenTracker instance
             log_dir: Optional log directory path
         """
+        self._redact_errors = agent_params is not None
         self.module_name = module_name
         self.agent_name = agent_name
         self.language = language
@@ -93,7 +96,9 @@ class BaseAgent(ABC):
             self.config = {}
 
         # Load agent parameters from unified config (agents.yaml)
-        self._agent_params = get_agent_params(module_name)
+        self._agent_params = (
+            dict(agent_params) if agent_params is not None else get_agent_params(module_name)
+        )
 
         # Load LLM configuration
         try:
@@ -474,10 +479,12 @@ class BaseAgent(ABC):
                 {
                     **trace_payload_base,
                     "state": "error",
-                    "response": str(e),
+                    "response": execution_error_text(e, redact=self._redact_errors),
                 }
             )
-            self.logger.error(f"LLM call failed: {e}")
+            self.logger.error(
+                "LLM call failed: %s", execution_error_text(e, redact=self._redact_errors)
+            )
             raise
 
         # Calculate duration
@@ -676,10 +683,12 @@ class BaseAgent(ABC):
                 {
                     **trace_payload_base,
                     "state": "error",
-                    "response": str(e),
+                    "response": execution_error_text(e, redact=self._redact_errors),
                 }
             )
-            self.logger.error(f"LLM streaming failed: {e}")
+            self.logger.error(
+                "LLM streaming failed: %s", execution_error_text(e, redact=self._redact_errors)
+            )
             raise
 
     # -------------------------------------------------------------------------

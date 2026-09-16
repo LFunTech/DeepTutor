@@ -21,15 +21,15 @@ import pytest
 
 from deeptutor.api.routers import marginnote4
 from deeptutor.api.routers.auth import require_auth
-from deeptutor.services.path_service import PathService
+from deeptutor.app.container import set_application_container
 
 
 @pytest.fixture
 def home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("DEEPTUTOR_HOME", str(tmp_path))
-    PathService.reset_instance()
+    set_application_container(None)
     yield tmp_path
-    PathService.reset_instance()
+    set_application_container(None)
 
 
 @pytest.fixture
@@ -43,17 +43,20 @@ def client(home: Path):
         yield test_client
 
 
-def _mn4_dir() -> Path:
-    return PathService.get_instance().user_data_dir / "marginnote4"
+def _sqlite_artifacts(home: Path) -> list[Path]:
+    return [
+        path
+        for path in home.rglob("*")
+        if path.suffix in {".db", ".sqlite", ".sqlite3"} or path.name.endswith(("-wal", "-shm"))
+    ]
 
 
-def test_unauthenticated_sync_writes_nothing_to_disk(client) -> None:
-    """A store is created by constructing it, so auth must come first.
+def test_unauthenticated_sync_writes_nothing_to_disk(client, home: Path) -> None:
+    """Device auth must fail before any runtime storage can be created.
 
-    ``_store_for`` mkdir's and installs the schema. Reaching it before the
-    token check turned ``POST /sync`` into an unauthenticated file-creation
-    primitive: one database per distinct ``X-MN4-KB`` value, from a caller with
-    no credentials at all.
+    The PG router parses the owner from the device id and verifies the token
+    before touching a store; invalid credentials must not resurrect the old
+    per-KB SQLite creation primitive.
     """
     for n in range(5):
         response = client.post(
@@ -66,10 +69,10 @@ def test_unauthenticated_sync_writes_nothing_to_disk(client) -> None:
         )
         assert response.status_code == 403
 
-    assert not _mn4_dir().exists()
+    assert _sqlite_artifacts(home) == []
 
 
-def test_unauthenticated_heartbeat_writes_nothing_to_disk(client) -> None:
+def test_unauthenticated_heartbeat_writes_nothing_to_disk(client, home: Path) -> None:
     response = client.post(
         "/api/marginnote4/heartbeat",
         headers={
@@ -78,79 +81,35 @@ def test_unauthenticated_heartbeat_writes_nothing_to_disk(client) -> None:
         },
     )
     assert response.status_code == 403
-    assert not _mn4_dir().exists()
+    assert _sqlite_artifacts(home) == []
 
 
 @pytest.mark.parametrize(
     "header",
     [None, "Bearer abc", "MarginNote no-colon-here"],
 )
-def test_malformed_device_credentials_are_rejected(client, header) -> None:
+def test_malformed_device_credentials_are_rejected(client, home: Path, header) -> None:
     headers = {} if header is None else {"Authorization": header}
     response = client.post("/api/marginnote4/heartbeat", headers=headers)
     assert response.status_code == 401
-    assert not _mn4_dir().exists()
+    assert _sqlite_artifacts(home) == []
 
 
-def test_pair_then_sync_round_trip(client) -> None:
-    paired = client.post("/api/marginnote4/pair", json={"device_name": "iPad"})
-    assert paired.status_code == 200, paired.text
-    body = paired.json()
-
-    auth = {"Authorization": f"MarginNote {body['device_id']}:{body['token']}"}
-    synced = client.post(
-        "/api/marginnote4/sync",
-        json={
-            "cursor": "c1",
-            "objects": [
-                {"object_id": "o1", "object_type": "note", "title": "Attention"},
-            ],
-            "deleted_ids": [],
-        },
-        headers=auth,
-    )
-    assert synced.status_code == 200, synced.text
-    assert synced.json()["stored"] == 1
-
-    beat = client.post("/api/marginnote4/heartbeat", headers=auth)
-    assert beat.status_code == 200
-    assert beat.json()["object_count"] == 1
+def test_pair_requires_postgres_runtime_and_creates_no_sqlite(client, home: Path) -> None:
+    response = client.post("/api/marginnote4/pair", json={"device_name": "iPad"})
+    assert response.status_code == 503
+    assert "PostgreSQL MarginNote runtime" in response.json()["detail"]
+    assert _sqlite_artifacts(home) == []
 
 
-def test_revoked_device_cannot_sync(client) -> None:
-    body = client.post("/api/marginnote4/pair", json={}).json()
-    assert client.delete(f"/api/marginnote4/devices/{body['device_id']}").status_code == 200
-
-    response = client.post(
-        "/api/marginnote4/heartbeat",
-        headers={"Authorization": f"MarginNote {body['device_id']}:{body['token']}"},
-    )
-    assert response.status_code == 403
-
-
-def test_pair_refuses_when_sync_would_read_another_workspace(client, monkeypatch, tmp_path) -> None:
-    """Pairing has a session, ``/sync`` does not — so they can resolve apart.
-
-    ``/pair`` runs under ``require_auth`` and lands in the caller's own
-    workspace; the device endpoints carry no session and resolve the default
-    one. For any account where those differ, pairing used to succeed and then
-    every sync 403'd forever. Refuse the credential instead of issuing a dead
-    one.
-    """
-    monkeypatch.setattr(
-        marginnote4,
-        "_device_db_path",
-        lambda kb_name: tmp_path / "some-other-workspace" / f"{kb_name}.db",
-    )
-
-    response = client.post("/api/marginnote4/pair", json={})
-    assert response.status_code == 501
-    assert "different workspaces" in response.json()["detail"]
+def test_revoke_requires_postgres_runtime_and_creates_no_sqlite(client, home: Path) -> None:
+    response = client.delete("/api/marginnote4/devices/dtmn4.dXNlcg.abc")
+    assert response.status_code == 503
+    assert _sqlite_artifacts(home) == []
 
 
 def test_sync_batch_is_bounded(client) -> None:
     """An oversized batch is refused by validation, before any work starts."""
-    body = client.post("/api/marginnote4/pair", json={}).json()
     oversized = [
         {"object_id": f"o{i}", "object_type": "note"} for i in range(marginnote4.MAX_SYNC_BATCH + 1)
     ]
@@ -158,6 +117,6 @@ def test_sync_batch_is_bounded(client) -> None:
     response = client.post(
         "/api/marginnote4/sync",
         json={"cursor": "", "objects": oversized, "deleted_ids": []},
-        headers={"Authorization": f"MarginNote {body['device_id']}:{body['token']}"},
+        headers={"Authorization": "MarginNote fake-device:fake-token"},
     )
     assert response.status_code == 422

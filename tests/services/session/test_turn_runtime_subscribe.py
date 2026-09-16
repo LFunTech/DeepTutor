@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import threading
 from types import SimpleNamespace
 
@@ -17,12 +18,86 @@ from deeptutor.services.session.turn_runtime import (
 )
 
 
-def _isolate_learning_store(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+class _LegacyLearningUnit:
+    def __init__(self, store: LearningStore) -> None:
+        self._store = store
+
+    def __getattr__(self, name: str):
+        return getattr(self._store, name)
+
+    def get_path_lease(self, path_id: str):
+        lease = self._store.get_path_lease(path_id)
+        if lease is None:
+            return None
+        return SimpleNamespace(
+            **lease.model_dump(mode="python"),
+            kind="turn",
+        )
+
+    def upsert_mastery_notebook_entries(self, *_args, **_kwargs) -> None:
+        return None
+
+
+class _LegacyLearningRuntime:
+    def __init__(
+        self,
+        store: LearningStore,
+        *,
+        authority=None,
+        root: "_LegacyLearningRuntime | None" = None,
+    ) -> None:
+        self.store = store
+        self.unit = _LegacyLearningUnit(store)
+        self.authority = authority
+        self._root = root or self
+        if root is None:
+            self._current = None
+            self._bound = None
+
+    def current(self):
+        return self._root._bound or self._root._current or self
+
+    async def run(self, callback):
+        return callback(self.unit)
+
+    async def for_turn(self, session_id, turn_id):
+        scoped = _LegacyLearningRuntime(
+            self.store,
+            authority=SimpleNamespace(session_id=session_id, turn_id=turn_id),
+            root=self._root,
+        )
+        self._root._current = scoped
+        return scoped
+
+    @asynccontextmanager
+    async def bind(self):
+        previous = self._root._bound
+        self._root._bound = self
+        try:
+            yield self
+        finally:
+            self._root._bound = previous
+
+    async def release_turn_lease(self):
+        turn_id = getattr(self.authority, "turn_id", "")
+        if turn_id:
+            return self.store.release_leases_for_turn(turn_id)
+        return None
+
+
+def _isolate_learning_store(monkeypatch: pytest.MonkeyPatch, tmp_path) -> _LegacyLearningRuntime:
     def _init(self, root=None):
         self._root = tmp_path / "learning"
         self._root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(LearningStore, "__init__", _init)
+    runtime = _LegacyLearningRuntime(LearningStore())
+    monkeypatch.setattr(
+        "deeptutor.services.session.turns.learning_adapter.get_learning_runtime",
+        runtime.current,
+    )
+    monkeypatch.setattr("deeptutor.learning.runtime.get_learning_runtime", runtime.current)
+    return runtime
 
 
 def _mastery_payload(session_id: str, path_id: str) -> dict:
@@ -566,7 +641,8 @@ def _open_mastery_question(path_id: str, *, question_id: str = "q-1"):
             )
         ],
     )
-    service = LearningService()
+    store = LearningStore()
+    service = LearningService(store)
     service.store.save(progress)
     _, interaction, _ = service.register_question(
         path_id,
@@ -621,7 +697,7 @@ async def test_card_answer_is_committed_before_the_turn_runs(
     }
     _, turn = await runtime.start_turn(payload)
 
-    committed = LearningService().store.get_active_interaction("shared")
+    committed = LearningService(LearningStore()).store.get_active_interaction("shared")
     assert committed is not None
     assert committed.status is InteractionStatus.ANSWERED
     assert committed.user_answer == "C"
@@ -719,7 +795,7 @@ async def test_declining_a_card_drops_the_question_before_the_tutor_speaks(
         )
         is None
     )
-    assert LearningService().store.get_active_interaction("shared") is not None
+    assert LearningService(LearningStore()).store.get_active_interaction("shared") is not None
 
     skip = await runtime._skip_card_question(
         execution, path_id="shared", skip={"question_id": interaction.interaction_id}
@@ -728,7 +804,7 @@ async def test_declining_a_card_drops_the_question_before_the_tutor_speaks(
     assert skip is not None
     assert skip["skipped"] is True
     assert skip["question_id"] == interaction.interaction_id
-    assert LearningService().store.get_active_interaction("shared") is None
+    assert LearningService(LearningStore()).store.get_active_interaction("shared") is None
     # The card reads the same channel a grade arrives on, so it can show that
     # this question was set aside rather than staying answerable forever.
     published = [
@@ -845,6 +921,7 @@ async def test_mastery_turn_takes_over_a_path_parked_on_ask_user(
             await parked.wait()
         finally:
             execution.awaiting_user_reply = False
+            await runtime._release_learning_lease(execution)
             await store.update_turn_status(execution.turn_id, "cancelled", "Turn cancelled")
             async with runtime._lock:
                 runtime._executions.pop(execution.turn_id, None)

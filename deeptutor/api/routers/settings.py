@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 from deeptutor.multi_user.context import get_current_user
 from deeptutor.multi_user.model_access import allowed_llm_options
+from deeptutor.multi_user.roles import can_manage_deployment
 from deeptutor.services.codebuddy_auth import get_codebuddy_auth_service
 from deeptutor.services.codex_auth import (
     CodexAuthError,
@@ -32,6 +33,7 @@ from deeptutor.services.config import (
     CATALOG_SECRET_MASK,
     get_config_test_runner,
     get_model_catalog_service,
+    get_runtime_settings_dir,
     get_runtime_settings_service,
     redact_catalog_secrets,
     restore_catalog_secrets,
@@ -51,7 +53,6 @@ from deeptutor.services.config.settings_draft import (
 )
 from deeptutor.services.llm.config import clear_llm_config_cache
 from deeptutor.services.model_selection import list_llm_options
-from deeptutor.services.path_service import get_path_service
 from deeptutor.services.settings.interface_settings import (
     DEFAULT_UI_SETTINGS as INTERFACE_DEFAULTS,
 )
@@ -86,14 +87,18 @@ def get_enabled_optional_tools() -> list[str]:
     return _get_enabled_optional_tools()
 
 
+def _settings_dir():
+    return get_runtime_settings_dir()
+
+
 def _settings_file():
-    return get_path_service().get_settings_file("interface")
+    return _settings_dir() / "interface.json"
 
 
 def _tour_cache_file():
     if TOUR_CACHE is not None:
         return TOUR_CACHE
-    return get_path_service().get_settings_dir() / ".tour_cache.json"
+    return _settings_dir() / ".tour_cache.json"
 
 
 DEFAULT_SIDEBAR_NAV_ORDER = {
@@ -426,7 +431,7 @@ def patch_ui_settings(**fields: Any) -> None:
 
 
 def _require_settings_admin() -> None:
-    if not get_current_user().is_admin:
+    if not can_manage_deployment(get_current_user()):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Model configuration is managed by an administrator.",
@@ -766,7 +771,7 @@ def _network_settings_payload() -> dict[str, Any]:
 @router.get("")
 async def get_settings():
     user = get_current_user()
-    if not user.is_admin:
+    if not can_manage_deployment(user):
         # Non-admins never see the catalog (provider URLs/keys); their model
         # choices come from /settings/llm-options (grant-filtered).
         return {"ui": load_ui_settings()}
@@ -1444,7 +1449,7 @@ async def test_mineru_connection(payload: MinerUSettingsUpdate):
 
 @router.get("/llm-options")
 async def get_llm_options():
-    if not get_current_user().is_admin:
+    if not can_manage_deployment(get_current_user()):
         return allowed_llm_options()
     return list_llm_options(get_model_catalog_service().load())
 

@@ -7,9 +7,14 @@ import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+import uuid
 
 import pytest
 
+from deeptutor.core.providers import ApplicationProviders, provider_context
+from deeptutor.multi_user.context import reset_current_user, set_current_user
+from deeptutor.multi_user.models import CurrentUser, UserScope
+from deeptutor.persistence.resources import OwnerResourceProvider
 from deeptutor.services.codex_auth import service as service_module
 from deeptutor.services.codex_auth.contracts import (
     CatalogSnapshot,
@@ -162,6 +167,51 @@ def test_service_singleton_reads_frontend_port_only_when_created(
     assert first is second
     assert settings_calls == 1
     assert captured["callback_forward_port"] == 4782
+
+
+def test_service_singleton_uses_frontend_port_env_inside_configured_application(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """HTTP routes bind ApplicationProviders, where file runtime settings are unavailable."""
+
+    captured: dict[str, Any] = {}
+
+    class CapturingService:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    def credential_store(_root: Path, **_kwargs: object) -> object:
+        return object()
+
+    monkeypatch.setenv("FRONTEND_PORT", "4882")
+    monkeypatch.setattr(service_module, "_SERVICE_INSTANCES", {})
+    monkeypatch.setattr(service_module, "CodexCredentialStore", credential_store)
+    monkeypatch.setattr(
+        service_module,
+        "CodexModelCatalog",
+        lambda _store, *, http: object(),
+    )
+    monkeypatch.setattr(service_module, "CodexOAuthClient", lambda _http: object())
+    monkeypatch.setattr(service_module, "_owner_model_catalog_service", lambda: object())
+    monkeypatch.setattr(service_module, "CodexOAuthService", CapturingService)
+
+    tenant_id = str(uuid.uuid4())
+    user = CurrentUser(
+        id="alice",
+        username="alice",
+        role="user",
+        scope=UserScope(kind="tenant", tenant_id=tenant_id, user_id="alice", root=None),
+    )
+    resources = OwnerResourceProvider(tmp_path / "resources")
+    token = set_current_user(user)
+    try:
+        with provider_context(ApplicationProviders(resources=resources)):
+            service_module.get_codex_oauth_service()
+    finally:
+        reset_current_user(token)
+
+    assert captured["callback_forward_port"] == 4882
 
 
 def _model(

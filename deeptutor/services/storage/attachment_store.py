@@ -237,6 +237,42 @@ def get_attachment_store() -> AttachmentStore:
     Today this is always a :class:`LocalDiskAttachmentStore`; future S3/MinIO
     backends can be selected here based on an env var.
     """
+    from deeptutor.core.providers import get_providers
+
+    providers = get_providers()
+    if providers is not None:
+        from deeptutor.persistence.postgres.session_resources import (
+            PostgresAttachmentStore,
+            PostgresObjectAttachmentStore,
+        )
+
+        if providers.store is None:
+            raise RuntimeError("PostgreSQL attachment resources are not configured")
+        store = (
+            providers.store.get()
+            if callable(getattr(providers.store, "get", None))
+            else providers.store
+        )
+        if providers.object_store is not None:
+            return PostgresObjectAttachmentStore(store, providers.object_store)
+        if providers.resources is None:
+            raise RuntimeError("PostgreSQL attachment resources are not configured")
+        return PostgresAttachmentStore(store, providers.resources)
+    from deeptutor.app.container import StoreProvider, get_application_container
+    from deeptutor.persistence.postgres.session_resources import (
+        PostgresAttachmentStore,
+        PostgresObjectAttachmentStore,
+    )
+
+    container = get_application_container()
+    provider = getattr(container, "store_provider", None)
+    resources = getattr(container, "resources_provider", None)
+    object_store = getattr(container, "object_store_provider", None)
+    if provider is not None and not isinstance(provider, StoreProvider):
+        if object_store is not None:
+            return PostgresObjectAttachmentStore(provider.get(), object_store)
+        if resources is not None:
+            return PostgresAttachmentStore(provider.get(), resources)
     root = _attachment_root()
     key = str(root)
     if key not in _stores:

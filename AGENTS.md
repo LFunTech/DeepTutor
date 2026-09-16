@@ -136,3 +136,7 @@ Source extras (.[ extra ], defined in pyproject.toml):
 .[dev]            — Test / lint tooling
 .[all]            — Everything above
 ```
+
+## Secrets
+
+Secrets are managed through the `.secrets` directory, which is ignored by version control. This directory contains sensitive information such as API keys and credentials needed for the application to function properly.

@@ -12,11 +12,10 @@ from rich.panel import Panel
 from rich.text import Text
 import typer
 
-from deeptutor.app import DeepTutorApp, TurnRequest
+from deeptutor.app import TurnRequest
 
 from .common import (
     console,
-    maybe_run,
     parse_config_items,
     parse_json_object,
     read_console_input,
@@ -25,6 +24,7 @@ from .common import (
     run_turn_and_render,
     tool_results,
 )
+from .pg_runtime import authenticated_app, run_business
 
 
 @dataclass
@@ -54,6 +54,11 @@ def register(app: typer.Typer) -> None:
         config_json: str | None = typer.Option(
             None, "--config-json", help="Initial config as JSON."
         ),
+        auth_token_env: str | None = typer.Option(
+            None,
+            "--auth-token-env",
+            help="Environment variable containing the PG auth token.",
+        ),
     ) -> None:
         """Enter interactive chat REPL. Use `deeptutor run` for single-turn execution."""
         if ctx.invoked_subcommand is not None:
@@ -75,12 +80,13 @@ def register(app: typer.Typer) -> None:
             history_references=[item.strip() for item in history_ref if item.strip()],
             config=initial_config,
         )
-        maybe_run(_chat_repl(state))
+        run_business(_chat_repl(state, auth_token_env=auth_token_env))
 
 
-async def _chat_repl(state: ChatState) -> None:
-    client = DeepTutorApp()
+async def _chat_repl(state: ChatState, *, auth_token_env: str | None = None) -> None:
     cron_service = None
+    app_context = authenticated_app(auth_token_env)
+    client = await app_context.__aenter__()
     try:
         from deeptutor.services.cron import get_cron_service
 
@@ -178,6 +184,7 @@ async def _chat_repl(state: ChatState) -> None:
         if cron_service is not None:
             with suppress(Exception):
                 await cron_service.stop()
+        await app_context.__aexit__(None, None, None)
 
 
 def _apply_command(raw: str, state: ChatState) -> bool:

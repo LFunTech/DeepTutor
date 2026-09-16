@@ -29,6 +29,7 @@ import re
 import shutil
 from typing import Any
 
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.file_io import atomic_write_text as _atomic_write_text
 from deeptutor.services.path_service import PathService, get_path_service
 
@@ -44,6 +45,16 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
+
+
+def _path_service_or_runtime() -> PathService:
+    try:
+        return get_path_service()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return PathService(workspace_root=get_runtime_data_root())
+        raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -116,7 +127,7 @@ class BookStorage:
 
     @property
     def path_service(self) -> PathService:
-        return self._path_service or get_path_service()
+        return self._path_service or _path_service_or_runtime()
 
     # ── Path helpers ─────────────────────────────────────────────────────
 
@@ -386,9 +397,10 @@ _storages: dict[str, BookStorage] = {}
 
 
 def get_book_storage() -> BookStorage:
-    key = str(get_path_service().workspace_root.resolve())
+    path_service = _path_service_or_runtime()
+    key = str(path_service.workspace_root.resolve())
     if key not in _storages:
-        _storages[key] = BookStorage()
+        _storages[key] = BookStorage(path_service=path_service)
     return _storages[key]
 
 

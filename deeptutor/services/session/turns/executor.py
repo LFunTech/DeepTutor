@@ -135,6 +135,16 @@ class TurnExecutor:
         ) -> None: ...
 
     async def _run_turn(self, execution: _TurnExecution) -> None:
+        if execution.learning_runtime is not None:
+            async with execution.learning_runtime.bind():
+                await self._run_scoped_turn(execution)
+        else:
+            await self._run_scoped_turn(execution)
+
+    async def _run_scoped_turn(self, execution: _TurnExecution) -> None:
+        if self.turn_environment is not None:
+            await self._run_configured_turn(execution)
+            return
         payload = execution.payload
         session_id = execution.session_id
         capability_name = execution.capability
@@ -165,6 +175,9 @@ class TurnExecutor:
         generated_attachments: list[dict[str, Any]] = []
         seen_artifact_urls: set[str] = set()
         stream_done_sent = False
+        new_user_message_id: int | str | None = None
+        branch_parent_explicit = False
+        branch_parent_id: int | None = None
         llm_scope_token: Token[LLMConfig | None] | None = None
         reset_active_llm_selection: Callable[[Token[LLMConfig | None] | None], None] | None = None
         # One queue per turn for ``ask_user`` style pause-resume.
@@ -173,6 +186,53 @@ class TurnExecutor:
         # Cleaned up unconditionally in the outer ``finally``.
         reply_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._reply_queues[turn_id] = reply_queue
+
+        async def _finalize_with_store(
+            *,
+            status: str,
+            content: str,
+            metadata: dict[str, Any] | None = None,
+            error: str = "",
+            done_event: StreamEvent | None = None,
+            failure_code: str = "",
+            retryable: bool = False,
+        ) -> bool:
+            finalize_turn = getattr(self.store, "finalize_turn", None)
+            if not callable(finalize_turn):
+                return False
+            await self._flush_buffered_events(execution)
+            terminal = done_event or StreamEvent(type=StreamEventType.DONE, source=capability_name)
+            terminal.session_id = session_id
+            terminal.turn_id = turn_id
+            terminal.metadata = {**terminal.metadata, "status": status}
+            if failure_code:
+                terminal.metadata = {**terminal.metadata, "error_code": failure_code}
+            if retryable:
+                terminal.metadata = {**terminal.metadata, "retryable": retryable}
+            parent_kwargs: dict[str, Any] = {}
+            if new_user_message_id is not None:
+                parent_kwargs["parent_message_id"] = new_user_message_id
+                parent_kwargs["user_message_id"] = new_user_message_id
+            elif branch_parent_explicit:
+                parent_kwargs["parent_message_id"] = branch_parent_id
+            result = await finalize_turn(
+                turn_id,
+                status=status,
+                content=content,
+                capability=capability_name,
+                metadata=metadata,
+                attachments=generated_attachments or None,
+                error=error,
+                events=[terminal.to_dict()],
+                fencing_token=(
+                    execution.lease.fencing_token if execution.lease is not None else None
+                ),
+                failure_code=failure_code,
+                retryable=retryable,
+                **parent_kwargs,
+            )
+            await self._publish_committed_events(execution, result["events"])
+            return True
 
         async def _wait_for_user_reply() -> dict[str, Any] | None:
             # Publish the pause so a turn that wants the same mastery path can
@@ -222,7 +282,6 @@ class TurnExecutor:
                 reset_llm_selection as reset_active_llm_selection,
             )
             from deeptutor.services.notebook import get_notebook_manager
-            from deeptutor.services.skill import get_skill_service
             from deeptutor.services.workspace import get_content_workspace_service
 
             request_config = dict(payload.get("config", {}) or {})
@@ -293,15 +352,18 @@ class TurnExecutor:
             # Persist original bytes to the attachment store before extraction
             # so the frontend preview drawer can fetch the file later. The
             # extractor will clear base64 on documents to keep DB rows lean,
-            # but the URL we record here outlives that pruning. Upload errors
-            # are non-fatal — extraction still runs from the in-memory base64.
-            attachment_store = get_attachment_store()
+            # but the URL we record here outlives that pruning. 解析空附件或
+            # 已托管附件时不需要装配存储后端，避免无附件 turn 在旧格式
+            # fixture 测试里触发生产 PG 容器预检。
+            attachment_store = None
             for record in attachment_records:
                 if record.get("url"):
                     continue  # already hosted (e.g. legacy URL)
                 b64 = record.get("base64") or ""
                 if not b64:
                     continue
+                if attachment_store is None:
+                    attachment_store = get_attachment_store()
                 try:
                     raw_bytes = _b64.b64decode(b64, validate=False)
                 except Exception as exc:
@@ -320,6 +382,17 @@ class TurnExecutor:
                         mime_type=record.get("mime_type", "") or "",
                     )
                 except Exception as exc:
+                    from deeptutor.persistence.postgres.session_resources import (
+                        PostgresAttachmentStore,
+                        PostgresObjectAttachmentStore,
+                    )
+
+                    if isinstance(
+                        attachment_store,
+                        (PostgresAttachmentStore, PostgresObjectAttachmentStore),
+                    ):
+                        # PG 拒绝/故障不能以仅解析内存载荷继续并伪装上传成功。
+                        raise
                     logger.warning(
                         "attachment store rejected %r: %s",
                         record.get("filename"),
@@ -404,13 +477,22 @@ class TurnExecutor:
             # privileged workflow, so no grant gate applies).
             from deeptutor.multi_user.context import get_current_user
             from deeptutor.multi_user.paths import get_admin_path_service
+            from deeptutor.multi_user.roles import is_grant_restricted_user
             from deeptutor.multi_user.skill_access import assigned_skill_ids
-            from deeptutor.services.persona import PersonaService, get_persona_service
+            from deeptutor.services.persona import PersonaService
+            from deeptutor.services.persona.runtime import (
+                call_persona_service,
+                get_runtime_persona_service,
+            )
+            from deeptutor.services.skill.runtime import (
+                call_skill_service,
+                get_runtime_skill_service,
+            )
             from deeptutor.services.skill.service import SkillService, render_skills_manifest
 
             current_user = get_current_user()
             learner_profile_prompt = ""
-            if not current_user.is_admin:
+            if is_grant_restricted_user(current_user):
                 from deeptutor.multi_user.identity import get_user_by_id
                 from deeptutor.multi_user.learner_profile import prompt_block
 
@@ -420,11 +502,19 @@ class TurnExecutor:
             requested_persona = str(payload.get("persona") or "").strip()
             persona_context = ""
             if requested_persona:
-                persona_context = get_persona_service().load_for_context(requested_persona)
-                if not persona_context and not current_user.is_admin:
-                    persona_context = PersonaService(
-                        root=get_admin_path_service().get_workspace_dir() / "personas"
-                    ).load_for_context(requested_persona)
+                runtime_persona_service = get_runtime_persona_service()
+                persona_context = await call_persona_service(
+                    runtime_persona_service, "load_for_context", requested_persona
+                )
+                if (
+                    not persona_context
+                    and isinstance(runtime_persona_service, PersonaService)
+                    and is_grant_restricted_user(current_user)
+                ):
+                    with contextlib.suppress(Exception):
+                        persona_context = PersonaService(
+                            root=get_admin_path_service().get_workspace_dir() / "personas"
+                        ).load_for_context(requested_persona)
             active_persona = requested_persona if persona_context else ""
 
             # Skills: never user-selected per turn. The model sees a
@@ -432,24 +522,25 @@ class TurnExecutor:
             # builtin, plus admin-assigned for non-admin users) and pulls
             # full content on demand via ``read_skill``. ``always`` skills
             # are the exception — their bodies are injected eagerly.
-            user_skill_service = get_skill_service()
-            skill_entries = user_skill_service.summary_entries()
-            always_blocks = [user_skill_service.load_always_for_context()]
-            if not current_user.is_admin:
-                assigned_service = SkillService(
-                    root=get_admin_path_service().get_workspace_dir() / "skills",
-                    builtin_root=None,
-                )
-                allowed_skills = assigned_skill_ids(current_user.id)
-                assigned_entries = [
-                    e for e in assigned_service.summary_entries() if e.name in allowed_skills
-                ]
-                skill_entries = skill_entries + assigned_entries
-                always_blocks.append(
-                    assigned_service.load_for_context(
-                        [e.name for e in assigned_entries if e.always and e.available]
+            user_skill_service = get_runtime_skill_service()
+            skill_entries = await call_skill_service(user_skill_service, "summary_entries")
+            always_blocks = [await call_skill_service(user_skill_service, "load_always_for_context")]
+            if isinstance(user_skill_service, SkillService) and is_grant_restricted_user(current_user):
+                with contextlib.suppress(Exception):
+                    assigned_service = SkillService(
+                        root=get_admin_path_service().get_workspace_dir() / "skills",
+                        builtin_root=None,
                     )
-                )
+                    allowed_skills = assigned_skill_ids(current_user.id)
+                    assigned_entries = [
+                        e for e in assigned_service.summary_entries() if e.name in allowed_skills
+                    ]
+                    skill_entries = skill_entries + assigned_entries
+                    always_blocks.append(
+                        assigned_service.load_for_context(
+                            [e.name for e in assigned_entries if e.always and e.available]
+                        )
+                    )
             skills_manifest = "\n\n".join(
                 part for part in (*always_blocks, render_skills_manifest(skill_entries)) if part
             )
@@ -642,9 +733,10 @@ class TurnExecutor:
             if workspace_mode == WORKSPACE_MODE_MASTERY and not source_index:
                 topic_path_id = _mastery_path_id(payload.get("mastery_path_id"))
                 if topic_path_id:
-                    source_manifest_text, mastery_topic_source_index = await asyncio.to_thread(
-                        _topic_material_manifest, topic_path_id
-                    )
+                    (
+                        source_manifest_text,
+                        mastery_topic_source_index,
+                    ) = await _topic_material_manifest(topic_path_id)
 
             # A card answer rides in on this turn's message, because posing a
             # question ends its turn. Rule on it before the tutor starts: the
@@ -688,8 +780,7 @@ class TurnExecutor:
                         raw_user_content,
                     )
                 elif workspace_mode == WORKSPACE_MODE_MASTERY:
-                    workspace_context = await asyncio.to_thread(
-                        _mastery_action_context,
+                    workspace_context = await _mastery_action_context(
                         _mastery_path_id(payload.get("mastery_path_id")),
                         source_manifest_text,
                         mastery_topic_source_index,
@@ -915,44 +1006,6 @@ class TurnExecutor:
                 str(payload.get("language", "en") or "en"),
             )
 
-            # Assistant continues the same branch as the user message it
-            # answers. If we just persisted a new user row we chain off
-            # that; if we did not (regenerate path) and the caller pinned a
-            # parent, we use it; otherwise we let the store auto-append
-            # (legacy behavior).
-            if new_user_message_id is not None:
-                assistant_message_id = await self.store.add_message(
-                    session_id=session_id,
-                    role="assistant",
-                    content=assistant_content,
-                    capability=capability_name,
-                    events=[],
-                    attachments=generated_attachments or None,
-                    parent_message_id=new_user_message_id,
-                    metadata=assistant_provider_metadata,
-                )
-            elif branch_parent_explicit:
-                assistant_message_id = await self.store.add_message(
-                    session_id=session_id,
-                    role="assistant",
-                    content=assistant_content,
-                    capability=capability_name,
-                    events=[],
-                    attachments=generated_attachments or None,
-                    parent_message_id=branch_parent_id,
-                    metadata=assistant_provider_metadata,
-                )
-            else:
-                assistant_message_id = await self.store.add_message(
-                    session_id=session_id,
-                    role="assistant",
-                    content=assistant_content,
-                    capability=capability_name,
-                    events=[],
-                    attachments=generated_attachments or None,
-                    metadata=assistant_provider_metadata,
-                )
-            await self.store.link_turn_message(turn_id, assistant_message_id)
             turn_status, turn_error = _resolve_turn_outcome(
                 assistant_events,
                 pending_done_event,
@@ -968,62 +1021,129 @@ class TurnExecutor:
                     **pending_done_event.metadata,
                     "status": turn_status,
                 }
-            # Attach the persisted row ids so the frontend can reconcile its
-            # optimistic (negative) message ids with a targeted in-place swap
-            # instead of refetching and re-rendering the whole session.
-            persisted_ids = {
-                key: value
-                for key, value in (
-                    ("user_message_id", new_user_message_id),
-                    ("assistant_message_id", assistant_message_id),
+            if callable(getattr(self.store, "finalize_turn", None)):
+                # PG 运行时要求 assistant row、终态行和 DONE 事件通过
+                # finalize_turn 同事务提交；不能先 add_message/transition，
+                # 再把 DONE 当普通 buffered event 刷入 append_events。
+                # session_meta 标题事件仍是普通 trace，因此要在终态前发布并
+                # 随非终态前缀一起刷盘，确保 DONE 仍然是最后一个 turn event。
+                if not is_regenerate and turn_status == "completed":
+                    try:
+                        await self._maybe_generate_session_title(
+                            execution=execution,
+                            session_id=session_id,
+                            ui_language=str(payload.get("language", "en") or "en"),
+                            assistant_content=assistant_content,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Session title generation failed for turn %s",
+                            turn_id,
+                            exc_info=True,
+                        )
+                await _finalize_with_store(
+                    status=turn_status,
+                    content=assistant_content,
+                    metadata=assistant_provider_metadata,
+                    error=turn_error,
+                    done_event=pending_done_event,
                 )
-                if value
-            }
-            if persisted_ids:
-                pending_done_event.metadata = {**pending_done_event.metadata, **persisted_ids}
-            # Commit all non-terminal events and the terminal row before DONE
-            # becomes visible. The DONE envelope itself is then appended and
-            # synchronously flushed, so a reconnect can never observe a
-            # terminal row with a missing durable event prefix.
-            await self._flush_buffered_events(execution)
-            transitioned = await self._transition_execution(execution, turn_status, turn_error)
-            if not transitioned:
-                execution.lease_lost = True
-                raise asyncio.CancelledError
-            await self._publish_live_event(execution, pending_done_event)
-            stream_done_sent = True
-            await self._flush_buffered_events(execution)
-            if not is_regenerate and turn_status == "completed":
-                # Title generation is post-turn metadata. Keep it after DONE
-                # so the composer and duration clock stop as soon as the
-                # assistant answer is saved; the frontend keeps this socket
-                # open briefly so the later ``session_meta`` title update can
-                # still arrive.
-                try:
-                    await self._maybe_generate_session_title(
-                        execution=execution,
+                stream_done_sent = True
+            else:
+                # Assistant continues the same branch as the user message it
+                # answers. If we just persisted a new user row we chain off
+                # that; if we did not (regenerate path) and the caller pinned a
+                # parent, we use it; otherwise we let the store auto-append
+                # (legacy behavior).
+                if new_user_message_id is not None:
+                    assistant_message_id = await self.store.add_message(
                         session_id=session_id,
-                        ui_language=str(payload.get("language", "en") or "en"),
+                        role="assistant",
+                        content=assistant_content,
+                        capability=capability_name,
+                        events=[],
+                        attachments=generated_attachments or None,
+                        parent_message_id=new_user_message_id,
+                        metadata=assistant_provider_metadata,
                     )
-                except Exception:
-                    # Not debug: this step is the only thing that names a
-                    # conversation, and it has no other error surface. Hiding
-                    # its failures below the default log level is what let a
-                    # broken title path go unnoticed.
-                    logger.warning(
-                        "Session title generation failed for turn %s", turn_id, exc_info=True
+                elif branch_parent_explicit:
+                    assistant_message_id = await self.store.add_message(
+                        session_id=session_id,
+                        role="assistant",
+                        content=assistant_content,
+                        capability=capability_name,
+                        events=[],
+                        attachments=generated_attachments or None,
+                        parent_message_id=branch_parent_id,
+                        metadata=assistant_provider_metadata,
                     )
-            # Flush once every terminal/post-turn event (DONE, and the title
-            # ``session_meta`` above) has been published, not before: a
-            # client that reconnects after this task's ``finally`` pops
-            # ``execution`` from ``_executions`` falls back entirely to this
-            # persisted backlog, and ``subscribe_turn`` synthesises an
-            # id-less DONE when it finds none there -- permanently orphaning
-            # the just-persisted assistant reply from that client's
-            # reconcile path (it can still see the message after a full
-            # session reload, since the row itself is fine; only the
-            # targeted in-place swap is unreachable).
-            await self._flush_buffered_events(execution)
+                else:
+                    assistant_message_id = await self.store.add_message(
+                        session_id=session_id,
+                        role="assistant",
+                        content=assistant_content,
+                        capability=capability_name,
+                        events=[],
+                        attachments=generated_attachments or None,
+                        metadata=assistant_provider_metadata,
+                    )
+                await self.store.link_turn_message(turn_id, assistant_message_id)
+                # Attach the persisted row ids so the frontend can reconcile its
+                # optimistic (negative) message ids with a targeted in-place swap
+                # instead of refetching and re-rendering the whole session.
+                persisted_ids = {
+                    key: value
+                    for key, value in (
+                        ("user_message_id", new_user_message_id),
+                        ("assistant_message_id", assistant_message_id),
+                    )
+                    if value
+                }
+                if persisted_ids:
+                    pending_done_event.metadata = {**pending_done_event.metadata, **persisted_ids}
+                # Commit all non-terminal events and the terminal row before DONE
+                # becomes visible. The DONE envelope itself is then appended and
+                # synchronously flushed, so a reconnect can never observe a
+                # terminal row with a missing durable event prefix.
+                await self._flush_buffered_events(execution)
+                transitioned = await self._transition_execution(execution, turn_status, turn_error)
+                if not transitioned:
+                    execution.lease_lost = True
+                    raise asyncio.CancelledError
+                await self._publish_live_event(execution, pending_done_event)
+                stream_done_sent = True
+                await self._flush_buffered_events(execution)
+                if not is_regenerate and turn_status == "completed":
+                    # Title generation is post-turn metadata. Keep it after DONE
+                    # so the composer and duration clock stop as soon as the
+                    # assistant answer is saved; the frontend keeps this socket
+                    # open briefly so the later ``session_meta`` title update can
+                    # still arrive.
+                    try:
+                        await self._maybe_generate_session_title(
+                            execution=execution,
+                            session_id=session_id,
+                            ui_language=str(payload.get("language", "en") or "en"),
+                        )
+                    except Exception:
+                        # Not debug: this step is the only thing that names a
+                        # conversation, and it has no other error surface. Hiding
+                        # its failures below the default log level is what let a
+                        # broken title path go unnoticed.
+                        logger.warning(
+                            "Session title generation failed for turn %s", turn_id, exc_info=True
+                        )
+                # Flush once every terminal/post-turn event (DONE, and the title
+                # ``session_meta`` above) has been published, not before: a
+                # client that reconnects after this task's ``finally`` pops
+                # ``execution`` from ``_executions`` falls back entirely to this
+                # persisted backlog, and ``subscribe_turn`` synthesises an
+                # id-less DONE when it finds none there -- permanently orphaning
+                # the just-persisted assistant reply from that client's
+                # reconcile path (it can still see the message after a full
+                # session reload, since the row itself is fine; only the
+                # targeted in-place swap is unreachable).
+                await self._flush_buffered_events(execution)
         except asyncio.CancelledError:
             if execution.lease_lost:
                 # The owner can no longer prove it holds the fencing token.
@@ -1063,52 +1183,77 @@ class TurnExecutor:
             # suppressed separately so the status update below always runs —
             # a turn left "running" gets mislabelled as a restart orphan.
             partial_content = _persisted_answer()
-            if partial_content or generated_attachments or assistant_events:
+            finalized = False
+            provider_metadata = (
+                {"provider_response_state": provider_response_state}
+                if provider_response_state is not None
+                else None
+            )
+            if not stream_done_sent:
                 with contextlib.suppress(Exception):
-                    assistant_message_id = await asyncio.shield(
-                        self.store.add_message(
-                            session_id=session_id,
-                            role="assistant",
+                    finalized = await asyncio.shield(
+                        _finalize_with_store(
+                            status=terminal_status,
                             content=partial_content,
-                            capability=capability_name,
-                            events=[],
-                            attachments=generated_attachments or None,
-                            metadata=(
-                                {"provider_response_state": provider_response_state}
-                                if provider_response_state is not None
-                                else None
+                            metadata=provider_metadata,
+                            error=terminal_error,
+                            done_event=StreamEvent(
+                                type=StreamEventType.DONE,
+                                source=capability_name,
+                                metadata={
+                                    "status": terminal_status,
+                                    "error_code": failure_code,
+                                    "retryable": retryable,
+                                },
                             ),
+                            failure_code=failure_code,
+                            retryable=retryable,
                         )
                     )
+                stream_done_sent = finalized
+            if not finalized:
+                if partial_content or generated_attachments or assistant_events:
                     with contextlib.suppress(Exception):
-                        await asyncio.shield(
-                            self.store.link_turn_message(turn_id, assistant_message_id)
+                        assistant_message_id = await asyncio.shield(
+                            self.store.add_message(
+                                session_id=session_id,
+                                role="assistant",
+                                content=partial_content,
+                                capability=capability_name,
+                                events=[],
+                                attachments=generated_attachments or None,
+                                metadata=provider_metadata,
+                            )
                         )
-            transitioned = False
-            with contextlib.suppress(Exception):
-                transitioned = await self._transition_execution(
-                    execution,
-                    terminal_status,
-                    terminal_error,
-                    failure_code=failure_code,
-                    retryable=retryable,
-                )
-            if not stream_done_sent and transitioned:
-                await self._publish_live_event(
-                    execution,
-                    StreamEvent(
-                        type=StreamEventType.DONE,
-                        source=capability_name,
-                        metadata={
-                            "status": terminal_status,
-                            "error_code": failure_code,
-                            "retryable": retryable,
-                        },
-                    ),
-                )
-                stream_done_sent = True
+                        with contextlib.suppress(Exception):
+                            await asyncio.shield(
+                                self.store.link_turn_message(turn_id, assistant_message_id)
+                            )
+                transitioned = False
                 with contextlib.suppress(Exception):
-                    await self._flush_buffered_events(execution)
+                    transitioned = await self._transition_execution(
+                        execution,
+                        terminal_status,
+                        terminal_error,
+                        failure_code=failure_code,
+                        retryable=retryable,
+                    )
+                if not stream_done_sent and transitioned:
+                    await self._publish_live_event(
+                        execution,
+                        StreamEvent(
+                            type=StreamEventType.DONE,
+                            source=capability_name,
+                            metadata={
+                                "status": terminal_status,
+                                "error_code": failure_code,
+                                "retryable": retryable,
+                            },
+                        ),
+                    )
+                    stream_done_sent = True
+                    with contextlib.suppress(Exception):
+                        await self._flush_buffered_events(execution)
             raise
         except Exception as exc:
             if stream_done_sent:
@@ -1142,23 +1287,43 @@ class TurnExecutor:
                         metadata={"turn_terminal": True, "status": "failed"},
                     ),
                 )
-                await self._publish_live_event(
-                    execution,
-                    StreamEvent(
+                provider_metadata = (
+                    {"provider_response_state": provider_response_state}
+                    if provider_response_state is not None
+                    else None
+                )
+                if await _finalize_with_store(
+                    status="failed",
+                    content=_persisted_answer(),
+                    metadata=provider_metadata,
+                    error=str(exc),
+                    done_event=StreamEvent(
                         type=StreamEventType.DONE,
                         source=capability_name,
                         metadata={"status": "failed"},
                     ),
-                )
-                with contextlib.suppress(Exception):
-                    await self._flush_buffered_events(execution)
-                await self._transition_execution(
-                    execution,
-                    "failed",
-                    str(exc),
                     failure_code="internal_error",
                     retryable=True,
-                )
+                ):
+                    stream_done_sent = True
+                else:
+                    await self._publish_live_event(
+                        execution,
+                        StreamEvent(
+                            type=StreamEventType.DONE,
+                            source=capability_name,
+                            metadata={"status": "failed"},
+                        ),
+                    )
+                    with contextlib.suppress(Exception):
+                        await self._flush_buffered_events(execution)
+                    await self._transition_execution(
+                        execution,
+                        "failed",
+                        str(exc),
+                        failure_code="internal_error",
+                        retryable=True,
+                    )
         finally:
             if llm_scope_token is not None and reset_active_llm_selection is not None:
                 reset_active_llm_selection(llm_scope_token)
@@ -1166,36 +1331,29 @@ class TurnExecutor:
             # that finds the queue gone will return ``False`` rather than
             # accumulating on a dead turn.
             self._reply_queues.pop(turn_id, None)
-            if bool(payload.get("mastery_path_lease_managed")):
-                from deeptutor.learning.storage import LearningStore
-
-                # By turn, not by the path the turn started on: mastery_switch
-                # can move a turn onto a different path mid-flight, and freeing
-                # the original id would release someone else's lease while
-                # leaking the one this turn actually holds.
-                with contextlib.suppress(Exception):
-                    await asyncio.shield(
-                        asyncio.to_thread(LearningStore().release_leases_for_turn, turn_id)
-                    )
-            async with self._lock:
-                current = self._executions.get(turn_id)
-                if current is not None:
-                    for subscriber in current.subscribers:
-                        with contextlib.suppress(asyncio.QueueFull):
-                            subscriber.queue.put_nowait(None)
-                    self._executions.pop(turn_id, None)
-            coordination_task = execution.coordination_task
-            if (
-                coordination_task is not None
-                and coordination_task is not asyncio.current_task()
-                and not coordination_task.done()
-            ):
-                coordination_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await coordination_task
-            if execution.lease is not None and self.coordinator is not None:
-                with contextlib.suppress(Exception):
-                    await self.coordinator.release_turn(execution.lease)
+            try:
+                if bool(payload.get("mastery_path_lease_managed")):
+                    await self._release_learning_lease(execution)
+            finally:
+                async with self._lock:
+                    current = self._executions.get(turn_id)
+                    if current is not None:
+                        for subscriber in current.subscribers:
+                            with contextlib.suppress(asyncio.QueueFull):
+                                subscriber.queue.put_nowait(None)
+                        self._executions.pop(turn_id, None)
+                coordination_task = execution.coordination_task
+                if (
+                    coordination_task is not None
+                    and coordination_task is not asyncio.current_task()
+                    and not coordination_task.done()
+                ):
+                    coordination_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await coordination_task
+                if execution.lease is not None and self.coordinator is not None:
+                    with contextlib.suppress(Exception):
+                        await self.coordinator.release_turn(execution.lease)
             # A turn may have parsed large attachments or built substantial
             # temporary prompts/results. Reclaim after this coroutine returns,
             # outside the user-visible streaming path.

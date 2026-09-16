@@ -2,28 +2,39 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 
-def test_book_session_ids_are_scoped_per_user(as_user) -> None:
+from tests.services.session.pg_helpers import pg_session_runtime
+
+
+@pytest.mark.asyncio
+async def test_book_paths_and_pg_session_scopes_are_per_authenticated_owner(
+    as_user, pg_dsn: str
+) -> None:
     from deeptutor.book.storage import BookStorage
-    from deeptutor.services.session import get_sqlite_session_store, get_turn_runtime_manager
 
     shared_book_id = "shared-book-id"
 
-    with as_user("u_victim"):
-        victim_book_root = BookStorage().book_root(shared_book_id)
-        victim_session_db = get_sqlite_session_store().db_path
-        victim_runtime_store_db = get_turn_runtime_manager().store.db_path
+    async with pg_session_runtime(pg_dsn, resource="multi-user-resource-isolation") as runtime:
+        victim = await runtime.create_user("victim")
+        attacker = await runtime.create_user("attacker")
 
-    with as_user("u_attacker"):
-        attacker_book_root = BookStorage().book_root(shared_book_id)
-        attacker_session_db = get_sqlite_session_store().db_path
-        attacker_runtime_store_db = get_turn_runtime_manager().store.db_path
+        with as_user(victim.user_id):
+            victim_book_root = BookStorage().book_root(shared_book_id)
+            victim_session_scope = runtime.store(victim).store_scope
+
+        with as_user(attacker.user_id):
+            attacker_book_root = BookStorage().book_root(shared_book_id)
+            attacker_session_scope = runtime.store(attacker).store_scope
 
     assert victim_book_root != attacker_book_root
-    assert victim_session_db != attacker_session_db
-    assert victim_runtime_store_db != attacker_runtime_store_db
-    assert "u_victim" in str(victim_book_root)
-    assert "u_attacker" in str(attacker_book_root)
+    assert victim_session_scope != attacker_session_scope
+    assert victim_session_scope.backend == "postgres"
+    assert attacker_session_scope.backend == "postgres"
+    assert victim_session_scope.tenant_id == attacker_session_scope.tenant_id
+    assert victim_session_scope.owner_id != attacker_session_scope.owner_id
+    assert victim.user_id in str(victim_book_root)
+    assert attacker.user_id in str(attacker_book_root)
 
 
 def test_partner_data_is_admin_anchored_not_user_scoped(as_user) -> None:
@@ -33,8 +44,7 @@ def test_partner_data_is_admin_anchored_not_user_scoped(as_user) -> None:
     request user's scope: partner runtimes execute inside a synthetic partner
     scope whose own workspace lives below ``data/partners``, so resolving the
     base dir through the contextvar would recurse the layout. Access control
-    is enforced at the API layer instead (the /api/partners router is
-    admin-gated in ``api/main.py``).
+    is enforced at the API layer instead.
     """
     from deeptutor.services.partners.manager import PartnerManager
 

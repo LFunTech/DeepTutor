@@ -1,9 +1,11 @@
 """Matrix (Element) channel — inbound sync + outbound message/media delivery."""
 
 import asyncio
+from contextlib import suppress
 import logging
 import mimetypes
 from pathlib import Path
+import threading
 from typing import Any, Literal, TypeAlias
 
 from loguru import logger
@@ -193,12 +195,66 @@ class MatrixConfig(DeliveryOverrides):
     user_id: str = ""
     device_id: str = ""
     e2ee_enabled: bool = False
+    store_pickle_secret: str = ""
+    store_encryption_secret: str = ""
+    store_secret_id: str = "matrix-store"
+    store_secret_version: int = 1
     sync_stop_grace_seconds: int = 2
     max_media_bytes: int = 20 * 1024 * 1024
     allow_from: list[str] = Field(default_factory=list)
     group_policy: Literal["open", "mention", "allowlist"] = "open"
     group_allow_from: list[str] = Field(default_factory=list)
     allow_room_mentions: bool = False
+
+
+class _MatrixLoopWorker:
+    """Own the Matrix client loop so nio's sync/store calls never block app loop."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.thread: threading.Thread | None = None
+        self._started = threading.Event()
+
+    def start(self) -> None:
+        if self.thread and self.thread.is_alive():
+            return
+        self.thread = threading.Thread(target=self._run, name=self.name, daemon=True)
+        self.thread.start()
+        self._started.wait(timeout=5)
+        if self.loop is None:
+            raise RuntimeError("Matrix worker loop did not start")
+
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        self.loop = loop
+        asyncio.set_event_loop(loop)
+        self._started.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
+
+    async def submit(self, coro):
+        if self.loop is None or self.thread is None or not self.thread.is_alive():
+            raise RuntimeError("Matrix worker loop is not running")
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return await asyncio.wrap_future(future)
+
+    async def stop(self, timeout: float) -> None:
+        loop = self.loop
+        thread = self.thread
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None and thread.is_alive():
+            await asyncio.to_thread(thread.join, timeout)
+        self.loop = None
+        self.thread = None
 
 
 class MatrixChannel(BaseChannel):
@@ -225,6 +281,9 @@ class MatrixChannel(BaseChannel):
         self.client: AsyncClient | None = None
         self._sync_task: asyncio.Task | None = None
         self._typing_tasks: dict[str, asyncio.Task] = {}
+        self._matrix_worker: _MatrixLoopWorker | None = None
+        self._runtime_loop: asyncio.AbstractEventLoop | None = None
+        self._sync_error: BaseException | None = None
         self._restrict_to_workspace = bool(restrict_to_workspace)
         self._workspace = (
             Path(workspace).expanduser().resolve(strict=False) if workspace is not None else None
@@ -235,23 +294,47 @@ class MatrixChannel(BaseChannel):
     async def start(self) -> None:
         """Start Matrix client and begin sync loop."""
         self._running = True
-        _configure_nio_logging_bridge()
-        if self.config.e2ee_enabled and not MATRIX_E2EE_AVAILABLE:
-            raise ImportError(
-                "Matrix E2EE dependencies are not installed. Install "
-                "`deeptutor[matrix-e2e]` or `requirements/matrix-e2e.txt`, and make "
-                "sure libolm is available on your system."
-            )
+        self._sync_error = None
+        self._runtime_loop = asyncio.get_running_loop()
+        self._matrix_worker = _MatrixLoopWorker(
+            f"deeptutor-matrix-{self.partner_id or self.config.user_id or 'channel'}"
+        )
+        self._matrix_worker.start()
+        try:
+            await self._matrix_worker.submit(self._start_on_worker())
+        except BaseException:
+            self._running = False
+            worker = self._matrix_worker
+            self._matrix_worker = None
+            if worker is not None:
+                await worker.stop(timeout=float(self.config.sync_stop_grace_seconds))
+            raise
 
-        store_path = self.state_dir()
-        store_path.mkdir(parents=True, exist_ok=True)
+    async def _start_on_worker(self) -> None:
+        """Initialize the Matrix client inside its owning worker loop."""
+        _configure_nio_logging_bridge()
+        if not MATRIX_E2EE_AVAILABLE:
+            raise ImportError(
+                "Matrix PG store requires E2EE-capable nio dependencies. Install "
+                "`deeptutor[matrix-e2e]` or `requirements/matrix-e2e.txt`, and make "
+                "sure vodozemac is available on your system."
+            )
+        if not self.config.device_id:
+            raise RuntimeError("Matrix PG store requires device_id")
+
+        store_factory = self._build_pg_store_factory()
 
         self.client = AsyncClient(
             homeserver=self.config.homeserver,
             user=self.config.user_id,
-            store_path=store_path,
+            # nio only calls a non-memory store when store_path is truthy.  The
+            # PG adapter ignores the value; no directory or SQLite file is made.
+            store_path="postgresql-matrix-store",
             config=AsyncClientConfig(
-                store_sync_tokens=True, encryption_enabled=self.config.e2ee_enabled
+                store=store_factory,
+                store_sync_tokens=True,
+                encryption_enabled=True,
+                pickle_key=self.config.store_pickle_secret,
             ),
         )
         self.client.user_id = self.config.user_id
@@ -264,19 +347,57 @@ class MatrixChannel(BaseChannel):
         if not self.config.e2ee_enabled:
             logger.warning("Matrix E2EE disabled; encrypted rooms may be undecryptable.")
 
-        if self.config.device_id:
-            try:
-                self.client.load_store()
-            except Exception:
-                logger.exception("Matrix store load failed; restart may replay recent messages.")
-        else:
-            logger.warning("Matrix device_id empty; restart may replay recent messages.")
+        self.client.load_store()
 
         self._sync_task = asyncio.create_task(self._sync_loop())
+        self._sync_task.add_done_callback(self._on_sync_task_done)
+
+    def _build_pg_store_factory(self):
+        owner_id = str(getattr(self, "owner_id", "") or "")
+        if not owner_id:
+            raise RuntimeError("Matrix PG store requires Partner owner_id")
+        if not self.partner_id:
+            raise RuntimeError("Matrix PG store requires partner_id")
+        from deeptutor.app.container import get_application_container
+        from deeptutor.persistence.postgres.matrix import (
+            MatrixPostgresStoreConfig,
+            postgres_matrix_store_factory,
+        )
+        from deeptutor.persistence.postgres.scope import TenantScope
+
+        container = get_application_container()
+        runtime = getattr(container, "postgres_runtime", None)
+        if runtime is None or getattr(runtime, "sync_db", None) is None:
+            raise RuntimeError("Matrix PG store requires PostgreSQL runtime")
+        scope = TenantScope(str(runtime.config.tenant_id), owner_id)
+        return postgres_matrix_store_factory(
+            MatrixPostgresStoreConfig(
+                database=runtime.sync_db,
+                scope=scope,
+                partner_id=self.partner_id,
+                encryption_secret=self.config.store_encryption_secret,
+                secret_id=self.config.store_secret_id,
+                secret_version=self.config.store_secret_version,
+            )
+        )
 
     async def stop(self) -> None:
         """Stop the Matrix channel with graceful sync shutdown."""
         self._running = False
+        worker = self._matrix_worker
+        if worker is not None:
+            with suppress(Exception):
+                await worker.submit(self._stop_on_worker())
+            await worker.stop(timeout=float(self.config.sync_stop_grace_seconds))
+            self._matrix_worker = None
+            self.client = None
+            self._sync_task = None
+            self._typing_tasks.clear()
+            return
+
+        await self._stop_on_worker()
+
+    async def _stop_on_worker(self) -> None:
         for room_id in list(self._typing_tasks):
             await self._stop_typing_keepalive(room_id, clear_typing=False)
         if self.client:
@@ -292,6 +413,8 @@ class MatrixChannel(BaseChannel):
                     await self._sync_task
                 except asyncio.CancelledError:
                     pass
+            except Exception:
+                pass
         if self.client:
             await self.client.close()
 
@@ -456,6 +579,17 @@ class MatrixChannel(BaseChannel):
         return None
 
     async def send(self, msg: OutboundMessage) -> None:
+        worker = self._matrix_worker
+        if worker is not None and worker.loop is not None:
+            try:
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+            if running_loop is not worker.loop:
+                return await worker.submit(self._send_on_worker(msg))
+        return await self._send_on_worker(msg)
+
+    async def _send_on_worker(self, msg: OutboundMessage) -> None:
         """Send outbound content; clear typing for non-progress messages."""
         if not self.client:
             return
@@ -499,6 +633,39 @@ class MatrixChannel(BaseChannel):
         self.client.add_response_callback(self._on_sync_error, SyncError)
         self.client.add_response_callback(self._on_join_error, JoinError)
         self.client.add_response_callback(self._on_send_error, RoomSendError)
+
+    async def _handle_message(
+        self,
+        sender_id: str,
+        chat_id: str,
+        content: str,
+        media: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        session_key: str | None = None,
+    ) -> None:
+        runtime_loop = self._runtime_loop
+        if runtime_loop is not None and asyncio.get_running_loop() is not runtime_loop:
+            future = asyncio.run_coroutine_threadsafe(
+                super()._handle_message(
+                    sender_id=sender_id,
+                    chat_id=chat_id,
+                    content=content,
+                    media=media,
+                    metadata=metadata,
+                    session_key=session_key,
+                ),
+                runtime_loop,
+            )
+            await asyncio.wrap_future(future)
+            return
+        await super()._handle_message(
+            sender_id=sender_id,
+            chat_id=chat_id,
+            content=content,
+            media=media,
+            metadata=metadata,
+            session_key=session_key,
+        )
 
     def _log_response_error(self, label: str, response: Any) -> None:
         """Log Matrix response errors — auth errors at ERROR level, rest at WARNING."""
@@ -557,13 +724,26 @@ class MatrixChannel(BaseChannel):
             await self._set_typing(room_id, False)
 
     async def _sync_loop(self) -> None:
-        while self._running:
-            try:
-                await self.client.sync_forever(timeout=30000, full_state=True)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                await asyncio.sleep(2)
+        try:
+            await self.client.sync_forever(timeout=30000, full_state=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Matrix sync failed; stopping channel instead of retrying blindly.")
+            raise
+
+    def _on_sync_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        self._sync_error = exc
+        self._running = False
+        self.set_setup_state(
+            "error",
+            message=f"Matrix sync failed ({type(exc).__name__}).",
+        )
 
     async def _on_room_invite(self, room: MatrixRoom, event: InviteEvent) -> None:
         if self.is_allowed(event.sender):

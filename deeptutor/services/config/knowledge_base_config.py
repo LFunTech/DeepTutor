@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.path_service import get_path_service
 from deeptutor.services.rag.factory import (
     DEFAULT_PROVIDER,
@@ -15,10 +16,9 @@ from deeptutor.services.rag.factory import (
 
 logger = logging.getLogger(__name__)
 
-# Legacy fallback only — frozen at admin scope at import time. Production code
-# must enter through ``get_kb_config_service()`` (not used directly here, see
-# ``deeptutor/services/config/__init__.py``) which resolves the path lazily.
-DEFAULT_CONFIG_PATH = get_path_service().get_knowledge_bases_root() / "kb_config.json"
+# 显式离线工具可覆盖；默认服务仅在实际调用时解析已授权 scope，不在 import 固化目录。
+DEFAULT_CONFIG_PATH: Path | None = None  # import 不解析用户路径。
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 def _default_payload() -> dict[str, Any]:
@@ -36,18 +36,25 @@ def _default_payload() -> dict[str, Any]:
     }
 
 
+def _default_config_path() -> Path:
+    try:
+        return get_path_service().get_knowledge_bases_root() / "kb_config.json"
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_data_root() / "knowledge_bases" / "kb_config.json"
+        raise
+
+
 class KnowledgeBaseConfigService:
     _instances: dict[str, "KnowledgeBaseConfigService"] = {}
 
     def __init__(self, config_path: Path | None = None):
-        self.config_path = config_path or DEFAULT_CONFIG_PATH
+        self.config_path = config_path or DEFAULT_CONFIG_PATH or _default_config_path()
         self._config = self._load_config()
 
     @classmethod
     def get_instance(cls, config_path: Path | None = None) -> "KnowledgeBaseConfigService":
-        resolved = (
-            config_path or get_path_service().get_knowledge_bases_root() / "kb_config.json"
-        ).resolve()
+        resolved = (config_path or _default_config_path()).resolve()
         key = str(resolved)
         if key not in cls._instances:
             cls._instances[key] = cls(resolved)
@@ -231,9 +238,7 @@ class KnowledgeBaseConfigService:
 
 
 def get_kb_config_service() -> KnowledgeBaseConfigService:
-    return KnowledgeBaseConfigService.get_instance(
-        get_path_service().get_knowledge_bases_root() / "kb_config.json"
-    )
+    return KnowledgeBaseConfigService.get_instance(_default_config_path())
 
 
 __all__ = ["KnowledgeBaseConfigService", "get_kb_config_service"]

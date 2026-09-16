@@ -17,12 +17,14 @@ import json
 import logging
 from typing import Any
 
+from deeptutor.services.config import get_runtime_settings_dir
 from deeptutor.services.path_service import get_path_service
 
 logger = logging.getLogger(__name__)
 
 _FILE = "subagent_sessions.json"
 _SEP = "::"
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 def session_key(chat_session_id: str, connection: str) -> str:
@@ -31,7 +33,12 @@ def session_key(chat_session_id: str, connection: str) -> str:
 
 
 def _path():
-    return get_path_service().get_settings_file(_FILE)
+    try:
+        return get_path_service().get_settings_file(_FILE)
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_settings_dir() / _FILE
+        raise
 
 
 def _load() -> dict[str, Any]:

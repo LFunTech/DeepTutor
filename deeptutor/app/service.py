@@ -39,6 +39,8 @@ class TurnApplicationService:
         payload = request.to_payload()
         store, runtime = self._resolve()
         session, turn = await runtime.start_turn(payload)
+        if getattr(runtime, "turn_environment", None) is not None:
+            return session, turn
         await store.update_session_preferences(
             session["id"],
             {
@@ -354,6 +356,10 @@ class TurnApplicationService:
 
     async def delete_session(self, session_id: str) -> bool:
         store, _runtime = self._resolve()
+        if hasattr(store, "claim_deletion"):
+            from deeptutor.services.session.deletion import delete_session_lifecycle
+
+            return await delete_session_lifecycle(store, self.cancel_turn, session_id)
         active = await store.list_active_turns(session_id)
         for turn in active:
             await self.cancel_turn(str(turn["id"]))

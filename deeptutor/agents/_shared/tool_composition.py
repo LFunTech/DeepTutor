@@ -320,20 +320,11 @@ def user_has_notebooks() -> bool:
         return False
 
 
-def user_has_mastery_topics() -> bool:
-    """Whether the learner has any mastery topic worth navigating to.
+async def user_has_mastery_topics() -> bool:
+    """PG failure is not an empty atlas; propagate it before model dispatch."""
+    from deeptutor.learning.navigation import learner_has_topics
 
-    Auto-mount gate for the four ``mastery_*`` navigation tools. Same
-    fail-closed posture as :func:`user_has_memory`; the probe itself avoids
-    creating a store for a learner who has never opened one (see
-    ``LearningStore.default_db_path``).
-    """
-    try:
-        from deeptutor.learning.navigation import learner_has_topics
-
-        return learner_has_topics()
-    except Exception:
-        return False
+    return await learner_has_topics()
 
 
 def user_has_question_bank() -> bool:
@@ -345,9 +336,17 @@ def user_has_question_bank() -> bool:
     Same fail-closed posture as its siblings.
     """
     try:
-        from deeptutor.services.session import get_sqlite_session_store
+        from deeptutor.services.session import get_session_store
 
-        return get_sqlite_session_store().has_question_bank_entries()
+        result = get_session_store().has_question_bank_entries()
+        if hasattr(result, "close"):
+            # PG stores expose an async probe, while this mount gate is still
+            # synchronous. Do not leak an un-awaited coroutine or fall back to
+            # SQLite; mount the real PG-backed tool and let the tool itself
+            # report an explicit empty overview when there is no data.
+            result.close()
+            return True
+        return bool(result)
     except Exception:
         return False
 

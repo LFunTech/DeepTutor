@@ -23,5 +23,12 @@ class ChatCapability(TurnCapability):
     )
 
     async def run(self, context: UnifiedContext, stream: StreamBus) -> None:
-        pipeline = AgenticChatPipeline(language=context.language)
+        kwargs = {}
+        if context.runtime.resource_capabilities is not None:
+            kwargs = {
+                "llm_config": context.runtime.llm_config,
+                "chat_params": context.runtime.chat_params,
+                "tool_registry": context.runtime.tool_registry,
+            }
+        pipeline = AgenticChatPipeline(language=context.language, **kwargs)
         await pipeline.run(context, stream)

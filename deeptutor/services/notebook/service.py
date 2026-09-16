@@ -19,11 +19,22 @@ import uuid
 
 from pydantic import BaseModel
 
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.file_io import atomic_write_json
 from deeptutor.services.llm import clean_thinking_tags
 from deeptutor.services.path_service import get_path_service
 
 logger = logging.getLogger(__name__)
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
+
+
+def _notebook_dir() -> Path:
+    try:
+        return get_path_service().get_notebook_dir()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_data_root() / "user" / "notebooks"
+        raise
 
 
 class RecordType(str, Enum):
@@ -94,8 +105,7 @@ class NotebookManager:
 
     def __init__(self, base_dir: str | None = None):
         if base_dir is None:
-            path_service = get_path_service()
-            base_dir_path = path_service.get_notebook_dir()
+            base_dir_path = _notebook_dir()
         else:
             base_dir_path = Path(base_dir)
 
@@ -690,7 +700,7 @@ _instances: dict[str, NotebookManager] = {}
 
 
 def get_notebook_manager() -> NotebookManager:
-    base_dir = get_path_service().get_notebook_dir().resolve()
+    base_dir = _notebook_dir().resolve()
     key = str(base_dir)
     if key not in _instances:
         _instances[key] = NotebookManager(base_dir=str(base_dir))

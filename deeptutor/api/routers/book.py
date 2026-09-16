@@ -1103,9 +1103,9 @@ async def quiz_attempt(req: QuizAttemptRequest) -> dict[str, Any]:
     if req.is_correct is not None and resolved_question is not None and book is not None:
         question_id, question = resolved_question
         try:
-            from deeptutor.services.session import get_sqlite_session_store
+            from deeptutor.services.session import get_session_store
 
-            store = get_sqlite_session_store()
+            store = get_session_store()
             metadata = book.metadata if isinstance(book.metadata, dict) else {}
             page_sessions = metadata.get("page_chat_sessions")
             session_id = str(

@@ -3,7 +3,8 @@
 This document covers deploying DeepTutor from a container image: the
 recommended `docker run` path, the hardened rootless-Podman path with a
 read-only root filesystem, runtime configuration, the optional PocketBase
-sidecar, and the security notes that motivate the default posture.
+read-only source exporter, and the security notes that motivate the default
+posture.
 
 For PyPI / source installs, see the main [README.md](../README.md). This
 file is only about running the published image.
@@ -15,18 +16,22 @@ file is only about running the published image.
 The published `ghcr.io/hkuds/deeptutor` image runs both the FastAPI
 backend (`:8001`) and the Next.js frontend (`:3782`) under `supervisord`
 inside a single container, on top of `python:3.11-slim`. The private runtime
-tree (`/app/data` inside the container) holds settings, credentials, databases,
-memory, knowledge bases, and logs. The default Content Workspace also lives
-there, but may instead be mounted separately at `/workspace`. Bind-mount the
-runtime tree and any separate Content Workspace to make both survive restarts.
+tree (`/app/data` inside the container) holds settings, credentials, file
+resources, memory, knowledge bases, and logs. Business state is PostgreSQL-only:
+the container must receive a PostgreSQL deployment config and backend/maintenance
+Secret environment references before Web/API/WS, CLI, SDK, tools, or background
+jobs can run. Missing PG config or schema/permission failure is a readiness
+failure, not a fallback to SQLite, PocketBase, or an in-memory store. The
+default Content Workspace also lives in `/app/data`, but may instead be mounted
+separately at `/workspace`. Bind-mount the runtime tree and any separate Content
+Workspace to make both survive restarts.
 
 The image is built so it works under three deployment shapes:
 
 1. **`docker run`** — the easy path. Rootful, writable rootfs, single
    bind mount on `/app/data`.
 2. **`docker compose`** (`docker-compose.yml`) — same image plus the
-   PocketBase sidecar and the sandbox-runner sidecar. Still rootful,
-   writable rootfs.
+   sandbox-runner sidecar. Still rootful, writable rootfs.
 3. **`podman compose -f compose.yaml`** — the hardened path. Rootless
    (`userns_mode: keep-id`), read-only rootfs, tmpfs in place of writable
    system dirs, bind mount on `./data`.
@@ -63,13 +68,25 @@ one port mapping.
 docker run --rm --name deeptutor \
   -p 127.0.0.1:3782:3782 \
   -v deeptutor-data:/app/data \
+  -v "$PWD/postgres.json:/run/deeptutor/postgres.json:ro" \
+  -e DEEPTUTOR_POSTGRES_CONFIG=/run/deeptutor/postgres.json \
+  -e DEEPTUTOR_DATABASE_URL \
+  -e DEEPTUTOR_MIGRATION_DATABASE_URL \
+  -e DEEPTUTOR_IDENTITY_SIGNING_KEY \
+  -e DEEPTUTOR_AUTH_EPOCH \
   ghcr.io/hkuds/deeptutor:latest
 ```
 
 Open <http://127.0.0.1:3782>. The container creates
-`/app/data/user/settings/*.json` on first boot; configure model providers
-from the Web Settings page. Config, API keys, logs, workspace files,
-memory, and knowledge bases persist in the `deeptutor-data` named volume.
+`/app/data/user/settings/*.json` on first boot; configure model providers from
+the Web Settings page after PostgreSQL readiness passes. The `-e NAME` form
+forwards values already supplied by your shell/orchestrator secret store and
+keeps this document free of DSNs. Do not expose database URLs as `NEXT_PUBLIC_*`
+or in browser settings. Config, API keys, logs, workspace files, memory, and
+knowledge bases persist in the `deeptutor-data` named volume; business state
+lives in PostgreSQL. Run schema apply and identity bootstrap from the
+[PostgreSQL runtime runbook](./docs/postgresql-runtime-runbook.md) before
+opening business traffic.
 
 ### Select a host Content Workspace
 
@@ -84,6 +101,12 @@ docker run --rm --name deeptutor \
   -p 127.0.0.1:3782:3782 \
   -v deeptutor-data:/app/data \
   -v "$PWD/deeptutor-workspace:/workspace" \
+  -v "$PWD/postgres.json:/run/deeptutor/postgres.json:ro" \
+  -e DEEPTUTOR_POSTGRES_CONFIG=/run/deeptutor/postgres.json \
+  -e DEEPTUTOR_DATABASE_URL \
+  -e DEEPTUTOR_MIGRATION_DATABASE_URL \
+  -e DEEPTUTOR_IDENTITY_SIGNING_KEY \
+  -e DEEPTUTOR_AUTH_EPOCH \
   -e DEEPTUTOR_WORKSPACE_ROOT=/workspace \
   -e DEEPTUTOR_WORKSPACE_ALLOWED_ROOTS=/workspace \
   ghcr.io/hkuds/deeptutor:latest
@@ -138,7 +161,8 @@ both ports to the Web frontend only while signing in. Both host ports must be
 free before starting the temporary bridge.
 
 For `docker run`, stop the normal container and temporarily rerun the same
-image and data volume with two extra loopback-only mappings:
+image and data volume with two extra loopback-only mappings. Include the same
+PostgreSQL config mount and Secret env forwarding as your normal run command:
 
 ```bash
 docker run --rm --name deeptutor \
@@ -146,6 +170,12 @@ docker run --rm --name deeptutor \
   -p 127.0.0.1:1455:3782 \
   -p 127.0.0.1:1457:3782 \
   -v deeptutor-data:/app/data \
+  -v "$PWD/postgres.json:/run/deeptutor/postgres.json:ro" \
+  -e DEEPTUTOR_POSTGRES_CONFIG=/run/deeptutor/postgres.json \
+  -e DEEPTUTOR_DATABASE_URL \
+  -e DEEPTUTOR_MIGRATION_DATABASE_URL \
+  -e DEEPTUTOR_IDENTITY_SIGNING_KEY \
+  -e DEEPTUTOR_AUTH_EPOCH \
   ghcr.io/hkuds/deeptutor:latest
 ```
 
@@ -237,9 +267,8 @@ address the frontend *server* uses to reach the backend — not a URL the
 browser ever sees. `public_api_base` is accepted as a compatibility alias
 and normalized into `next_public_api_base_external` on save.
 
-CORS uses frontend **origins**, not API URLs. With auth disabled,
-DeepTutor permits normal HTTP/HTTPS browser origins by default. With
-auth enabled, add exact frontend origins:
+CORS uses frontend **origins**, not API URLs. For PostgreSQL-backed
+authenticated deployments, add exact frontend origins:
 
 ```json
 {
@@ -258,6 +287,12 @@ docker run --rm --name deeptutor \
   -p 127.0.0.1:3782:3782 -p 127.0.0.1:8001:8001 \
   --add-host=host.docker.internal:host-gateway \
   -v deeptutor-data:/app/data \
+  -v "$PWD/postgres.json:/run/deeptutor/postgres.json:ro" \
+  -e DEEPTUTOR_POSTGRES_CONFIG=/run/deeptutor/postgres.json \
+  -e DEEPTUTOR_DATABASE_URL \
+  -e DEEPTUTOR_MIGRATION_DATABASE_URL \
+  -e DEEPTUTOR_IDENTITY_SIGNING_KEY \
+  -e DEEPTUTOR_AUTH_EPOCH \
   ghcr.io/hkuds/deeptutor:latest
 ```
 
@@ -394,8 +429,9 @@ restart, do **not** try to drive these with compose env vars.
 | File | Purpose |
 |:---|:---|
 | `system.json` | Backend/frontend ports, public API base, CORS, SSL verification, attachment directory |
-| `auth.json` | Optional auth toggle, username, password hash, token/cookie settings |
-| `integrations.json` | Optional PocketBase and sidecar integration settings |
+| `auth.json` | UI/session cookie settings; account state is PostgreSQL-backed |
+| `postgres.json` | PostgreSQL deployment config containing only Secret env references |
+| `integrations.json` | External integration settings; PocketBase is legacy offline export/import source only |
 | `model_catalog.json` | LLM, embedding, and search provider profiles; API keys; active models |
 | `interface.json` | UI language / theme / sidebar preferences |
 | `main.yaml` | Runtime behavior defaults and path injection |
@@ -415,31 +451,44 @@ The two settings most relevant to a fresh install:
   `HOST_PORT_*` env var that `compose.yaml` reads) to match.
 
 Project-root `.env` files are intentionally ignored as application
-config. The Web **Settings** page is the recommended editor for the
-JSON/YAML files; deep links to each section live in the page sidebar.
+config. PostgreSQL DSNs are read only from the backend/maintenance process
+environment referenced by `postgres.json`; never put them in frontend config,
+`NEXT_PUBLIC_*`, or checked-in examples. The Web **Settings** page is the
+recommended editor for non-secret JSON/YAML settings; deep links to each
+section live in the page sidebar.
 
 ---
 
-## PocketBase
+## PocketBase legacy export
 
-PocketBase is an optional auth + storage sidecar. Activate it by setting
-`integrations.pocketbase_url` to `http://pocketbase:8090` in
-`data/user/settings/integrations.json` and bringing the `pocketbase`
-service up alongside the main `deeptutor` service. With it running, the
-main app stores user accounts and sessions in PocketBase instead of
-falling back to the SQLite single-user layout.
+PocketBase is no longer a runtime auth or storage backend. Existing PocketBase
+deployments can be treated only as read-only migration sources after a stopped
+writer/freeze window and explicit owner mapping:
 
-The `pocketbase` service in `compose.yaml` (and the corrected mount in
-`docker-compose.yml`) bind-mounts three subdirectories of `./data` —
-`/pb_data`, `/pb_public`, `/pb_hooks` — matching the upstream
-`ghcr.io/muchobien/pocketbase:latest` image's entrypoint, which uses
-absolute paths. The earlier `docker-compose.yml` example mounted
-`/pb/pb_data` and crashed on first start with
-`mkdir /pb_data: read-only file system`; this PR fixes that.
+```bash
+deeptutor migration pocketbase export \
+  --endpoint https://pocketbase.example.internal \
+  --output-dir /secure/artifacts/pb-source-001 \
+  --source-id pb-source-001 \
+  --source-owner old-pb-user \
+  --target-owner pg-user-id \
+  --target-tenant "$TENANT_ID" \
+  --freeze-id "$FREEZE_ID" \
+  --stopped-writer web \
+  --admin-email ops@example.invalid \
+  --admin-password-env POCKETBASE_ADMIN_PASSWORD
+```
 
-PocketBase stays a single-user integration — keep
-`integrations.pocketbase_url` blank for multi-user deployments unless
-you've wired up an external user store.
+The exporter does not modify or delete the remote service and does not write
+credentials to the artifact. It is not a live fallback for a missing PostgreSQL
+runtime.
+
+The `pocketbase` service in `compose.yaml` and `docker-compose.yml` is behind
+the `legacy-pocketbase` profile. If you explicitly enable that profile for an
+export exercise, it bind-mounts three subdirectories of `./data` — `/pb_data`,
+`/pb_public`, `/pb_hooks` — matching the upstream
+`ghcr.io/muchobien/pocketbase:latest` image's entrypoint, which uses absolute
+paths.
 
 ---
 
@@ -498,10 +547,9 @@ renormalized on save.
   for the rootless-podman shape; the main app falls back to `bwrap` or
   the restricted subprocess backend controlled by
   `sandbox_allow_subprocess`.
-- Auth (`data/user/settings/auth.json` → `auth_enabled = true`) gates
-  `/api/*` and `/ws/*` via the `dt_token` cookie. `web/proxy.ts` reads
-  `DEEPTUTOR_AUTH_ENABLED` (exported by the entrypoint on every start)
-  to decide whether to require the cookie.
+- PostgreSQL-backed auth gates `/api/*` and `/ws/*` via the `dt_token`
+  cookie. `web/proxy.ts` reads `DEEPTUTOR_AUTH_ENABLED` (exported by the
+  entrypoint on every start) to decide whether to require the cookie.
 - CORS uses frontend **origins**, not API URLs. With auth enabled, set
   `cors_origins` in `system.json` to the exact frontend origins the
   deployment serves.

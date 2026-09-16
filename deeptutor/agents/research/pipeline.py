@@ -464,6 +464,9 @@ class ResearchPipeline:
             reasoning_effort=self.reasoning_effort,
             wire_api=getattr(self.llm_config, "wire_api", None) or "auto",
             api_format=getattr(self.llm_config, "api_format", None) or "auto",
+            disable_ssl_verify=getattr(
+                getattr(self.llm_config, "transport", None), "disable_ssl_verify", None
+            ),
         )
 
         self.registry = get_tool_registry()

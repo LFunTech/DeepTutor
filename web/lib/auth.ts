@@ -125,7 +125,7 @@ function extractDetail(detail: unknown): string {
 }
 
 /**
- * Register a new account. The first user to register becomes admin.
+ * 保留旧注册客户端接口；默认 PG 部署关闭公开注册，使用受控 CLI。
  */
 export async function register(
   username: string,
@@ -184,4 +184,14 @@ export async function logout(): Promise<void> {
   } finally {
     invalidateAuthStatusCache();
   }
+}
+
+/** 只表示租户账号管理，不授予其它用户的个人资源权限。 */
+export function canManageAccounts(status: AuthStatus | null | undefined): boolean {
+  return status?.authenticated === true && status.is_admin === true;
+}
+
+export function validAccountPassword(password: string): boolean {
+  const length = new TextEncoder().encode(password).length;
+  return length >= 12 && length <= 72;
 }

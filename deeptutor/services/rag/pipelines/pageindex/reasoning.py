@@ -195,6 +195,9 @@ async def read_pageindex_with_agent(
             reasoning_effort=getattr(llm, "reasoning_effort", None),
             wire_api=getattr(llm, "wire_api", None) or "auto",
             api_format=getattr(llm, "api_format", None) or "auto",
+            disable_ssl_verify=getattr(
+                getattr(llm, "transport", None), "disable_ssl_verify", None
+            ),
         )
     )
     docs = (

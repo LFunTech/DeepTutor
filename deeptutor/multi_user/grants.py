@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 from .identity import get_user_by_id
 from .paths import SYSTEM_ROOT, ensure_system_dirs
 
@@ -18,6 +20,85 @@ LEARNING_AGE_BANDS = {"6-8", "9-12", "13-15"}
 LEARNING_PERSONAS = {"teacher"}
 LEARNING_SURFACES = {"chat", "reading"}
 _EXTENSION_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+
+def _pg_runtime():
+    """Return ``(sync_db, tenant_scope)`` when a PG application provider is bound."""
+
+    try:
+        from deeptutor.core.providers import get_providers
+        from deeptutor.multi_user.context import get_current_user_or_none
+        from deeptutor.persistence.postgres.scope import TenantScope
+
+        providers = get_providers()
+        container = getattr(providers, "container", None)
+        runtime = getattr(container, "postgres_runtime", None)
+        sync_db = getattr(runtime, "sync_db", None)
+        current = get_current_user_or_none()
+        if sync_db is None or current is None or current.scope.kind != "tenant":
+            return None
+        return sync_db, TenantScope(current.scope.tenant_id, current.id)
+    except Exception:
+        return None
+
+
+def _pg_user_by_id(user_id: str) -> tuple[str, dict[str, Any]] | None:
+    runtime = _pg_runtime()
+    if runtime is None:
+        return None
+    db, scope = runtime
+    with db.transaction(scope) as c:
+        row = c.execute(
+            "SELECT id,username,role,preset,disabled,learner_profile,learning_policy "
+            "FROM enterprise.users WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL",
+            (scope.tenant_id, str(user_id)),
+        ).fetchone()
+    if row is None:
+        return None
+    return str(row["username"]), dict(row)
+
+
+def grant_subject_record(user_id: str) -> tuple[str, dict[str, Any]] | None:
+    """Return the assignable account record from PG when available, else local JSON."""
+
+    return _pg_user_by_id(user_id) or get_user_by_id(user_id)
+
+
+def _load_pg_grant(user_id: str) -> dict[str, Any] | None:
+    runtime = _pg_runtime()
+    if runtime is None:
+        return None
+    db, scope = runtime
+    with db.transaction(scope) as c:
+        row = c.execute(
+            "SELECT document FROM enterprise.runtime_policies "
+            "WHERE tenant_id=%s AND policy_kind='user_grant' "
+            "AND subject_kind='owner' AND subject_id=%s "
+            "AND status IN ('saved','active')",
+            (scope.tenant_id, str(user_id)),
+        ).fetchone()
+    if row is None:
+        return empty_grant(user_id)
+    return normalize_grant(user_id, row["document"])
+
+
+def _save_pg_grant(user_id: str, grant: dict[str, Any]) -> bool:
+    runtime = _pg_runtime()
+    if runtime is None:
+        return False
+    db, scope = runtime
+    with db.transaction(scope) as c:
+        c.execute(
+            "INSERT INTO enterprise.runtime_policies"
+            "(tenant_id,policy_kind,subject_kind,subject_id,version,document,status,updated_by) "
+            "VALUES(%s,'user_grant','owner',%s,1,%s,'active',%s) "
+            "ON CONFLICT (tenant_id,policy_kind,subject_kind,subject_id) DO UPDATE "
+            "SET document=EXCLUDED.document,status='active',"
+            "version=enterprise.runtime_policies.version+1,"
+            "updated_by=EXCLUDED.updated_by,updated_at=now()",
+            (scope.tenant_id, str(user_id), Jsonb(grant), scope.user_id),
+        )
+    return True
 
 
 def empty_grant(user_id: str) -> dict[str, Any]:
@@ -159,6 +240,9 @@ def learner_grant(user_id: str) -> dict[str, Any]:
 
 
 def load_grant(user_id: str) -> dict[str, Any]:
+    pg_grant = _load_pg_grant(user_id)
+    if pg_grant is not None:
+        return pg_grant
     path = grant_path(user_id)
     if not path.exists():
         return empty_grant(user_id)
@@ -169,7 +253,7 @@ def load_grant(user_id: str) -> dict[str, Any]:
 
 
 def save_grant(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    user_record = get_user_by_id(user_id)
+    user_record = grant_subject_record(user_id)
     if user_record is None:
         raise ValueError(f"Unknown user id: {user_id}")
     _username, record = user_record
@@ -177,6 +261,8 @@ def save_grant(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Admin users use the main workspace and cannot receive assignments.")
     grant = normalize_grant(user_id, payload)
     validate_grant(grant)
+    if _save_pg_grant(user_id, grant):
+        return grant
     path = grant_path(user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(grant, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -14,6 +14,7 @@ import json
 import logging
 from typing import Any
 
+from deeptutor.services.config import get_runtime_settings_dir
 from deeptutor.services.file_io import atomic_write_json
 from deeptutor.services.path_service import get_path_service
 
@@ -36,7 +37,10 @@ def _settings_file():
     # Resolved on every call so a per-user PathService (installed after auth)
     # routes reads to the caller's own file rather than the admin scope frozen
     # at import time.
-    return get_path_service().get_settings_file("starters")
+    try:
+        return get_path_service().get_settings_file("starters")
+    except (PermissionError, RuntimeError):
+        return get_runtime_settings_dir() / "starters.json"
 
 
 def _clamp(value: Any) -> int:

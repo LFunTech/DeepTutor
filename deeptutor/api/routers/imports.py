@@ -19,10 +19,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from deeptutor.services.session import (
-    get_sqlite_session_store,
-    make_imported_session_id,
-)
+from deeptutor.services.session import get_session_store
+from deeptutor.services.session.import_ids import make_imported_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +79,7 @@ async def import_chat_history(payload: ChatHistoryImportRequest) -> dict[str, An
             detail=f"Too many sessions in one request (max {_MAX_SESSIONS_PER_REQUEST})",
         )
 
-    store = get_sqlite_session_store()
+    store = get_session_store()
     imported = 0
     skipped = 0
     results: list[dict[str, Any]] = []
@@ -141,6 +139,6 @@ async def list_imported_chat_history(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
-    store = get_sqlite_session_store()
+    store = get_session_store()
     sessions = await store.list_imported_sessions(limit=limit, offset=offset)
     return {"sessions": sessions}

@@ -38,7 +38,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from typing import Any, Iterator, Literal, Mapping, Sequence
+from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
 import uuid
 
 from deeptutor.reading.extract import extract_material, synthesise_outline
@@ -56,6 +56,7 @@ from deeptutor.reading.models import (
     TextQuoteSelector,
     UnitReference,
 )
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.file_io import atomic_write_text as _atomic_write
 from deeptutor.services.path_service import get_path_service
 
@@ -87,6 +88,7 @@ _ID_LENGTH = 16
 # for "1-400" cannot blow the turn's context budget. The tool reports the
 # truncation rather than silently trimming.
 MAX_READ_CHARS = 60_000
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 def _normalise_selector_text(value: str) -> str:
@@ -131,6 +133,15 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _catalog_value(row: Any | None, name: str, default: Any = None) -> Any:
+    if row is None:
+        return default
+    try:
+        return row[name]
+    except (KeyError, IndexError, TypeError):
+        return getattr(row, name, default)
+
+
 def content_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:_ID_LENGTH]
 
@@ -138,8 +149,14 @@ def content_hash(data: bytes) -> str:
 class ReadingStore:
     """Materials and annotations for one user's workspace."""
 
-    def __init__(self, root: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        root: Path | str | None = None,
+        *,
+        material_resolver: Callable[[str], Any | None] | None = None,
+    ) -> None:
         self._root_override = Path(root) if root is not None else None
+        self._material_resolver = material_resolver
         self._locks_guard = threading.Lock()
         self._locks: dict[str, threading.RLock] = {}
 
@@ -155,7 +172,23 @@ class ReadingStore:
         """
         if self._root_override is not None:
             return self._root_override
-        return get_path_service().get_workspace_feature_dir("reading")
+        try:
+            from deeptutor.core.providers import get_providers
+            from deeptutor.multi_user.context import get_current_user_or_none
+
+            providers = get_providers()
+            resources = getattr(providers, "resources", None) if providers is not None else None
+            user = get_current_user_or_none()
+            if resources is not None and user is not None and user.scope.tenant_id:
+                return resources.owner_root(user.scope.tenant_id, user.id, "reading")
+        except Exception:
+            logger.debug("ReadingStore owner resource root unavailable", exc_info=True)
+        try:
+            return get_path_service().get_workspace_feature_dir("reading")
+        except RuntimeError as exc:
+            if _LOCAL_PATH_UNAVAILABLE in str(exc):
+                return get_runtime_data_root() / "user" / "workspace" / "reading"
+            raise
 
     def _dir(self, material_id: str) -> Path:
         return self.root / self._content_id(material_id)
@@ -167,7 +200,9 @@ class ReadingStore:
             raise ReadingError(f"invalid material id: {material_id!r}")
         return candidate
 
-    def _catalog_row(self, material_id: str) -> sqlite3.Row | None:
+    def _catalog_row(self, material_id: str) -> Any | None:
+        if self._material_resolver is not None:
+            return self._material_resolver(material_id)
         db_path = self.root / "_catalog.sqlite3"
         if not db_path.is_file():
             return None
@@ -187,7 +222,7 @@ class ReadingStore:
     def _content_id(self, material_id: str) -> str:
         resolved_id = self._validate_id(material_id)
         row = self._catalog_row(resolved_id)
-        content_id = str(row["content_id"] if row else resolved_id).strip().lower()
+        content_id = str(_catalog_value(row, "content_id", resolved_id)).strip().lower()
         if not _CONTENT_ID_RE.fullmatch(content_id):
             raise ReadingError(f"invalid content id for material {material_id!r}")
         return content_id
@@ -569,16 +604,16 @@ class ReadingStore:
         row = self._catalog_row(resolved_id)
         if row is None:
             return dataclass_replace(manifest, material_id=resolved_id)
-        render_mode = str(row["render_mode"] or manifest.render_mode)
+        render_mode = str(_catalog_value(row, "render_mode", manifest.render_mode) or manifest.render_mode)
         return dataclass_replace(
             manifest,
             material_id=resolved_id,
-            filename=str(row["filename"] or manifest.filename),
-            title=str(row["title"] or manifest.title),
-            mime=str(row["mime"] or manifest.mime),
+            filename=str(_catalog_value(row, "filename", manifest.filename) or manifest.filename),
+            title=str(_catalog_value(row, "title", manifest.title) or manifest.title),
+            mime=str(_catalog_value(row, "mime", manifest.mime) or manifest.mime),
             render_mode=render_mode,  # type: ignore[arg-type]
             has_raw_view=render_mode == "pdf",
-            created_at=float(row["created_at"] or manifest.created_at),
+            created_at=float(_catalog_value(row, "created_at", manifest.created_at) or manifest.created_at),
         )
 
     def manifest(self, material_id: str) -> MaterialManifest:

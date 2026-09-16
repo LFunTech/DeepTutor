@@ -8,6 +8,7 @@ when the owner worker has disappeared and leader recovery is still pending.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 import logging
 from typing import Any
@@ -19,6 +20,7 @@ from deeptutor.api.contracts.turn_protocol import (
     PROTOCOL_VERSION,
     ClientCommand,
 )
+from deeptutor.persistence.postgres.connection import CommitCompletedAfterCancellation
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -40,17 +42,23 @@ def _clean_answers(value: Any) -> list[dict[str, Any]] | None:
 
 @router.websocket("/ws")
 async def unified_websocket(ws: WebSocket) -> None:
-    from deeptutor.api.routers.auth import ws_auth_failed, ws_require_auth
     from deeptutor.app.container import get_application_container
     from deeptutor.multi_user.context import reset_current_user
 
-    user_token = await ws_require_auth(ws)
-    if user_token is ws_auth_failed:
-        return
+    auth_provider = getattr(ws.app.state, "auth_provider", None)
+    if auth_provider is None:
+        from deeptutor.api.routers.auth import ws_auth_failed, ws_require_auth
+
+        user_token = await ws_require_auth(ws)
+        if user_token is ws_auth_failed:
+            return
+    else:
+        user_token = await auth_provider.authenticate(ws)
 
     await ws.accept()
     closed = False
     subscription_tasks: dict[str, asyncio.Task[None]] = {}
+    retiring_tasks: set[asyncio.Task[None]] = set()
 
     # Resolve once after authentication. Context variables are copied into
     # subscription tasks, so the socket remains in one stable StoreScope.
@@ -59,15 +67,54 @@ async def unified_websocket(ws: WebSocket) -> None:
         container = get_application_container()
         await container.start()
     turns = container.turns
+    provider_scope = None
+    try:
+        from deeptutor.core.providers import get_providers, provider_context
+
+        if get_providers() is None:
+            providers = getattr(container, "providers", None)
+            if providers is not None:
+                provider_scope = provider_context(providers)
+                provider_scope.__enter__()
+    except Exception:
+        if provider_scope is not None:
+            with suppress(Exception):
+                provider_scope.__exit__(None, None, None)
+        raise
+
+    def public_error(error):
+        sanitizer = getattr(auth_provider, "error_message", None)
+        return sanitizer(error) if sanitizer is not None else str(error)
+
+    def report_error(message, error):
+        if auth_provider is not None:
+            logger.error("%s (%s)", message, type(error).__name__)
+        else:
+            logger.error("%s: %s", message, error, exc_info=True)
+
+    def is_retired_commit_cancellation(error: Exception) -> bool:
+        task = asyncio.current_task()
+        return (
+            isinstance(error, CommitCompletedAfterCancellation)
+            and task in retiring_tasks
+            and bool(task.cancelling())
+        )
 
     async def safe_send(data: dict[str, Any]) -> None:
         nonlocal closed
         if closed:
             return
         try:
+            if auth_provider is not None:
+                await auth_provider.revalidate(ws)
             payload = {**data, "protocol_version": PROTOCOL_VERSION}
             await ws.send_text(json.dumps(payload, ensure_ascii=False, default=str))
-        except Exception:
+        except PermissionError:
+            closed = True
+            await ws.close(code=1008, reason="Authentication required")
+        except Exception as exc:
+            if is_retired_commit_cancellation(exc):
+                raise asyncio.CancelledError() from exc
             closed = True
 
     async def send_protocol_error(
@@ -78,6 +125,9 @@ async def unified_websocket(ws: WebSocket) -> None:
         turn_id: str = "",
         retryable: bool = False,
     ) -> None:
+        denial = getattr(auth_provider, "record_denial", None)
+        if denial is not None:
+            await denial()
         await safe_send(
             {
                 "type": "protocol_error",
@@ -129,54 +179,59 @@ async def unified_websocket(ws: WebSocket) -> None:
         task = subscription_tasks.pop(key, None)
         if task is None:
             return
+        retiring_tasks.add(task)
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+        finally:
+            retiring_tasks.discard(task)
 
-    async def subscribe_turn(turn_id: str, after_seq: int = 0) -> None:
+    async def start_subscription(key, events, failure_message, **identifiers) -> None:
         async def _forward() -> None:
             try:
-                async for event in turns.subscribe_turn(turn_id, after_seq=after_seq):
+                async for event in events():
                     await safe_send(event)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.exception("Turn subscription failed: %s", turn_id)
+                # 只读订阅被本 WS 明确退休时，已提交后的取消不是新订阅的失败。
+                # 按具体 task 判定，不让同 key 的下一代继承退休状态。
+                if is_retired_commit_cancellation(exc):
+                    raise asyncio.CancelledError() from exc
+                report_error(failure_message, exc)
                 await send_error(
-                    str(exc),
+                    public_error(exc),
                     error_code="subscription_failed",
-                    turn_id=turn_id,
                     retryable=True,
+                    **identifiers,
                 )
 
-        await stop_subscription(turn_id)
-        subscription_tasks[turn_id] = asyncio.create_task(_forward())
-
-    async def subscribe_session(session_id: str, after_seq: int = 0) -> None:
-        async def _forward() -> None:
-            try:
-                async for event in turns.subscribe_session(session_id, after_seq=after_seq):
-                    await safe_send(event)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("Session subscription failed: %s", session_id)
-                await send_error(
-                    str(exc),
-                    error_code="subscription_failed",
-                    session_id=session_id,
-                    retryable=True,
-                )
-
-        key = f"session:{session_id}"
         await stop_subscription(key)
         subscription_tasks[key] = asyncio.create_task(_forward())
+
+    async def subscribe_turn(turn_id: str, after_seq: int = 0) -> None:
+        await start_subscription(
+            turn_id,
+            lambda: turns.subscribe_turn(turn_id, after_seq=after_seq),
+            "Turn subscription failed",
+            turn_id=turn_id,
+        )
+
+    async def subscribe_session(session_id: str, after_seq: int = 0) -> None:
+        await start_subscription(
+            f"session:{session_id}",
+            lambda: turns.subscribe_session(session_id, after_seq=after_seq),
+            "Session subscription failed",
+            session_id=session_id,
+        )
 
     try:
         while not closed:
             raw = await ws.receive_text()
+            if auth_provider is not None:
+                await auth_provider.revalidate(ws)
             try:
                 decoded = json.loads(raw)
             except json.JSONDecodeError:
@@ -204,7 +259,7 @@ async def unified_websocket(ws: WebSocket) -> None:
                 )
                 continue
 
-            msg = command.model_dump(mode="python")
+            msg = command.model_dump(mode="python", exclude_unset=True)
 
             msg_type = msg.get("type")
 
@@ -217,12 +272,17 @@ async def unified_websocket(ws: WebSocket) -> None:
                             if key not in {"type", "protocol_version"}
                         }
                     )
-                except RuntimeError as exc:
+                except (RuntimeError, ValueError, LookupError) as exc:
                     await send_error(
-                        str(exc),
+                        public_error(exc),
                         error_code="start_turn_rejected",
                         session_id=str(msg.get("session_id") or ""),
                         terminal=True,
+                    )
+                    continue
+                if turn.get("status") == "deleted":
+                    await send_protocol_error(
+                        "The original operation was deleted.", error_code="operation_deleted"
                     )
                     continue
                 await subscribe_turn(turn["id"])
@@ -326,7 +386,7 @@ async def unified_websocket(ws: WebSocket) -> None:
                     _, turn = await turns.regenerate_last_turn(session_id, overrides=overrides)
                 except RuntimeError as exc:
                     await send_error(
-                        str(exc),
+                        public_error(exc),
                         error_code="regenerate_rejected",
                         session_id=session_id,
                         terminal=True,
@@ -362,14 +422,20 @@ async def unified_websocket(ws: WebSocket) -> None:
                 f"Unknown type: {msg_type}", error_code="unknown_message_type"
             )
 
+    except PermissionError:
+        closed = True
+        await ws.close(code=1008, reason="Authentication required")
     except WebSocketDisconnect:
         logger.debug("Client disconnected from /ws")
     except Exception as exc:
-        logger.error("Unified WS error: %s", exc, exc_info=True)
-        await send_error(str(exc), error_code="internal_error", retryable=True)
+        report_error("Unified WS error", exc)
+        await send_error(public_error(exc), error_code="internal_error", retryable=True)
     finally:
         closed = True
         for key in list(subscription_tasks):
             await stop_subscription(key)
         if user_token is not None:
             reset_current_user(user_token)
+        if provider_scope is not None:
+            with suppress(Exception):
+                provider_scope.__exit__(None, None, None)

@@ -132,7 +132,7 @@ export function latestRevision(since: number, batch: MasteryEvent[]): number {
  *
  * The socket registers before server replay, resumes from the last committed
  * revision, and reconnects with exponential backoff. Focus, visibility and an
- * explicit refresh also reconcile against SQLite over REST, so a proxy that
+ * explicit refresh also reconcile against PostgreSQL over REST, so a proxy that
  * cannot upgrade WebSockets degrades to fresh-on-return instead of stale UI.
  */
 export function useMasteryPathActivity(
@@ -144,10 +144,10 @@ export function useMasteryPathActivity(
     connection: "offline",
     error: null,
   });
-  const cursorRef = useRef<{ pathId: string | null; revision: number }>({
-    pathId: null,
-    revision: 0,
-  });
+  const cursorRef = useRef<{
+    pathId: string | null; revision: number; cursor: string | null;
+    eventRevision: number; eventId: number;
+  }>({ pathId: null, revision: 0, cursor: null, eventRevision: 0, eventId: 0 });
   const reconcileRef = useRef<() => void>(() => {});
 
   const refresh = useCallback(() => reconcileRef.current(), []);
@@ -159,27 +159,41 @@ export function useMasteryPathActivity(
     let reconciliation: AbortController | null = null;
     const initialRevision =
       cursorRef.current.pathId === pathId ? cursorRef.current.revision : 0;
-    cursorRef.current = { pathId, revision: initialRevision };
+    if (cursorRef.current.pathId !== pathId) {
+      cursorRef.current = { pathId, revision: initialRevision, cursor: null, eventRevision: 0, eventId: 0 };
+    }
+    const advance = (batch: MasteryEvent[], cursor: string | null | undefined, revision: number) => {
+      const current = cursorRef.current;
+      const last = batch.at(-1);
+      // REST 与 WS 可能交错到达；只按 PG 二元位置前进，不比较 opaque 字符串。
+      const newer = last && (last.revision > current.eventRevision ||
+        (last.revision === current.eventRevision && last.id >= current.eventId));
+      cursorRef.current = {
+        ...current, revision: Math.max(current.revision, revision),
+        ...(newer ? { eventRevision: last.revision, eventId: last.id, cursor: cursor ?? current.cursor } : {}),
+      };
+    };
 
     const reconcile = () => {
       if (disposed) return;
       reconciliation?.abort();
-      reconciliation = new AbortController();
+      const request = new AbortController();
+      reconciliation = request;
       const since =
         cursorRef.current.pathId === pathId ? cursorRef.current.revision : 0;
       void fetchProgressEvents(pathId, since, {
-        signal: reconciliation.signal,
-      })
-        .then((batch) => {
-          if (disposed) return;
-          const revision = latestRevision(since, batch);
-          cursorRef.current = { pathId, revision };
+        signal: request.signal,
+      }, cursorRef.current.cursor)
+        .then((page) => {
+          if (disposed || request.signal.aborted) return;
+          const revision = latestRevision(since, page.events);
+          advance(page.events, page.cursor, revision);
           setFeed((previous) =>
-            mergeEventBatch(previous, pathId, since, batch, revision),
+            mergeEventBatch(previous, pathId, since, page.events, revision),
           );
         })
         .catch((reason: unknown) => {
-          if (disposed || reconciliation?.signal.aborted) return;
+          if (disposed || request.signal.aborted) return;
           setSocketStatus({
             pathId,
             connection: "offline",
@@ -197,10 +211,8 @@ export function useMasteryPathActivity(
       {
         onEnvelope: (envelope) => {
           if (disposed) return;
-          cursorRef.current = {
-            pathId,
-            revision: Math.max(cursorRef.current.revision, envelope.revision),
-          };
+          reconciliation?.abort();
+          advance(envelope.events, envelope.cursor, envelope.revision);
           setFeed((previous) =>
             mergeSocketEnvelope(previous, pathId, envelope),
           );
@@ -226,6 +238,7 @@ export function useMasteryPathActivity(
       },
       initialRevision,
       {
+        durableCursor: () => ({ revision: cursorRef.current.revision, cursor: cursorRef.current.cursor }),
         shouldReconnect: () =>
           !disposed &&
           (typeof document === "undefined" ||

@@ -928,12 +928,11 @@ class KnowledgeBaseManager:
         """Register a connected MarginNote 4 library as a pointer KB.
 
         Creates no folder under ``base_dir`` and runs no index pipeline: it
-        records a ``type: marginnote4`` entry whose ``db_path`` (when given)
-        the MarginNote capability binds to. When ``db_path`` is omitted the
-        capability derives a default SQLite path from the KB name, so callers
-        can leave it blank for the simple single-library case. Raises
-        ``ValueError`` on a missing name, a name clash, or a store already
-        claimed by another library.
+        records a ``type: marginnote4`` entry. ``db_path`` is retained only as
+        a legacy/source-import hint when explicitly supplied; runtime
+        MarginNote sync/search always uses the PostgreSQL KB id. Raises
+        ``ValueError`` on a missing name, name clash, or duplicate explicit
+        legacy source path.
         """
         name = validate_knowledge_base_name(name)
 
@@ -945,13 +944,8 @@ class KnowledgeBaseManager:
         db_path = (db_path or "").strip()
         claimed_by = self._marginnote4_store_owner(name, db_path, knowledge_bases)
         if claimed_by:
-            # Distinct names can still derive one store: the default path keeps
-            # only alphanumerics, `-` and `_`, so "My Lib" and "My/Lib" both
-            # land on My_Lib.db. Sharing it would merge two libraries' objects
-            # and let either one's devices sync into the other.
             raise ValueError(
-                f"Knowledge base '{claimed_by}' already uses that MarginNote store. "
-                "Pick a name that differs by more than punctuation."
+                f"Knowledge base '{claimed_by}' already uses that MarginNote source path."
             )
 
         now = datetime.now().isoformat()
@@ -976,17 +970,18 @@ class KnowledgeBaseManager:
         db_path: str,
         knowledge_bases: dict[str, Any],
     ) -> str | None:
-        """Name of the MarginNote library already using this store, if any."""
-        from deeptutor.capabilities.marginnote4.store import resolve_db_path
+        """Name of the MN4 library already using this explicit legacy source."""
 
-        def _store(kb_name: str, entry: dict) -> Path:
-            return resolve_db_path(kb_name, metadata=entry).expanduser().resolve()
+        _ = name
+        if not db_path:
+            return None
 
-        wanted = _store(name, {"db_path": db_path})
+        wanted = Path(db_path).expanduser().resolve(strict=False)
         for other_name, other in knowledge_bases.items():
             if not isinstance(other, dict) or other.get("type") != MARGINNOTE4_KB_TYPE:
                 continue
-            if _store(other_name, other) == wanted:
+            other_path = str(other.get("db_path") or "").strip()
+            if other_path and Path(other_path).expanduser().resolve(strict=False) == wanted:
                 return other_name
         return None
 
@@ -1549,13 +1544,10 @@ class KnowledgeBaseManager:
         connected = is_connected_kb(entry)
         if connected:
             dir_exists = False
-        # One connected kind does own storage we created: a MarginNote library's
-        # synced objects live in a SQLite file under our own data directory, not
-        # in an external resource the user manages. Leaving it behind would also
-        # resurrect every paired device the moment a library of the same name is
-        # connected again.
-        if entry.get("type") == MARGINNOTE4_KB_TYPE:
-            self._delete_marginnote4_store(name, entry)
+        # MarginNote runtime data is PostgreSQL-backed and scoped by tenant,
+        # owner and KB id. Deleting the connected KB drops only the pointer here;
+        # device revocation and object cleanup happen through the PG API/import
+        # workflows, and legacy db_path metadata must not cause file deletion.
 
         if not confirm:
             # Ask for confirmation in CLI
@@ -1614,25 +1606,13 @@ class KnowledgeBaseManager:
         return True
 
     def _delete_marginnote4_store(self, name: str, entry: dict) -> None:
-        """Remove a MarginNote library's SQLite store, best-effort.
+        """Compatibility no-op for pre-PG callers.
 
-        A failure here must not strand the config entry: leaving the KB in the
-        list is worse than an orphan file, exactly as for the index directory
-        above.
+        Runtime MarginNote data no longer lives in a per-KB SQLite file.  The
+        parameters are intentionally unused so old internal callers cannot
+        delete a legacy source path by mistake.
         """
-        from deeptutor.capabilities.marginnote4.store import resolve_db_path
-
-        try:
-            db_path = resolve_db_path(name, metadata=entry)
-            db_path.unlink(missing_ok=True)
-            # SQLite's WAL companions, when the last connection left them.
-            for suffix in ("-wal", "-shm"):
-                db_path.with_name(db_path.name + suffix).unlink(missing_ok=True)
-        except Exception as exc:  # noqa: BLE001 - orphan file beats a stuck entry
-            logger.warning(
-                f"Could not remove the MarginNote store for KB '{name}': {exc}. "
-                "Continuing; the config entry is still cleaned up."
-            )
+        _ = (name, entry)
 
     def clean_rag_storage(self, name: str | None = None, backup: bool = True) -> bool:
         """

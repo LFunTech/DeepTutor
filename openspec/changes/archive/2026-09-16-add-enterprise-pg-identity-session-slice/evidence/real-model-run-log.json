@@ -1,0 +1,45 @@
+{
+  "date": "2026-09-13",
+  "secret_reference_used_by_smoke": "env:SMOKE_KEY",
+  "secret_source": ".secrets/.test-secrets（不复制凭证）",
+  "model": "qwen-plus",
+  "runs": [
+    {
+      "purpose": "凭证诊断",
+      "observed_usage": {
+        "prompt_tokens": 11,
+        "completion_tokens": 1,
+        "total_tokens": 12
+      }
+    },
+    {
+      "purpose": "首轮连通性、未验证续聊历史",
+      "artifact": "real-model-first-pass.json",
+      "chat_envelope_tokens": 11766,
+      "title_usage": "未逐次观测，不按0计费"
+    },
+    {
+      "purpose": "修复续聊后增加全部调用usage断言",
+      "pytest_result": "4个真实业务turn完成，末尾usage断言失败",
+      "elapsed_seconds": 63.61,
+      "usage": "该轮断言前未落盘，完整用量无法准确回溯，不以0代替",
+      "http_call_count_upper_bound": 14
+    },
+    {
+      "purpose": "最终真实模型验收含逐次服务端用量",
+      "artifact": "real-model-smoke.json",
+      "observed_totals": {
+        "prompt_tokens": 10205,
+        "completion_tokens": 4840,
+        "total_tokens": 15045
+      },
+      "http_calls": 7,
+      "pytest_result": "1 passed in 63.53s"
+    }
+  ],
+  "limitations": [
+    "未查询供应商账单；不把core USD估算当成实际费用",
+    "max_tokens不能限制该供应商的全部推理token，后续计费验收须设置供应商侧预算或明确思考额度",
+    "已停止本次计费调用，不为格式/文档复验反复调用模型"
+  ]
+}

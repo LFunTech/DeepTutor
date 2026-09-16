@@ -435,39 +435,15 @@ def _mastery_loop_managed(workspace_mode: str, capability: str) -> bool:
     return workspace_mode == WORKSPACE_MODE_MASTERY and capability in _MASTERY_AGENTIC_ACTIONS
 
 
-def _topic_material_manifest(path_id: str) -> tuple[str, dict[str, str]]:
-    """Load a mastery topic's materials as (manifest, read_source index).
+async def _topic_material_manifest(path_id: str) -> tuple[str, dict[str, str]]:
+    from deeptutor.learning.runtime import get_learning_runtime
+    from deeptutor.learning.sources import topic_materials
 
-    Storage-bound and synchronous; the caller runs it off the event loop. A
-    topic that cannot be loaded yields no manifest rather than failing the turn
-    — losing the materials degrades the lesson, losing the turn ends it.
-    """
-    try:
-        from deeptutor.learning.storage import LearningStore
-        from deeptutor.learning.topic_materials import (
-            build_topic_materials,
-            render_topic_manifest,
-        )
-
-        store = LearningStore()
-        progress = store.load(path_id)
-        if progress is None:
-            return "", {}
-        topic = store.get_topic(path_id, progress=progress)
-        if topic is None or not topic.sources:
-            return "", {}
-        materials = build_topic_materials(topic.sources)
-        if materials.warnings:
-            logger.warning(
-                "Mastery topic %s: %d material(s) could not be loaded: %s",
-                path_id,
-                len(materials.warnings),
-                ", ".join(materials.warnings),
-            )
-        return render_topic_manifest(materials)
-    except Exception:
-        logger.exception("Failed to build topic materials for mastery path %s", path_id)
+    runtime = get_learning_runtime()
+    topic = await runtime.run(lambda u: u.get_topic(path_id))
+    if topic is None:
         return "", {}
+    return await topic_materials(runtime, topic.sources)
 
 
 def _reading_action_context(
@@ -502,7 +478,7 @@ def _reading_action_context(
         return "The open Reading material is unavailable."
 
 
-def _mastery_action_context(
+async def _mastery_action_context(
     path_id: str,
     manifest: str,
     source_index: dict[str, str],
@@ -511,31 +487,25 @@ def _mastery_action_context(
     if not path_id:
         return ""
     lines = [f"Mastery topic id: {path_id}"]
-    try:
-        from deeptutor.learning.storage import LearningStore
+    from deeptutor.learning.runtime import get_learning_runtime
 
-        store = LearningStore()
-        progress = store.load(path_id)
-        topic = store.get_topic(path_id, progress=progress) if progress else None
-        if topic is not None:
-            lines.append(
-                f"Goal: {topic.metadata.goal or topic.metadata.description or progress.name}"
-            )
-        if progress is not None:
-            lines.append(f"Current learning stage: {progress.current_stage.value}")
-            module = next(
-                (item for item in progress.modules if item.id == progress.current_module_id),
-                None,
-            )
-            if module is not None:
-                lines.append(f"Current module: {module.name}")
-                if 0 <= progress.current_kp_index < len(module.knowledge_points):
-                    lines.append(
-                        "Current knowledge point: "
-                        + module.knowledge_points[progress.current_kp_index].name
-                    )
-    except Exception:
-        logger.info("Mastery action state unavailable for %s", path_id, exc_info=True)
+    snapshot = await get_learning_runtime().run(lambda u: u.get_topic_snapshot(path_id))
+    progress, topic = snapshot[:2] if snapshot else (None, None)
+    if topic is not None:
+        lines.append(f"Goal: {topic.metadata.goal or topic.metadata.description or progress.name}")
+    if progress is not None:
+        lines.append(f"Current learning stage: {progress.current_stage.value}")
+        module = next(
+            (item for item in progress.modules if item.id == progress.current_module_id),
+            None,
+        )
+        if module is not None:
+            lines.append(f"Current module: {module.name}")
+            if 0 <= progress.current_kp_index < len(module.knowledge_points):
+                lines.append(
+                    "Current knowledge point: "
+                    + module.knowledge_points[progress.current_kp_index].name
+                )
     if manifest:
         lines.append("Topic source manifest:\n" + manifest)
     remaining = 12_000
@@ -1381,3 +1351,5 @@ class _TurnExecution:
     coordination_task: asyncio.Task[None] | None = None
     lease_lost: bool = False
     shutdown_requested: bool = False
+    prepared_environment: Any | None = None
+    learning_runtime: Any | None = None

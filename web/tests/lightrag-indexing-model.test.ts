@@ -245,6 +245,19 @@ test("ordinary error-state knowledge bases can replace failed files unless index
   assert.equal(kbCanUploadDocuments(kb, true), false);
 });
 
+test("read-only knowledge bases never accept local uploads", () => {
+  const kb: KnowledgeBase = {
+    name: "remote",
+    status: "ready",
+    read_only: true,
+    statistics: { rag_provider: "lightrag-server", raw_documents: 0 },
+    metadata: { type: "lightrag_server" },
+  };
+  assert.equal(kbIsUploadable(kb), false);
+  assert.equal(kbCanUploadDocuments(kb, false), false);
+  assert.equal(kbCanUploadDocuments({ ...kb, status: "error" }, false), false);
+});
+
 test("LightRAG candidates distinguish active builds from failures", () => {
   const currentCandidate = {
     signature: "version-3",

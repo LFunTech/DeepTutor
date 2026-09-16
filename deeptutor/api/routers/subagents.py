@@ -38,6 +38,7 @@ from deeptutor.services.subagent import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 class ConnectSubagentRequest(BaseModel):
@@ -108,7 +109,12 @@ async def list_visible_partners():
 @router.get("/connections")
 async def list_connections():
     """List the current user's connected subagents."""
-    manager = current_kb_manager()
+    try:
+        manager = current_kb_manager()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return {"connections": []}
+        raise
     connections = []
     for name in manager.list_knowledge_bases():
         meta = manager.get_metadata(name)

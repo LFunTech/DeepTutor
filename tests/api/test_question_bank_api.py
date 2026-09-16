@@ -21,16 +21,34 @@ PREFIX = "/api/question-notebook"
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch):
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+
+    token = set_current_user(
+        CurrentUser(
+            id="legacy-question-bank",
+            username="legacy-question-bank",
+            role="user",
+            scope=UserScope(
+                kind="user",
+                user_id="legacy-question-bank",
+                root=tmp_path / "legacy-question-bank",
+            ),
+        )
+    )
     store = SQLiteSessionStore(db_path=tmp_path / "bank.db")
     monkeypatch.setattr(
-        "deeptutor.api.routers.question_notebook.get_sqlite_session_store",
+        "deeptutor.api.routers.question_notebook.get_session_store",
         lambda: store,
     )
     app = FastAPI()
     app.include_router(notebook_router, prefix=PREFIX)
-    with TestClient(app) as test_client:
-        test_client.store = store  # type: ignore[attr-defined]
-        yield test_client
+    try:
+        with TestClient(app) as test_client:
+            test_client.store = store  # type: ignore[attr-defined]
+            yield test_client
+    finally:
+        reset_current_user(token)
 
 
 def _seed(client) -> list[int]:

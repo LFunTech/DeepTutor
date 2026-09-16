@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchAuthStatus } from "@/lib/auth";
+import { fetchAuthStatus, canManageAccounts } from "@/lib/auth";
 
 export interface AuthStatusState {
   /** Whether auth is enabled on the backend. */
@@ -41,7 +41,7 @@ function loadAuthStatus(): Promise<AuthStatusState> {
   return fetchAuthStatus().then((status) => ({
     enabled: Boolean(status?.enabled),
     authenticated: Boolean(status?.authenticated),
-    isAdmin: status?.role === "admin",
+    isAdmin: canManageAccounts(status),
     userId:
       typeof status?.user_id === "string" && status.user_id.trim()
         ? status.user_id

@@ -6,27 +6,29 @@ from pathlib import Path
 
 import typer
 
-from deeptutor.logging import configure_logging
 from deeptutor.runtime.mode import RunMode, set_mode
 
+from .account import register as register_account
 from .book import register as register_book
 from .chat import register as register_chat
-from .common import build_turn_request, console, maybe_run
+from .common import build_turn_request, console
 from .config_cmd import register as register_config
 from .doctor import register as register_doctor
 from .init_cmd import register as register_init
 from .kb import register as register_kb
 from .memory import register as register_memory
+from .migration import register as register_migration
 from .notebook import register as register_notebook
 from .partner import register as register_partner
+from .pg_runtime import authenticated_app, run_business
 from .plugin import register as register_plugin
 from .provider_cmd import register as register_provider
+from .remote import remote_run_and_render
 from .session_cmd import register as register_session
 from .skill import register as register_skill
 from .workspace_cmd import register as register_workspace
 
 set_mode(RunMode.CLI)
-configure_logging()
 
 app = typer.Typer(
     name="deeptutor",
@@ -62,11 +64,13 @@ app.add_typer(provider_app, name="provider")
 app.add_typer(book_app, name="book")
 app.add_typer(workspace_app, name="workspace")
 
+register_account(app)
 register_partner(partner_app)
 register_chat(chat_app)
 register_kb(kb_app)
 register_skill(skill_app)
 register_memory(memory_app)
+register_migration(app)
 register_plugin(plugin_app)
 register_config(config_app)
 register_session(session_app)
@@ -99,15 +103,31 @@ def run_capability(
         None, "--config-json", help="Capability config as JSON."
     ),
     fmt: str = typer.Option("rich", "--format", "-f", help="Output format: rich | json."),
+    auth_token_env: str | None = typer.Option(
+        None,
+        "--auth-token-env",
+        help="Environment variable containing the PG auth token.",
+    ),
+    server: str | None = typer.Option(
+        None,
+        "--server",
+        help="Existing DeepTutor API origin for authenticated remote control.",
+    ),
+    allow_loopback_http: bool = typer.Option(
+        False,
+        "--allow-loopback-http",
+        help="Allow http://127.0.0.1 only for isolated local tests.",
+    ),
 ) -> None:
     """Run any capability in a single turn (agent-first entry point)."""
     from deeptutor.app import DeepTutorApp
 
     from .common import run_turn_and_render
 
+    resolved_capability = DeepTutorApp(metadata_only=True).resolve_capability(capability)
     request = build_turn_request(
         content=message,
-        capability=capability,
+        capability=resolved_capability,
         session_id=session,
         tools=tool,
         knowledge_bases=kb,
@@ -117,7 +137,20 @@ def run_capability(
         notebook_refs=notebook_ref,
         history_refs=history_ref,
     )
-    maybe_run(run_turn_and_render(app=DeepTutorApp(), request=request, fmt=fmt))
+    async def _run() -> None:
+        if server:
+            await remote_run_and_render(
+                request=request,
+                fmt=fmt,
+                server=server,
+                auth_token_env=auth_token_env,
+                allow_loopback_http=allow_loopback_http,
+            )
+            return
+        async with authenticated_app(auth_token_env) as client:
+            await run_turn_and_render(app=client, request=request, fmt=fmt)
+
+    run_business(_run())
 
 
 @app.command()

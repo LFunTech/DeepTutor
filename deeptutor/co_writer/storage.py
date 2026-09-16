@@ -25,10 +25,21 @@ import uuid
 
 from pydantic import BaseModel, Field
 
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.file_io import atomic_write_text as _atomic_write_text
-from deeptutor.services.path_service import get_path_service
+from deeptutor.services.path_service import PathService, get_path_service
 
 logger = logging.getLogger(__name__)
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
+
+
+def _path_service_or_runtime() -> PathService:
+    try:
+        return get_path_service()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return PathService(workspace_root=get_runtime_data_root())
+        raise
 
 
 class CoWriterDocument(BaseModel):
@@ -103,7 +114,7 @@ class CoWriterStorage:
     def path_service(self):
         if self._path_service is not None:
             return self._path_service
-        return get_path_service()
+        return _path_service_or_runtime()
 
     # ── Path helpers ─────────────────────────────────────────────────────
 
@@ -236,9 +247,10 @@ _storages: dict[str, CoWriterStorage] = {}
 
 
 def get_co_writer_storage() -> CoWriterStorage:
-    key = str(get_path_service().workspace_root.resolve())
+    path_service = _path_service_or_runtime()
+    key = str(path_service.workspace_root.resolve())
     if key not in _storages:
-        _storages[key] = CoWriterStorage()
+        _storages[key] = CoWriterStorage(path_service)
     return _storages[key]
 
 

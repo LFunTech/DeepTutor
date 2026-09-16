@@ -2,9 +2,9 @@
 
 One pure read-only function per surface. Adapters never mutate
 workspace state. They read whatever lives under
-``data/user/workspace/`` (or, for chat/quiz, the chat history SQLite
-DB; for kb-list, the kb config JSON; for the ``partner`` surface, the
-per-partner conversation JSONL under ``data/partners/``).
+``data/user/workspace/`` (or, for chat/quiz, the current user's PostgreSQL
+session/notebook rows; for kb-list, the kb config JSON; for the ``partner``
+surface, the per-partner conversation JSONL under ``data/partners/``).
 
 Each adapter returns a ``list[Entity]`` with stable ``id`` and a
 deterministic ``fingerprint`` so the diff engine can detect changes
@@ -17,13 +17,14 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
-import sqlite3
+from typing import Any
 
 from deeptutor.services.memory.paths import Surface
 from deeptutor.services.memory.snapshot.entity import Entity, EntityStamp
 from deeptutor.services.path_service import get_path_service
 
 logger = logging.getLogger(__name__)
+_PG_SNAPSHOT_PAGE_SIZE = 200
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -56,6 +57,110 @@ def _iso(ts: float | int | str | None) -> str:
         except Exception:
             pass
     return ""
+
+
+def _pg_snapshot_context():
+    """Return ``(sync_db, scope)`` for the current PG-backed user, or ``None``."""
+
+    try:
+        from deeptutor.app.container import get_application_container
+
+        runtime = getattr(get_application_container(), "postgres_runtime", None)
+        if runtime is None:
+            return None
+        database = getattr(runtime, "sync_db", None)
+        scope_factory = getattr(runtime, "scope_for_current_user", None)
+        if database is None or not callable(scope_factory):
+            return None
+        return database, scope_factory()
+    except Exception as exc:
+        logger.debug("PG snapshot context unavailable: %s", exc)
+        return None
+
+
+def _page_size() -> int:
+    try:
+        return max(1, min(int(_PG_SNAPSHOT_PAGE_SIZE), 1000))
+    except (TypeError, ValueError):
+        return 200
+
+
+def _chat_session_pages(connection, scope) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    after: tuple[float, str] | None = None
+    while True:
+        where = "WHERE s.tenant_id=%s AND s.owner_id=%s AND NOT s.deleting"
+        params: list[Any] = [scope.tenant_id, scope.user_id]
+        if after is not None:
+            where += " AND (s.updated_at,s.id)<(%s,%s)"
+            params.extend(after)
+        page = connection.execute(
+            f"""
+            SELECT s.id,s.title,s.created_at,s.updated_at
+            FROM enterprise.sessions s
+            {where}
+            ORDER BY s.updated_at DESC,s.id DESC
+            LIMIT %s
+            """,
+            (*params, _page_size()),
+        ).fetchall()
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _page_size():
+            break
+        last = page[-1]
+        after = (float(last["updated_at"]), str(last["id"]))
+    return rows
+
+
+def _message_rows(connection, scope, session_id: str) -> list[dict[str, Any]]:
+    return connection.execute(
+        """
+        SELECT id,role,content,capability,created_at
+        FROM enterprise.messages
+        WHERE tenant_id=%s AND owner_id=%s AND session_id=%s
+        ORDER BY created_at ASC,id ASC
+        """,
+        (scope.tenant_id, scope.user_id, session_id),
+    ).fetchall()
+
+
+def _quiz_pages(connection, scope) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    after: tuple[float, int] | None = None
+    while True:
+        where = (
+            "WHERE n.tenant_id=%s AND n.owner_id=%s"
+            " AND EXISTS (SELECT 1 FROM enterprise.sessions s"
+            " WHERE s.tenant_id=n.tenant_id AND s.owner_id=n.owner_id"
+            " AND s.id=n.session_id AND NOT s.deleting)"
+        )
+        params: list[Any] = [scope.tenant_id, scope.user_id]
+        if after is not None:
+            where += " AND (n.created_at,n.id)<(%s,%s)"
+            params.extend(after)
+        page = connection.execute(
+            f"""
+            SELECT n.id,n.session_id,n.turn_id,n.question_id,n.question,
+                   n.question_type,n.options,n.correct_answer,n.explanation,
+                   n.difficulty,n.user_answer,n.is_correct,n.bookmarked,
+                   n.created_at
+            FROM enterprise.notebook_entries n
+            {where}
+            ORDER BY n.created_at DESC,n.id DESC
+            LIMIT %s
+            """,
+            (*params, _page_size()),
+        ).fetchall()
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _page_size():
+            break
+        last = page[-1]
+        after = (float(last["created_at"]), int(last["id"]))
+    return rows
 
 
 # ── Adapters ─────────────────────────────────────────────────────────
@@ -408,24 +513,16 @@ def read_kb_entities() -> list[Entity]:
 def read_chat_entities() -> list[Entity]:
     """One Entity per chat session. ``content`` inlines all turns as
     ``user / assistant`` blocks so L2 sees the actual conversation."""
-    db_path = get_path_service().get_chat_history_db()
-    if not db_path.exists():
+    context = _pg_snapshot_context()
+    if context is None:
         return []
     out: list[Entity] = []
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
-            sessions = conn.execute(
-                "SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
-            ).fetchall()
-            for sess in sessions:
+        database, scope = context
+        with database.transaction(scope) as conn:
+            for sess in _chat_session_pages(conn, scope):
                 sid = sess["id"]
-                msgs = conn.execute(
-                    "SELECT id, role, content, capability, created_at "
-                    "FROM messages WHERE session_id = ? "
-                    "ORDER BY created_at ASC, id ASC",
-                    (sid,),
-                ).fetchall()
+                msgs = _message_rows(conn, scope, sid)
                 blocks: list[str] = []
                 for m in msgs:
                     role = m["role"]
@@ -448,7 +545,7 @@ def read_chat_entities() -> list[Entity]:
                         fingerprint=_sha1(last_msg_id, sess["updated_at"]),
                     )
                 )
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("chat snapshot scan failed: %s", exc)
         return []
     return out
@@ -456,28 +553,21 @@ def read_chat_entities() -> list[Entity]:
 
 def read_quiz_entities() -> list[Entity]:
     """One Entity per recorded quiz attempt (notebook_entries row)."""
-    db_path = get_path_service().get_chat_history_db()
-    if not db_path.exists():
+    context = _pg_snapshot_context()
+    if context is None:
         return []
     out: list[Entity] = []
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT id, session_id, turn_id, question_id, question, "
-                "question_type, options_json, correct_answer, explanation, "
-                "difficulty, user_answer, is_correct, bookmarked, "
-                "created_at FROM notebook_entries "
-                "ORDER BY created_at DESC"
-            ).fetchall()
-            for r in rows:
+        database, scope = context
+        with database.transaction(scope) as conn:
+            for r in _quiz_pages(conn, scope):
                 qid = r["question_id"] or f"row_{r['id']}"
                 entity_id = f"{r['session_id']}:{qid}"
                 question = (r["question"] or "").strip()
                 user_answer = (r["user_answer"] or "").strip()
                 correct = (r["correct_answer"] or "").strip()
                 explanation = (r["explanation"] or "").strip()
-                is_correct = bool(int(r["is_correct"] or 0))
+                is_correct = bool(r["is_correct"])
                 content = "\n\n".join(
                     part
                     for part in (
@@ -495,18 +585,19 @@ def read_quiz_entities() -> list[Entity]:
                         ts=_iso(r["created_at"]),
                         content=content,
                         metadata={
+                            "entry_id": int(r["id"]),
                             "session_id": r["session_id"],
                             "turn_id": r["turn_id"],
                             "question_id": qid,
                             "question_type": r["question_type"],
                             "difficulty": r["difficulty"],
                             "is_correct": is_correct,
-                            "bookmarked": bool(int(r["bookmarked"] or 0)),
+                            "bookmarked": bool(r["bookmarked"]),
                         },
                         fingerprint=_sha1(question, user_answer, correct, is_correct),
                     )
                 )
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("quiz snapshot scan failed: %s", exc)
         return []
     return out
@@ -530,36 +621,34 @@ def probe_chat_entities() -> list[EntityStamp]:
     message of every session, which is the wrong price to pay for a caller that
     only wants to know what the sessions are called.
     """
-    db_path = get_path_service().get_chat_history_db()
-    if not db_path.exists():
+    context = _pg_snapshot_context()
+    if context is None:
         return []
     out: list[EntityStamp] = []
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
-            last_msg_id: dict[str, int] = {
-                row["session_id"]: row["id"]
-                for row in conn.execute(
-                    "SELECT session_id, id FROM ("
-                    "  SELECT session_id, id, ROW_NUMBER() OVER ("
-                    "    PARTITION BY session_id ORDER BY created_at DESC, id DESC"
-                    "  ) AS rn FROM messages"
-                    ") WHERE rn = 1"
-                )
-            }
-            for sess in conn.execute(
-                "SELECT id, title, updated_at FROM sessions ORDER BY updated_at DESC"
-            ):
+        database, scope = context
+        with database.transaction(scope) as conn:
+            for sess in _chat_session_pages(conn, scope):
                 sid = sess["id"]
+                last = conn.execute(
+                    """
+                    SELECT id
+                    FROM enterprise.messages
+                    WHERE tenant_id=%s AND owner_id=%s AND session_id=%s
+                    ORDER BY created_at DESC,id DESC
+                    LIMIT 1
+                    """,
+                    (scope.tenant_id, scope.user_id, sid),
+                ).fetchone()
                 out.append(
                     EntityStamp(
                         id=sid,
                         label=sess["title"] or sid,
-                        fingerprint=_sha1(last_msg_id.get(sid, 0), sess["updated_at"]),
+                        fingerprint=_sha1(last["id"] if last else 0, sess["updated_at"]),
                         ts=_iso(sess["updated_at"]),
                     )
                 )
-    except sqlite3.Error as exc:
+    except Exception as exc:
         logger.warning("chat snapshot probe failed: %s", exc)
         return []
     return out

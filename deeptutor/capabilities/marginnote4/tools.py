@@ -1,25 +1,19 @@
-"""MarginNote 4 tools -- the seam between the chat loop and the synced store.
+"""MarginNote 4 tools -- the seam between the chat loop and the synced PG store.
 
-Seven tools auto-mounted only when a MarginNote 4 library is the selected KB
-(via :class:`~deeptutor.capabilities.marginnote4.capability.MarginNoteCapability`,
-which runs the turn exclusively on these tools). Five read the synced data
-(search, read, list, links, tags) and two provide structural navigation
-(documents, mindmap). Every tool is a thin wrapper over the pure
-:class:`~deeptutor.capabilities.marginnote4.store.MarginNoteStore` methods.
-
-The store path is injected server-side as ``_db_path`` by the capability's
-``augment_kwargs``; the model never supplies or sees it.
+Seven tools auto-mounted only when a MarginNote 4 library is the selected KB.
+The capability injects ``_mn4_kb_id`` server-side; the model never supplies or
+sees storage paths, database credentials, or device tokens.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-from pathlib import Path
 from typing import Any
 
 from deeptutor.capabilities.marginnote4.models import ALL_TYPES
-from deeptutor.capabilities.marginnote4.store import MarginNoteStore
 from deeptutor.core.tool_protocol import BaseTool, ToolDefinition, ToolParameter, ToolResult
+from deeptutor.persistence.postgres.marginnote import PostgresMarginNoteStore
 
 MARGINNOTE_TOOL_NAMES: tuple[str, ...] = (
     "marginnote_search",
@@ -32,27 +26,29 @@ MARGINNOTE_TOOL_NAMES: tuple[str, ...] = (
 )
 
 
-def _store(kwargs: dict[str, Any]) -> MarginNoteStore | None:
-    raw = str(kwargs.get("_db_path") or "").strip()
-    if not raw:
+def _store(kwargs: dict[str, Any]) -> PostgresMarginNoteStore | Any | None:
+    injected = kwargs.get("_marginnote_store")
+    if injected is not None:
+        return injected
+    kb_id = str(kwargs.get("_mn4_kb_id") or "").strip()
+    if not kb_id:
         return None
-    root = Path(raw)
-    cached = _STORE_CACHE.get(raw)
-    if cached is not None:
-        return cached
-    if not root.parent.exists():
+    try:
+        from deeptutor.app.container import get_application_container
+
+        runtime = getattr(get_application_container(), "postgres_runtime", None)
+        if runtime is None:
+            return None
+        factory = getattr(runtime, "marginnote_store_for_current_user", None)
+        if not callable(factory):
+            return None
+        return factory(kb_id)
+    except Exception:
         return None
-    store = MarginNoteStore(root)
-    _STORE_CACHE[raw] = store
-    return store
-
-
-_STORE_CACHE: dict[str, MarginNoteStore] = {}
 
 
 def _clear_store_cache() -> None:
-    """Drop cached stores (tests that swap db files under the same path)."""
-    _STORE_CACHE.clear()
+    """Compatibility no-op: runtime MarginNote stores are PG scoped per call."""
 
 
 def _no_store_result() -> ToolResult:
@@ -91,7 +87,7 @@ class _MN4Tool(BaseTool):
         except Exception as exc:
             return _err(str(exc))
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
         raise NotImplementedError
 
 
@@ -131,13 +127,13 @@ class MarginNoteSearchTool(_MN4Tool):
             ],
         )
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
         query = str(kwargs.get("query") or "").strip()
         if not query:
             return _err("marginnote_search needs a non-empty 'query'.")
         obj_type = str(kwargs.get("object_type") or "").strip()
         limit = _as_int(kwargs.get("limit"), default=20, lo=1, hi=100)
-        hits = store.search(query, object_type=obj_type, limit=limit)
+        hits = await asyncio.to_thread(store.search, query, object_type=obj_type, limit=limit)
         return _ok({"query": query, "count": len(hits), "results": hits})
 
 
@@ -162,11 +158,11 @@ class MarginNoteReadTool(_MN4Tool):
             ],
         )
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
         oid = str(kwargs.get("object_id") or "").strip()
         if not oid:
             return _err("marginnote_read needs an 'object_id'.")
-        obj = store.get(oid)
+        obj = await asyncio.to_thread(store.get, oid)
         if obj is None:
             return _err(f"Object {oid!r} not found in the MarginNote library.")
         return _ok(obj.to_dict())
@@ -206,11 +202,13 @@ class MarginNoteListTool(_MN4Tool):
             ],
         )
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
         obj_type = str(kwargs.get("object_type") or "").strip()
         doc_id = str(kwargs.get("document_id") or "").strip()
         limit = _as_int(kwargs.get("limit"), default=200, lo=1, hi=1000)
-        items = store.list_objects(object_type=obj_type, document_id=doc_id, limit=limit)
+        items = await asyncio.to_thread(
+            store.list_objects, object_type=obj_type, document_id=doc_id, limit=limit
+        )
         return _ok({"count": len(items), "objects": items})
 
 
@@ -228,8 +226,8 @@ class MarginNoteDocumentsTool(_MN4Tool):
             parameters=[],
         )
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
-        docs = store.list_documents()
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+        docs = await asyncio.to_thread(store.list_documents)
         return _ok({"count": len(docs), "documents": docs})
 
 
@@ -254,11 +252,11 @@ class MarginNoteLinksTool(_MN4Tool):
             ],
         )
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
         oid = str(kwargs.get("object_id") or "").strip()
         if not oid:
             return _err("marginnote_links needs an 'object_id'.")
-        links = store.linked_objects(oid)
+        links = await asyncio.to_thread(store.linked_objects, oid)
         return _ok({"object_id": oid, "count": len(links), "links": links})
 
 
@@ -282,9 +280,9 @@ class MarginNoteTagsTool(_MN4Tool):
             ],
         )
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
         limit = _as_int(kwargs.get("limit"), default=200, lo=1, hi=1000)
-        tags = store.collect_tags(limit=limit)
+        tags = await asyncio.to_thread(store.collect_tags, limit=limit)
         return _ok({"count": len(tags), "tags": tags})
 
 
@@ -309,9 +307,9 @@ class MarginNoteCardsTool(_MN4Tool):
             ],
         )
 
-    async def _run(self, store: MarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
+    async def _run(self, store: PostgresMarginNoteStore, kwargs: dict[str, Any]) -> ToolResult:
         limit = _as_int(kwargs.get("limit"), default=100, lo=1, hi=500)
-        cards = store.list_objects(object_type="card", limit=limit)
+        cards = await asyncio.to_thread(store.list_objects, object_type="card", limit=limit)
         return _ok({"count": len(cards), "cards": cards})
 
 

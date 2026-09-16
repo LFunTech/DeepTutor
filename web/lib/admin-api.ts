@@ -5,7 +5,7 @@ export type AccountPreset = "standard" | "learner" | "custom";
 export interface UserRecord {
   id: string;
   username: string;
-  role: "admin" | "user";
+  role: "tenant_admin" | "admin" | "user";
   created_at: string;
   disabled?: boolean;
   /** Avatar marker: "", "icon:<name>:<color>", or "img:<version>". */
@@ -83,7 +83,7 @@ export async function deleteUser(username: string): Promise<void> {
 
 export async function setUserRole(
   username: string,
-  role: "admin" | "user",
+  role: "tenant_admin" | "admin" | "user",
 ): Promise<void> {
   const res = await apiFetch(
     apiUrl(`/api/auth/users/${encodeURIComponent(username)}/role`),
@@ -102,7 +102,7 @@ export async function setUserRole(
 export interface CreatedUser {
   user_id: string;
   username: string;
-  role: "admin" | "user";
+  role: "tenant_admin" | "admin" | "user";
   is_admin: boolean;
   preset: AccountPreset;
 }

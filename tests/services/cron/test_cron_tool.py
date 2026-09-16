@@ -84,6 +84,28 @@ class TestCronTool:
         )
         assert cancelled.ok, cancelled.text
 
+    def test_pause_resume(self, cron_service):
+        outcome = run_cron_action(
+            {
+                "action": "schedule",
+                "message": "stand up",
+                "every_seconds": 3600,
+                "_cron_owner": CHAT_OWNER,
+            }
+        )
+        assert outcome.ok, outcome.text
+        job_id = outcome.meta["job_id"]
+
+        paused = run_cron_action({"action": "pause", "job_id": job_id, "_cron_owner": CHAT_OWNER})
+        assert paused.ok, paused.text
+        assert cron_service.get_job(job_id).enabled is False
+
+        resumed = run_cron_action(
+            {"action": "resume", "job_id": job_id, "_cron_owner": CHAT_OWNER}
+        )
+        assert resumed.ok, resumed.text
+        assert cron_service.get_job(job_id).enabled is True
+
     def test_schedule_at_parses_iso(self, cron_service):
         from datetime import datetime, timedelta
 
@@ -165,7 +187,7 @@ class TestRegistryIntegration:
 
         schema = CronTool().get_definition().to_openai_schema()
         action = schema["function"]["parameters"]["properties"]["action"]
-        assert set(action["enum"]) == {"schedule", "list", "cancel"}
+        assert set(action["enum"]) == {"schedule", "list", "cancel", "pause", "resume"}
 
 
 class TestExecutorRouting:

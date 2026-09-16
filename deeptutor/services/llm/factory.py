@@ -207,6 +207,7 @@ def _resolve_call_config(
             wire_api=current.wire_api if current is not None else "auto",
             api_format=current.api_format if current is not None else "auto",
             reasoning_effort=resolved_reasoning_effort,
+            transport=current.transport if current is not None else None,
         )
         return config, provider_spec
 

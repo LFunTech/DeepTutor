@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +15,14 @@ class StoreScope:
     backend: str
     resource: str
     owner_id: str
+    tenant_id: str = ""
 
     @property
     def cache_key(self) -> str:
+        if self.tenant_id:
+            return json.dumps(
+                [self.backend, self.resource, self.tenant_id, self.owner_id], separators=(",", ":")
+            )
         return f"{self.backend}:{self.resource}:{self.owner_id}"
 
 

@@ -1,10 +1,8 @@
 """Resolve which connected MarginNote 4 library (if any) the current turn targets.
 
-Mirrors the Obsidian binding pattern: the first selected KB whose metadata is
-``type == marginnote4`` wins. The KB's ``db_path`` (or a computed default)
-becomes the live store the MarginNote tools query. The result is cached on
-the extension namespace so ``is_active`` / ``augment_kwargs`` / ``system_block``
-share a single resolution.
+The selected KB reference becomes the PostgreSQL ``kb_id`` used by the MN4
+store.  Runtime authorization comes from the current PG tenant/owner identity;
+legacy ``db_path`` metadata is ignored during normal operation.
 """
 
 from __future__ import annotations
@@ -17,7 +15,8 @@ _UNSET = object()
 
 
 def marginnote_binding(context: UnifiedContext) -> dict[str, str] | None:
-    """Return ``{"name", "db_path"}`` of the selected MN4 KB, or ``None``."""
+    """Return ``{"name", "kb_id"}`` of the selected MN4 KB, or ``None``."""
+
     state = context.extension("marginnote4")
     cached = state.get(_CACHE_KEY, _UNSET)
     if cached is not _UNSET:
@@ -37,19 +36,13 @@ def _resolve(context: UnifiedContext) -> dict[str, str] | None:
         meta = resolve_kb_metadata(ref)
         if not meta or meta.get("type") != MARGINNOTE4_KB_TYPE:
             continue
-        from deeptutor.capabilities.marginnote4.store import resolve_db_path
-
-        db_path = str(resolve_db_path(ref, metadata=meta))
-        return {"name": str(meta.get("name") or ref), "db_path": db_path}
+        return {"name": str(meta.get("name") or ref), "kb_id": ref}
     return None
 
 
 def marginnote_kb_refs(context: UnifiedContext) -> set[str]:
-    """Return every selected KB ref that resolves to a connected MN4 library.
+    """Return every selected KB ref that resolves to a connected MN4 library."""
 
-    All MN4 refs are reported so the chat pipeline can exclude them from the
-    ``rag`` surface, exactly like Obsidian vault refs.
-    """
     from deeptutor.multi_user.knowledge_access import resolve_kb_metadata
 
     refs: set[str] = set()

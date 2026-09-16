@@ -204,19 +204,32 @@ export interface MasteryEvent {
   created_at: number;
 }
 
+export interface ProgressEventBatch {
+  events: MasteryEvent[];
+  cursor: string | null;
+}
+
 export async function fetchProgressEvents(
   pathId: string,
   afterRevision = 0,
   init?: RequestInit,
-): Promise<MasteryEvent[]> {
-  const res = await apiFetch(
-    apiUrl(
-      `/api/mastery-paths/progress/${encodeURIComponent(pathId)}/events?after_revision=${afterRevision}`,
-    ),
-    init,
-  );
-  if (!res.ok) throw new Error(`Failed to fetch path events: ${res.status}`);
-  return (await res.json()).events as MasteryEvent[];
+  initialCursor: string | null = null,
+): Promise<ProgressEventBatch> {
+  const events: MasteryEvent[] = [];
+  let cursor = initialCursor;
+  while (true) {
+    const query = new URLSearchParams({ after_revision: String(afterRevision) });
+    if (cursor) query.set("cursor", cursor);
+    const page = await masteryJson<ProgressEventBatch & { next_cursor: string | null }>(
+      `/api/mastery-paths/progress/${encodeURIComponent(pathId)}/events?${query}`,
+      init, "load path events",
+    );
+    events.push(...page.events);
+    if (events.length > 1000) throw new Error("LearningPaginationRequired: use the cursor page API for more than 1000 events");
+    cursor = page.cursor ?? cursor;
+    if (!page.next_cursor) return { events, cursor };
+    cursor = page.next_cursor;
+  }
 }
 
 // ── One objective's evidence trail ────────────────────────────────────────
@@ -537,20 +550,27 @@ async function masteryJson<T>(
   return res.json() as Promise<T>;
 }
 
+/** 有界兼容完整列表；大集合由 page API 的 cursor 分屏消费。 */
+async function masteryPages<T>(url: string, key: string, init: RequestInit | undefined, action: string): Promise<T[]> {
+  const rows: T[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: Record<string, unknown> = await masteryJson(
+      url + (cursor ? `${url.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}` : ""),
+      init, action,
+    );
+    if (!Array.isArray(page[key])) throw new Error(`Invalid ${action} page`);
+    rows.push(...page[key] as T[]);
+    if (rows.length > 1000) throw new Error("LearningPaginationRequired: use the cursor page API for more than 1000 results");
+    cursor = typeof page.next_cursor === "string" ? page.next_cursor : null;
+  } while (cursor);
+  return rows;
+}
+
 export async function fetchMasteryTopics(
   init?: RequestInit,
 ): Promise<MasteryTopic[]> {
-  const result = await masteryJson<{ topics: MasteryTopic[] }>(
-    "/api/mastery-paths/topics",
-    init,
-    "load topics",
-  );
-  if (!Array.isArray(result.topics)) {
-    throw new Error(
-      "Failed to load topics: the server returned an invalid response",
-    );
-  }
-  return result.topics;
+  return masteryPages<MasteryTopic>("/api/mastery-paths/topics", "topics", init, "load topics");
 }
 
 /** Just enough to name a topic. See ``fetchMasteryTopicIndex``. */
@@ -570,12 +590,7 @@ export interface MasteryTopicLabel {
 export async function fetchMasteryTopicIndex(
   init?: RequestInit,
 ): Promise<MasteryTopicLabel[]> {
-  const result = await masteryJson<{ topics: MasteryTopicLabel[] }>(
-    "/api/mastery-paths/topics/index",
-    init,
-    "load topic index",
-  );
-  return Array.isArray(result.topics) ? result.topics : [];
+  return masteryPages<MasteryTopicLabel>("/api/mastery-paths/topics/index", "topics", init, "load topic index");
 }
 
 /** One question the learner could ask here — "" when there is none to offer. */
@@ -686,18 +701,7 @@ export async function fetchMasteryTopicSessions(
   pathId: string,
   init?: RequestInit,
 ): Promise<TopicSession[]> {
-  const result = await masteryJson<{
-    path_id: string;
-    sessions: TopicSession[];
-  }>(
-    `/api/mastery-paths/topics/${encodeURIComponent(pathId)}/sessions`,
-    init,
-    "load topic sessions",
+  return masteryPages<TopicSession>(
+    `/api/mastery-paths/topics/${encodeURIComponent(pathId)}/sessions`, "sessions", init, "load topic sessions",
   );
-  if (!Array.isArray(result.sessions)) {
-    throw new Error(
-      "Failed to load topic sessions: the server returned an invalid response",
-    );
-  }
-  return result.sessions;
 }

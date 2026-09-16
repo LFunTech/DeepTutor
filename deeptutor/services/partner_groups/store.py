@@ -11,6 +11,7 @@ import threading
 
 from deeptutor.multi_user.context import get_current_user
 from deeptutor.multi_user.paths import get_current_path_service
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.partner_groups.models import (
     GroupMessage,
     GroupSessionSummary,
@@ -24,6 +25,7 @@ _LOCKS_GUARD = threading.Lock()
 
 PUBLIC_TRANSCRIPT_MAX_MESSAGES = 40
 PUBLIC_TRANSCRIPT_MAX_CHARS = 16_000
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 def _lock_for(path: Path) -> threading.Lock:
@@ -54,7 +56,12 @@ def render_recent_lines(lines: list[str], *, max_chars: int, separator: str) -> 
 class PartnerGroupStore:
     @property
     def root(self) -> Path:
-        root = get_current_path_service().get_user_root() / "partner_groups"
+        try:
+            root = get_current_path_service().get_user_root() / "partner_groups"
+        except RuntimeError as exc:
+            if _LOCAL_PATH_UNAVAILABLE not in str(exc):
+                raise
+            root = get_runtime_data_root() / "user" / "partner_groups"
         root.mkdir(parents=True, exist_ok=True)
         return root
 

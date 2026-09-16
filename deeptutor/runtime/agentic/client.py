@@ -79,6 +79,7 @@ class LLMClientConfig:
     reasoning_effort: str | None = None
     wire_api: str = "auto"
     api_format: str = "auto"
+    disable_ssl_verify: bool | None = None
 
     def __post_init__(self) -> None:
         # Same rule as LLMConfig: an explicit ``api_format`` decides
@@ -237,7 +238,10 @@ def build_openai_client(config: LLMClientConfig) -> Any:
     handle itself owns an HTTP connection pool, so reusing it is both faster
     and prevents a new allocator/socket high-water mark on every turn.
     """
-    disable_ssl_verify = bool(load_system_settings()["disable_ssl_verify"])
+    if config.disable_ssl_verify is None:
+        disable_ssl_verify = bool(load_system_settings()["disable_ssl_verify"])
+    else:
+        disable_ssl_verify = bool(config.disable_ssl_verify)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

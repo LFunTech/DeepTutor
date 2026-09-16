@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 from typing import Any
 
@@ -15,7 +16,19 @@ from deeptutor_cli.main import app
 runner = CliRunner()
 
 
+def _install_fake_authenticated_app(monkeypatch) -> None:
+    @asynccontextmanager
+    async def _fake_authenticated_app(_auth_token_env=None):  # noqa: ANN001
+        yield DeepTutorApp.__new__(DeepTutorApp)
+
+    monkeypatch.setattr("deeptutor_cli.main.authenticated_app", _fake_authenticated_app)
+    monkeypatch.setattr("deeptutor_cli.chat.authenticated_app", _fake_authenticated_app)
+    monkeypatch.setattr("deeptutor_cli.session_cmd.authenticated_app", _fake_authenticated_app)
+
+
 def _install_fake_runtime(monkeypatch, captured_requests: list[TurnRequest]) -> None:
+    _install_fake_authenticated_app(monkeypatch)
+
     async def _start_turn(self, request):  # noqa: ANN001
         if isinstance(request, dict):
             request = TurnRequest(**request)
@@ -172,6 +185,8 @@ def test_chat_repl_backslash_continuation_sends_single_message(monkeypatch) -> N
 
 
 def test_chat_repl_survives_invalid_utf8_input(monkeypatch) -> None:
+    _install_fake_authenticated_app(monkeypatch)
+
     inputs = iter(
         [
             UnicodeDecodeError("utf-8", b"\xe8\x83", 0, 2, "unexpected end of data"),
@@ -204,6 +219,8 @@ def test_plugin_info_includes_capability_aliases_and_availability() -> None:
 
 
 def test_session_list_command_uses_shared_store(monkeypatch) -> None:
+    _install_fake_authenticated_app(monkeypatch)
+
     async def _list_sessions(self, limit: int = 50, offset: int = 0):  # noqa: ANN001
         return [
             {

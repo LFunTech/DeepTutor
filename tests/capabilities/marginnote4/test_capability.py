@@ -35,16 +35,19 @@ def test_capability_inactive_without_mn4_kb(monkeypatch, tmp_path: Path) -> None
     assert cap.system_block(ctx, language="en", prompts={}) is None
 
 
-def test_capability_active_injects_db_path(monkeypatch, tmp_path: Path) -> None:
+def test_capability_active_injects_pg_kb_id_not_db_path(monkeypatch, tmp_path: Path) -> None:
     db_path = str(tmp_path / "test.db")
     _bind(monkeypatch, db_path)
     cap = MarginNoteCapability()
     ctx = UnifiedContext(user_message="hi", knowledge_bases=["mylibrary"])
     assert cap.is_active(ctx) is True
     assert tuple(cap.owned_tools) == MARGINNOTE_TOOL_NAMES
-    # db_path injected for marginnote tools, even overwriting a forged value
-    assert cap.augment_kwargs("marginnote_read", {}, ctx)["_db_path"] == db_path
-    assert cap.augment_kwargs("marginnote_read", {"_db_path": "/etc"}, ctx)["_db_path"] == db_path
+    # The capability injects the server-side PG KB id and strips any forged
+    # legacy db_path so the model cannot choose a runtime database location.
+    kwargs = cap.augment_kwargs("marginnote_read", {"_db_path": "/etc"}, ctx)
+    assert kwargs["_mn4_kb_id"] == "mylibrary"
+    assert kwargs["_marginnote_name"] == "mylibrary"
+    assert "_db_path" not in kwargs
     # but never for a non-marginnote tool
     assert "_db_path" not in cap.augment_kwargs("rag", {}, ctx)
 

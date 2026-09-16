@@ -1,3 +1,5 @@
+# ruff: noqa: F811
+# pytest fixture 重导出与注入参数同名。
 """Router-level tests for the self-service profile/avatar endpoints.
 
 These mount the real auth router on a throwaway FastAPI app with
@@ -22,35 +24,15 @@ def _auth(token: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
+from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+
+
 @pytest.fixture
-def profile_client(mu_isolated_root, monkeypatch):
-    """TestClient over the auth router with two seeded users and stub tokens.
+def profile_client(pg_dsn, tmp_path):
+    from tests.fixtures.default_pg_auth import pg_auth_client
 
-    Returns ``(client, users)`` where ``users`` maps username → stored record.
-    Valid bearer tokens: ``admin-token`` (alice), ``user-token`` (bob), and
-    ``ghost-token`` (a valid JWT whose user is absent from the local store,
-    mirroring PocketBase-backed identities).
-    """
-    import deeptutor.api.routers.auth as auth_router
-    from deeptutor.multi_user.identity import save_user
-    from deeptutor.services.auth import TokenPayload
-
-    alice = save_user("alice", "$2b$12$placeholder", role="admin")
-    bob = save_user("bob", "$2b$12$placeholder", role="user", preset="learner")
-    standard = save_user("sam", "$2b$12$placeholder", role="user")
-
-    tokens = {
-        "admin-token": TokenPayload(username="alice", role="admin", user_id=alice["id"]),
-        "user-token": TokenPayload(username="bob", role="user", user_id=bob["id"]),
-        "standard-token": TokenPayload(username="sam", role="user", user_id=standard["id"]),
-        "ghost-token": TokenPayload(username="ghost", role="user", user_id="u_ghost"),
-    }
-    monkeypatch.setattr(auth_router, "AUTH_ENABLED", True)
-    monkeypatch.setattr(auth_router, "decode_token", lambda token: tokens.get(token))
-
-    app = FastAPI()
-    app.include_router(auth_router.router, prefix="/api/auth")
-    return TestClient(app), {"alice": alice, "bob": bob, "sam": standard}
+    with pg_auth_client(pg_dsn, tmp_path / "resources") as client:
+        yield client, client.users()
 
 
 def test_profile_endpoints_require_auth(profile_client):
@@ -76,18 +58,14 @@ def test_get_profile_returns_own_record(profile_client):
     assert body["avatar"] == ""
 
 
-def test_get_profile_falls_back_to_token_claims(profile_client):
-    """Identities without a local record (PocketBase mode) still render."""
+def test_get_profile_rejects_claims_without_pg_identity(profile_client):
+    """旧 PB claim fallback 已关闭；无 PG 身份必须拒绝。"""
     client, _ = profile_client
     response = client.get("/api/auth/profile", headers=_auth("ghost-token"))
-    assert response.status_code == 200
-    body = response.json()
-    assert body["username"] == "ghost"
-    assert body["id"] == "u_ghost"
+    assert response.status_code == 401
 
 
 def test_put_profile_sets_marker_on_own_record_only(profile_client):
-    from deeptutor.multi_user.identity import load_users
 
     client, _ = profile_client
     response = client.put(
@@ -96,13 +74,12 @@ def test_put_profile_sets_marker_on_own_record_only(profile_client):
         json={"avatar": "icon:leaf:teal"},
     )
     assert response.status_code == 200
-    users = load_users()
+    users = client.users()
     assert users["bob"]["avatar"] == "icon:leaf:teal"
     assert users["alice"]["avatar"] == ""
 
 
 def test_learner_profile_endpoints_are_self_service(profile_client):
-    from deeptutor.multi_user.identity import load_users
 
     client, _ = profile_client
     url = "/api/auth/profile/learner-profile"
@@ -111,7 +88,7 @@ def test_learner_profile_endpoints_are_self_service(profile_client):
     assert client.get(url, headers=_auth("user-token")).json() == {"learner_profile": None}
     assert client.get(url, headers=_auth("admin-token")).status_code == 403
     assert client.get(url, headers=_auth("standard-token")).status_code == 403
-    assert client.get(url, headers=_auth("ghost-token")).status_code == 404
+    assert client.get(url, headers=_auth("ghost-token")).status_code == 401
 
     response = client.put(
         url,
@@ -128,8 +105,8 @@ def test_learner_profile_endpoints_are_self_service(profile_client):
         }
     }
     assert client.get(url, headers=_auth("user-token")).json() == response.json()
-    assert load_users()["bob"]["learner_profile"]["grade_level"] == "primary_4"
-    assert load_users()["alice"]["learner_profile"] is None
+    assert client.users()["bob"]["learner_profile"]["grade_level"] == "primary_4"
+    assert client.users()["alice"]["learner_profile"] is None
 
     cleared = client.put(url, headers=_auth("user-token"), json={})
     assert cleared.status_code == 200
@@ -170,7 +147,6 @@ def test_put_profile_rejects_img_and_malformed_markers(profile_client):
 
 
 def test_upload_avatar_stores_file_and_bumps_version(profile_client):
-    from deeptutor.multi_user.identity import get_avatar_file, load_users
 
     client, users = profile_client
     bob_id = users["bob"]["id"]
@@ -182,7 +158,7 @@ def test_upload_avatar_stores_file_and_bumps_version(profile_client):
     )
     assert first.status_code == 200
     assert first.json()["avatar"] == "img:1"
-    stored = get_avatar_file(bob_id)
+    stored = client.avatar_file(bob_id)
     assert stored is not None and stored.suffix == ".png"
 
     # Re-upload in another format: version bumps, stale extension is removed.
@@ -193,9 +169,9 @@ def test_upload_avatar_stores_file_and_bumps_version(profile_client):
     )
     assert second.status_code == 200
     assert second.json()["avatar"] == "img:2"
-    stored = get_avatar_file(bob_id)
+    stored = client.avatar_file(bob_id)
     assert stored is not None and stored.suffix == ".webp"
-    assert load_users()["bob"]["avatar"] == "img:2"
+    assert client.users()["bob"]["avatar"] == "img:2"
 
 
 def test_upload_avatar_validates_by_magic_bytes_not_filename(profile_client):
@@ -221,21 +197,20 @@ def test_upload_avatar_enforces_size_cap(profile_client):
     assert response.status_code == 413
 
 
-def test_upload_avatar_disabled_in_pocketbase_mode(profile_client, monkeypatch):
-    import deeptutor.api.routers.auth as auth_router
+def test_pocketbase_setting_cannot_override_pg_avatar_provider(profile_client, monkeypatch):
+    import deeptutor.services.auth as auth_service
 
     client, _ = profile_client
-    monkeypatch.setattr(auth_router, "POCKETBASE_ENABLED", True)
+    monkeypatch.setattr(auth_service, "POCKETBASE_ENABLED", True)
     response = client.put(
         "/api/auth/profile/avatar",
         headers=_auth("user-token"),
         files={"file": ("photo.png", PNG_BYTES, "image/png")},
     )
-    assert response.status_code == 400
+    assert response.status_code == 200
 
 
 def test_delete_avatar_removes_file_and_resets_marker(profile_client):
-    from deeptutor.multi_user.identity import get_avatar_file, load_users
 
     client, users = profile_client
     client.put(
@@ -246,12 +221,11 @@ def test_delete_avatar_removes_file_and_resets_marker(profile_client):
 
     response = client.delete("/api/auth/profile/avatar", headers=_auth("user-token"))
     assert response.status_code == 200
-    assert get_avatar_file(users["bob"]["id"]) is None
-    assert load_users()["bob"]["avatar"] == ""
+    assert client.avatar_file(users["bob"]["id"]) is None
+    assert client.users()["bob"]["avatar"] == ""
 
 
 def test_picking_icon_after_upload_drops_the_image_file(profile_client):
-    from deeptutor.multi_user.identity import get_avatar_file
 
     client, users = profile_client
     client.put(
@@ -264,7 +238,7 @@ def test_picking_icon_after_upload_drops_the_image_file(profile_client):
         headers=_auth("user-token"),
         json={"avatar": "icon:leaf:teal"},
     )
-    assert get_avatar_file(users["bob"]["id"]) is None
+    assert client.avatar_file(users["bob"]["id"]) is None
 
 
 def test_avatar_serving_headers_and_visibility(profile_client):
@@ -286,7 +260,6 @@ def test_avatar_serving_headers_and_visibility(profile_client):
 
 def test_admin_user_deletion_removes_avatar_file(profile_client):
     """Deleting an account must not leave its avatar image orphaned on disk."""
-    from deeptutor.multi_user.identity import get_avatar_file
 
     client, users = profile_client
     client.put(
@@ -294,11 +267,11 @@ def test_admin_user_deletion_removes_avatar_file(profile_client):
         headers=_auth("user-token"),
         files={"file": ("photo.png", PNG_BYTES, "image/png")},
     )
-    assert get_avatar_file(users["bob"]["id"]) is not None
+    assert client.avatar_file(users["bob"]["id"]) is not None
 
     response = client.delete("/api/auth/users/bob", headers=_auth("admin-token"))
     assert response.status_code == 200
-    assert get_avatar_file(users["bob"]["id"]) is None
+    assert client.avatar_file(users["bob"]["id"]) is None
 
 
 def test_avatar_serving_rejects_missing_and_malformed_ids(profile_client):

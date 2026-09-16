@@ -8,14 +8,23 @@ from deeptutor.multi_user.models import CurrentUser, UserScope
 
 
 def make_user(tmp_path, role="user"):
-    uid = "u_admin" if role == "admin" else "u_alice"
+    uid = "u_admin" if role == "admin" else "u_tenant_admin" if role == "tenant_admin" else "u_alice"
+    if role == "tenant_admin":
+        scope = UserScope(
+            kind="tenant",
+            user_id=uid,
+            tenant_id="00000000-0000-0000-0000-000000000001",
+            root=None,
+        )
+    else:
+        scope = UserScope(
+            kind="admin" if role == "admin" else "user", user_id=uid, root=tmp_path / uid
+        )
     return CurrentUser(
         id=uid,
         username="admin" if role == "admin" else "alice",
         role=role,
-        scope=UserScope(
-            kind="admin" if role == "admin" else "user", user_id=uid, root=tmp_path / uid
-        ),
+        scope=scope,
     )
 
 
@@ -56,3 +65,55 @@ def test_non_admin_settings_catalog_is_forbidden(tmp_path):
         assert exc.value.status_code == 403
     finally:
         reset_current_user(token)
+
+
+@pytest.mark.asyncio
+async def test_tenant_admin_can_manage_settings_catalog(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        settings_router,
+        "get_model_catalog_service",
+        lambda: type("Catalog", (), {"load": lambda self: {"services": {}}})(),
+    )
+    monkeypatch.setattr(settings_router, "load_ui_settings", lambda: {"theme": "snow"})
+    monkeypatch.setattr(settings_router, "_provider_choices", lambda: [])
+    monkeypatch.setattr(settings_router, "_connection_targets", lambda: [])
+
+    token = set_current_user(make_user(tmp_path, role="tenant_admin"))
+    try:
+        settings_router._require_settings_admin()
+        payload = await settings_router.get_settings()
+        assert payload["catalog"] == {"services": {}}
+    finally:
+        reset_current_user(token)
+
+
+def test_tenant_admin_settings_draft_uses_deployment_scope_not_tenant_local_path(
+    tmp_path, monkeypatch
+):
+    from deeptutor.services.config import settings_draft
+
+    admin_draft = tmp_path / "admin-settings" / "settings_draft.json"
+
+    class AdminPathService:
+        def get_settings_file(self, name):
+            assert name == "settings_draft"
+            return admin_draft
+
+    def tenant_local_path_unavailable():
+        raise RuntimeError("local path service is unavailable for this scope")
+
+    settings_draft.SettingsDraftService._instances.clear()
+    monkeypatch.setattr(settings_draft, "get_path_service", tenant_local_path_unavailable)
+    monkeypatch.setattr(
+        "deeptutor.multi_user.paths.get_admin_path_service",
+        lambda: AdminPathService(),
+    )
+
+    token = set_current_user(make_user(tmp_path, role="tenant_admin"))
+    try:
+        service = settings_draft.get_settings_draft_service()
+        assert service.path == admin_draft.resolve()
+        assert service.load()["catalog"] is None
+    finally:
+        reset_current_user(token)
+        settings_draft.SettingsDraftService._instances.clear()

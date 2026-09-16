@@ -1782,6 +1782,12 @@ async def get_supported_file_types():
     )
 
 
+@router.get("/knowledge-bases/upload-policy", response_model=SupportedFileTypesInfo)
+async def get_upload_policy_legacy_alias():
+    """Backward-compatible alias for older web bundles."""
+    return await get_supported_file_types()
+
+
 @router.get("/knowledge-bases/configs")
 async def get_all_kb_configs():
     """Get all knowledge base configurations from centralized config file."""
@@ -2412,6 +2418,7 @@ async def list_knowledge_bases():
                     refresh_config=False,
                     default_name=default_name,
                 )
+                metadata = info.get("metadata") or {}
                 logger.debug(f"Successfully got info for KB '{name}': {info.get('statistics', {})}")
                 result.append(
                     KnowledgeBaseInfo(
@@ -2419,13 +2426,13 @@ async def list_knowledge_bases():
                         name=info["name"],
                         is_default=info["is_default"],
                         statistics=info.get("statistics", {}),
-                        metadata=info.get("metadata"),
+                        metadata=metadata,
                         path=info.get("path"),
                         status=info.get("status"),
                         progress=info.get("progress"),
                         source="admin" if get_current_user().is_admin else "user",
                         assigned=False,
-                        read_only=False,
+                        read_only=is_connected_kb(metadata) or is_connected_kb(info),
                         provenance_label=access_by_id.get(f"{own_prefix}{info['name']}", {}).get(
                             "provenance_label"
                         ),

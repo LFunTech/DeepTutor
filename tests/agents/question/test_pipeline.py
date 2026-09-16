@@ -293,14 +293,28 @@ def test_emit_quiz_question_structures_metadata() -> None:
 def tmp_sqlite_store(tmp_path: Path):
     """Spin up an isolated SQLite session store + force the global getter
     to return it for the duration of the test."""
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
     from deeptutor.services.session.sqlite_store import SQLiteSessionStore
 
-    store = SQLiteSessionStore(db_path=tmp_path / "session.db")
-    with patch(
-        "deeptutor.services.session.sqlite_store.get_sqlite_session_store",
-        return_value=store,
-    ):
-        yield store
+    token = set_current_user(
+        CurrentUser(
+            id="legacy-question-history",
+            username="legacy-question-history",
+            role="user",
+            scope=UserScope(
+                kind="user",
+                user_id="legacy-question-history",
+                root=tmp_path / "legacy-question-history",
+            ),
+        )
+    )
+    try:
+        store = SQLiteSessionStore(db_path=tmp_path / "session.db")
+        with patch("deeptutor.services.session.get_session_store", return_value=store):
+            yield store
+    finally:
+        reset_current_user(token)
 
 
 def test_history_loader_returns_session_scoped_entries(tmp_sqlite_store) -> None:

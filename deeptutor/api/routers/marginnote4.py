@@ -1,24 +1,16 @@
 """HTTP bridge for MarginNote 4 Add-on devices.
 
-The MN4 Add-on (JavaScript running inside MarginNote 4) calls these endpoints
-to pair with this DeepTutor instance and push synced study data.
-
-Authentication layers:
-* ``/pair``, ``/devices``, ``/status`` -- DeepTutor session auth (the logged-in
-  user manages their own devices). The router is mounted with ``_auth`` in
-  ``main.py``.
-* ``/sync``, ``/heartbeat`` -- device-token auth via
-  ``Authorization: MarginNote <device_id>:<token>``. The Add-on stores the
-  token received at pairing time.
-
-Phase 1 scope: device pairing, incremental sync, heartbeat. Write-back to MN4
-(propose / apply / verify) is Phase 2.
+All runtime state is PostgreSQL-backed.  Session-authenticated endpoints manage
+one user's devices for the requested KB, while device endpoints authenticate with
+``Authorization: MarginNote <device_id>:<token>``.  The PG device id carries the
+paired owner in an opaque prefix so unauthenticated sync can bind the correct
+owner scope before verifying the token; no filesystem ``db_path`` participates
+in authorization.
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -26,8 +18,12 @@ from pydantic import BaseModel, Field
 
 from deeptutor.api.routers.auth import require_auth
 from deeptutor.capabilities.marginnote4.models import MarginNoteObject, SyncBatch
-from deeptutor.capabilities.marginnote4.store import MarginNoteStore, resolve_db_path
-from deeptutor.services.path_service import PathService
+from deeptutor.persistence.postgres.marginnote import (
+    MarginNoteCursorConflict,
+    PostgresMarginNoteStore,
+    owner_id_from_device_id,
+)
+from deeptutor.persistence.postgres.scope import TenantScope
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,49 +34,73 @@ MAX_SYNC_BATCH = 2000
 
 
 def _requested_kb(request: Request) -> str:
-    """The MN4 library this request addresses.
+    """The connected MN4 library this request addresses."""
 
-    In Phase 1 a single default store serves all devices; ``X-MN4-KB`` selects
-    a dedicated database instead. The header is only a *selector* — the device
-    token is the credential, and it is checked against whichever store the
-    header names, so naming another library grants nothing.
-    """
-    return request.headers.get("x-mn4-kb", "default")
+    kb_id = request.headers.get("x-mn4-kb", "default").strip()
+    if not kb_id or "\x00" in kb_id or len(kb_id) > 255:
+        raise HTTPException(400, "Invalid MarginNote KB selector.")
+    return kb_id
 
 
-def _device_db_path(kb_name: str) -> Path:
-    """The database the device-token endpoints address.
+def _runtime(request: Request):
+    runtime = getattr(request.app.state, "postgres_runtime", None)
+    if runtime is None:
+        try:
+            from deeptutor.app.container import get_application_container
 
-    Those endpoints carry no session, so ``get_path_service()`` would hand them
-    whatever the ambient context happens to be — the default workspace in
-    practice. Naming it explicitly keeps the sync path from drifting away from
-    the store pairing wrote to, and gives :func:`pair_device` something to
-    check itself against.
-    """
-    return resolve_db_path(kb_name, path_service=PathService.get_instance())
-
-
-def _store_for(request: Request) -> MarginNoteStore:
-    """Resolve (creating if absent) the store for a session-authenticated call."""
-    return MarginNoteStore(resolve_db_path(_requested_kb(request)))
+            runtime = getattr(get_application_container(), "postgres_runtime", None)
+        except Exception as exc:  # noqa: BLE001 - misconfigured runtime maps to API readiness
+            logger.debug("PostgreSQL MarginNote runtime is unavailable", exc_info=True)
+            raise HTTPException(503, "PostgreSQL MarginNote runtime is not configured") from exc
+    if runtime is None or getattr(runtime, "sync_db", None) is None:
+        raise HTTPException(503, "PostgreSQL MarginNote runtime is not configured")
+    return runtime
 
 
-def _auth_device(request: Request, authorization: str | None) -> tuple[str, MarginNoteStore]:
-    """Validate the device token and return ``(device_id, store)``.
+def _runtime_tenant_id(runtime) -> str:
+    tenant_id = str(getattr(getattr(runtime, "config", None), "tenant_id", "") or "")
+    if not tenant_id:
+        raise HTTPException(503, "PostgreSQL tenant is not configured")
+    return tenant_id
 
-    Reached with no session, so nothing here may create state from
-    caller-supplied input: ``open_existing`` keeps an unauthenticated request
-    from materialising a directory and a schema'd database per distinct
-    ``X-MN4-KB`` value.
-    """
+
+def _store_for_scope(runtime, scope: TenantScope, kb_id: str) -> PostgresMarginNoteStore:
+    factory = getattr(runtime, "marginnote_store_for_scope", None)
+    if callable(factory):
+        return factory(scope, kb_id)
+    return PostgresMarginNoteStore(runtime.sync_db, scope, kb_id=kb_id)
+
+
+def _store_for(request: Request) -> PostgresMarginNoteStore:
+    """Resolve the store for a session-authenticated DeepTutor user."""
+
+    kb_id = _requested_kb(request)
+    runtime = _runtime(request)
+    factory = getattr(runtime, "marginnote_store_for_current_user", None)
+    if callable(factory):
+        return factory(kb_id)
+    scope_factory = getattr(runtime, "scope_for_current_user", None)
+    if not callable(scope_factory):
+        raise HTTPException(503, "PostgreSQL MarginNote runtime cannot resolve current user")
+    return _store_for_scope(runtime, scope_factory(), kb_id)
+
+
+def _auth_device(request: Request, authorization: str | None) -> tuple[str, PostgresMarginNoteStore]:
+    """Validate the device token and return ``(device_id, store)``."""
+
     if not authorization or not authorization.startswith("MarginNote "):
         raise HTTPException(401, "Missing or malformed Authorization header.")
     raw = authorization[len("MarginNote ") :]
     if ":" not in raw:
         raise HTTPException(401, "Invalid Authorization format.")
     device_id, token = raw.split(":", 1)
-    store = MarginNoteStore.open_existing(_device_db_path(_requested_kb(request)))
-    if store is None or not store.verify_token(device_id, token):
+    owner_id = owner_id_from_device_id(device_id)
+    if owner_id is None:
+        raise HTTPException(403, "Invalid device credentials.")
+    runtime = _runtime(request)
+    scope = TenantScope(_runtime_tenant_id(runtime), owner_id)
+    store = _store_for_scope(runtime, scope, _requested_kb(request))
+    if not store.verify_token(device_id, token):
         raise HTTPException(403, "Invalid device credentials.")
     store.touch_device(device_id)
     return device_id, store
@@ -119,9 +139,6 @@ class SyncObjectIn(BaseModel):
 
 
 class SyncRequest(BaseModel):
-    # One batch, not one library: the Add-on pages through its backlog, so an
-    # unbounded list only ever meant a token holder could pin the event loop
-    # and the database on a single request.
     cursor: str = Field("", max_length=256)
     objects: list[SyncObjectIn] = Field(default_factory=list, max_length=MAX_SYNC_BATCH)
     deleted_ids: list[str] = Field(default_factory=list, max_length=MAX_SYNC_BATCH)
@@ -148,21 +165,8 @@ class DeviceInfo(BaseModel):
 
 @router.post("/pair", response_model=PairResponse, dependencies=_auth)
 async def pair_device(body: PairRequest, request: Request) -> PairResponse:
-    """Pair a new MN4 device. Requires a DeepTutor session.
+    """Pair a new MN4 device for the current authenticated PG owner."""
 
-    Returns a one-time token the Add-on stores and presents on every sync.
-    """
-    kb_name = _requested_kb(request)
-    if resolve_db_path(kb_name) != _device_db_path(kb_name):
-        # Pairing runs under a session and resolves the caller's own
-        # workspace; /sync does not and resolves the default one. Where those
-        # differ, pairing would hand out a token that 403s on every sync
-        # forever, so refuse instead of issuing a dead credential.
-        raise HTTPException(
-            501,
-            "MN4 device sync is not available for this account yet: pairing and "
-            "sync would resolve different workspaces.",
-        )
     store = _store_for(request)
     device, token = store.pair_device(device_name=body.device_name, device_kind=body.device_kind)
     logger.info("Paired MN4 device %s (%s)", device.device_id, device.device_name)
@@ -176,7 +180,8 @@ async def pair_device(body: PairRequest, request: Request) -> PairResponse:
 
 @router.get("/devices", response_model=list[DeviceInfo], dependencies=_auth)
 async def list_devices(request: Request) -> list[DeviceInfo]:
-    """List all paired devices."""
+    """List all paired devices for the current owner and KB."""
+
     store = _store_for(request)
     return [
         DeviceInfo(
@@ -194,6 +199,7 @@ async def list_devices(request: Request) -> list[DeviceInfo]:
 @router.delete("/devices/{device_id}", dependencies=_auth)
 async def revoke_device(device_id: str, request: Request) -> dict[str, str]:
     """Revoke a paired device."""
+
     store = _store_for(request)
     if not store.revoke_device(device_id):
         raise HTTPException(404, f"Device {device_id} not found.")
@@ -202,7 +208,8 @@ async def revoke_device(device_id: str, request: Request) -> dict[str, str]:
 
 @router.get("/status", dependencies=_auth)
 async def status(request: Request) -> dict[str, Any]:
-    """Health check and summary stats."""
+    """Health check and summary stats for the selected KB."""
+
     store = _store_for(request)
     return {
         "status": "ok",
@@ -221,6 +228,7 @@ async def sync_objects(
     authorization: str | None = Header(None),
 ) -> SyncResponse:
     """Receive an incremental sync batch from a paired MN4 device."""
+
     device_id, store = _auth_device(request, authorization)
     objects = [
         MarginNoteObject(
@@ -242,13 +250,17 @@ async def sync_objects(
         )
         for o in body.objects
     ]
-    batch = SyncBatch(
-        device_id=device_id,
-        cursor=body.cursor,
-        objects=objects,
-        deleted_ids=body.deleted_ids,
-    )
-    result = store.ingest(batch)
+    try:
+        result = store.ingest(
+            SyncBatch(
+                device_id=device_id,
+                cursor=body.cursor,
+                objects=objects,
+                deleted_ids=body.deleted_ids,
+            )
+        )
+    except MarginNoteCursorConflict as exc:
+        raise HTTPException(409, "Stale MarginNote sync cursor") from exc
     logger.info(
         "MN4 sync from %s: +%d ~%d -%d",
         device_id,
@@ -270,6 +282,7 @@ async def heartbeat(
     authorization: str | None = Header(None),
 ) -> dict[str, Any]:
     """Lightweight liveness check. Updates last_seen for the device."""
+
     device_id, store = _auth_device(request, authorization)
     return {
         "status": "ok",

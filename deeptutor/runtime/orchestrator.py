@@ -9,12 +9,13 @@ All consumers (CLI, WebSocket, SDK) call the orchestrator.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, AsyncIterator
 import uuid
 
 from deeptutor.capabilities.protocol import AGENT_OUTPUT, EVENT_METADATA
-from deeptutor.core.context import UnifiedContext
+from deeptutor.core.context import UnifiedContext, execution_error_text
 from deeptutor.core.stream import StreamEvent, StreamEventType
 from deeptutor.events.event_bus import Event, EventType, get_event_bus
 from deeptutor.runtime.registry.capability_registry import get_capability_registry
@@ -53,9 +54,9 @@ class ChatOrchestrator:
     the ``StreamBus`` lifecycle, and publishes completion events.
     """
 
-    def __init__(self, capability_registry=None) -> None:  # noqa: ANN001
+    def __init__(self, capability_registry=None, *, tool_registry=None) -> None:  # noqa: ANN001
         self._cap_registry = capability_registry or get_capability_registry()
-        self._tool_registry = get_tool_registry()
+        self._tool_registry = tool_registry if tool_registry is not None else get_tool_registry()
 
     async def handle(self, context: UnifiedContext) -> AsyncIterator[StreamEvent]:
         """
@@ -135,7 +136,11 @@ class ChatOrchestrator:
                 await capability.run(context, bus)
             except Exception as exc:
                 status = "failed"
-                logger.error("Capability %s failed: %s", cap_name, exc, exc_info=True)
+                redact = context.runtime.resource_capabilities is not None
+                public_error = execution_error_text(exc, redact=redact)
+                logger.error(
+                    "Capability %s failed: %s", cap_name, public_error, exc_info=not redact
+                )
                 error_metadata: dict[str, Any] = {
                     "turn_terminal": True,
                     "status": status,
@@ -150,7 +155,7 @@ class ChatOrchestrator:
                 if isinstance(partial_response, bool):
                     error_metadata["partial_response"] = partial_response
                 await bus.error(
-                    str(exc),
+                    public_error,
                     source=cap_name,
                     metadata=error_metadata,
                 )
@@ -169,10 +174,16 @@ class ChatOrchestrator:
         stream = bus.subscribe()
         task = asyncio.create_task(_run())
 
-        async for event in stream:
-            yield event
-
-        await task
+        try:
+            async for event in stream:
+                yield event
+            await task
+        finally:
+            # 订阅者取消不能留下仍在调用模型/等待 ask_user 的孤立能力任务。
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         await self._publish_completion(context, cap_name)
 
     async def _publish_completion(self, context: UnifiedContext, cap_name: str) -> None:

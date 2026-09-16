@@ -94,17 +94,29 @@ def _warn_stale_ca_var(name: str, *, kind: str) -> None:
     )
 
 
-def build_openai_http_client(**kwargs: Any) -> httpx.AsyncClient | None:
+def build_openai_http_client(
+    *, disable_ssl_verify: bool | None = None, **kwargs: Any
+) -> httpx.AsyncClient | None:
     """Build a custom SDK httpx client when DISABLE_SSL_VERIFY is enabled."""
     sanitize_invalid_ssl_env()
-    if not disable_ssl_verify_enabled():
+    if disable_ssl_verify is None:
+        enabled = disable_ssl_verify_enabled()
+    else:
+        enabled = bool(disable_ssl_verify)
+        if enabled and os.getenv("ENVIRONMENT", "").strip().lower() in {"prod", "production"}:
+            raise LLMConfigError("DISABLE_SSL_VERIFY is not allowed in production")
+    if not enabled:
         return None
     return httpx.AsyncClient(verify=False, **kwargs)  # nosec B501
 
 
-def openai_client_kwargs(**httpx_kwargs: Any) -> dict[str, httpx.AsyncClient]:
+def openai_client_kwargs(
+    *, disable_ssl_verify: bool | None = None, **httpx_kwargs: Any
+) -> dict[str, httpx.AsyncClient]:
     """Return kwargs to pass into ``AsyncOpenAI`` for custom HTTP behavior."""
-    client = build_openai_http_client(**httpx_kwargs)
+    client = build_openai_http_client(
+        disable_ssl_verify=disable_ssl_verify, **httpx_kwargs
+    )
     return {"http_client": client} if client is not None else {}
 
 

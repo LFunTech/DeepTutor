@@ -44,6 +44,8 @@ Extra hubs are declared in ``settings/skill_hubs.json``::
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
+import inspect
 from datetime import datetime, timezone
 import json
 import logging
@@ -771,6 +773,55 @@ def install_from_hub(
             extra_tags=[hub],
             origin=origin,
         )
+    finally:
+        fetched.cleanup()
+    return HubInstallOutcome(result=result, ref=fetched.ref, verdict=verdict)
+
+
+async def install_from_hub_async(
+    ref: str,
+    *,
+    service: Any,
+    rename_to: str | None = None,
+    force: bool = False,
+    allow_unverified: bool = False,
+    provider: SkillHubProvider | None = None,
+) -> HubInstallOutcome:
+    """Async variant for PG/ObjectStore-backed skill services."""
+
+    hub, slug, version = parse_hub_ref(ref)
+    resolved = provider or get_hub_provider(hub)
+    owner_handle, skill_slug = split_owner_slug(slug)
+
+    verdict = await asyncio.to_thread(resolved.verify, slug, version=version)
+    if verdict.status == "suspicious" and not allow_unverified:
+        raise SkillImportError(
+            f"{hub} flags `{slug}` as suspicious"
+            + (f" ({verdict.detail})" if verdict.detail else "")
+            + ". Pass --allow-unverified to install anyway."
+        )
+
+    fetched = await asyncio.to_thread(resolved.fetch, slug, version=version)
+    origin = {
+        "hub": hub,
+        "slug": skill_slug,
+        "version": fetched.ref.version or version or "",
+        "verdict": verdict.status,
+        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    if owner_handle:
+        origin["owner_handle"] = owner_handle
+    try:
+        result = service.install_tree(
+            fetched.root,
+            rename_to=rename_to,
+            fallback_description=fetched.ref.summary or None,
+            force=force,
+            extra_tags=[hub],
+            origin=origin,
+        )
+        if inspect.isawaitable(result):
+            result = await result
     finally:
         fetched.cleanup()
     return HubInstallOutcome(result=result, ref=fetched.ref, verdict=verdict)

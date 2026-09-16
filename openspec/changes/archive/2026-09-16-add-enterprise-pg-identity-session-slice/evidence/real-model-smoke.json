@@ -1,0 +1,248 @@
+{
+  "model": "qwen-plus",
+  "secret_source": ".secrets/.test-secrets（仅进程内读取）",
+  "endpoint_host": "llm-fhu3jf04d5umyeda.cn-beijing.maas.aliyuncs.com",
+  "elapsed_seconds": 62.1,
+  "turns": [
+    {
+      "turn_id": "turn_82222e76bff14e9eb1238fedf4a43010",
+      "events": 48,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0003977999999999999,
+          "total_tokens": 2100,
+          "total_calls": 1,
+          "prompt_tokens": 1916,
+          "completion_tokens": 184
+        }
+      ]
+    },
+    {
+      "turn_id": "turn_ff607edeac364b7888390ce6957312ea",
+      "events": 78,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0004970999999999999,
+          "total_tokens": 2324,
+          "total_calls": 1,
+          "prompt_tokens": 1994,
+          "completion_tokens": 330
+        }
+      ]
+    },
+    {
+      "turn_id": "turn_6b494fb8c04c4967babdbebf5cf93d1d",
+      "events": 141,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0006746999999999999,
+          "total_tokens": 2620,
+          "total_calls": 1,
+          "prompt_tokens": 1994,
+          "completion_tokens": 626
+        }
+      ]
+    },
+    {
+      "turn_id": "turn_478c2d22784f4c4d966fbd19f36d0125",
+      "events": 185,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0011055,
+          "total_tokens": 4838,
+          "total_calls": 2,
+          "prompt_tokens": 3994,
+          "completion_tokens": 844
+        }
+      ]
+    }
+  ],
+  "budget_limits": {
+    "max_rounds_per_turn": 3,
+    "max_output_tokens_per_chat_call": 512,
+    "turns": 4,
+    "title_max_tokens": 80,
+    "note": "max_tokens为发送到供应商的请求参数，不是含推理token的费用硬上限；本轮实测标题max_tokens=80而completion_tokens含1854个推理token，不能据此宣称费用封顶。",
+    "max_total_model_http_calls": 14
+  },
+  "actual_model_calls": [
+    {
+      "max_output_tokens": 512,
+      "message_count": 2,
+      "usage": {
+        "completion_tokens": 184,
+        "prompt_tokens": 1916,
+        "total_tokens": 2100,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 122,
+          "rejected_prediction_tokens": null
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cache_write_tokens": null,
+          "cached_tokens": 1791
+        }
+      },
+      "stream_finished": true,
+      "include_usage": true,
+      "elapsed_seconds": 2.87
+    },
+    {
+      "max_output_tokens": 80,
+      "message_count": 2,
+      "usage": {
+        "completion_tokens": 1863,
+        "prompt_tokens": 156,
+        "total_tokens": 2019,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 1854,
+          "rejected_prediction_tokens": null
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cache_write_tokens": null,
+          "cached_tokens": 0
+        }
+      },
+      "stream_finished": true,
+      "include_usage": true,
+      "elapsed_seconds": 19.98
+    },
+    {
+      "max_output_tokens": 512,
+      "message_count": 4,
+      "usage": {
+        "completion_tokens": 330,
+        "prompt_tokens": 1994,
+        "total_tokens": 2324,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 301,
+          "rejected_prediction_tokens": null
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cache_write_tokens": null,
+          "cached_tokens": 1791
+        }
+      },
+      "stream_finished": true,
+      "include_usage": true,
+      "elapsed_seconds": 4.93
+    },
+    {
+      "max_output_tokens": 512,
+      "message_count": 4,
+      "usage": {
+        "completion_tokens": 626,
+        "prompt_tokens": 1994,
+        "total_tokens": 2620,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 596,
+          "rejected_prediction_tokens": null
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cache_write_tokens": null,
+          "cached_tokens": 0
+        }
+      },
+      "stream_finished": true,
+      "include_usage": true,
+      "elapsed_seconds": 9.36
+    },
+    {
+      "max_output_tokens": 512,
+      "message_count": 4,
+      "usage": {
+        "completion_tokens": 613,
+        "prompt_tokens": 1933,
+        "total_tokens": 2546,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 523,
+          "rejected_prediction_tokens": null
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cache_write_tokens": null,
+          "cached_tokens": 1855
+        }
+      },
+      "stream_finished": true,
+      "include_usage": true,
+      "elapsed_seconds": 8.9
+    },
+    {
+      "max_output_tokens": 512,
+      "message_count": 4,
+      "usage": {
+        "completion_tokens": 231,
+        "prompt_tokens": 2061,
+        "total_tokens": 2292,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 191,
+          "rejected_prediction_tokens": null
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cache_write_tokens": null,
+          "cached_tokens": 1791
+        }
+      },
+      "stream_finished": true,
+      "include_usage": true,
+      "elapsed_seconds": 3.83
+    },
+    {
+      "max_output_tokens": 80,
+      "message_count": 2,
+      "usage": {
+        "completion_tokens": 993,
+        "prompt_tokens": 151,
+        "total_tokens": 1144,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 985,
+          "rejected_prediction_tokens": null
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": null,
+          "cache_write_tokens": null,
+          "cached_tokens": 0
+        }
+      },
+      "stream_finished": true,
+      "include_usage": true,
+      "elapsed_seconds": 11.52
+    }
+  ],
+  "note": "真实调用，不含凭证/正文；cost_summary仅core聊天用量估算，actual_model_calls记录已观察到的服务端用量。usage=null表示未获得usage末帧，不能按0费用计算；标题受20秒超时/80输出tokens约束。均非供应商账单。",
+  "observed_totals": {
+    "prompt_tokens": 10205,
+    "completion_tokens": 4840,
+    "total_tokens": 15045
+  },
+  "accepted_flows": [
+    "HTTP login/history",
+    "WS chat",
+    "WS continue with prior answer in actual model request",
+    "WS regenerate",
+    "SDK ask_user reply and completion"
+  ]
+}

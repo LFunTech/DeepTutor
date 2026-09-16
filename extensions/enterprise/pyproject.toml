@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deeptutor-enterprise"
+version = "0.1.0"
+description = "DeepTutor 企业组合与 PostgreSQL 身份会话实现"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = ["deeptutor>=1.6.7,<1.7", "psycopg[binary]==3.3.5", "psycopg-pool==3.3.1", "packaging>=24"]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "pytest-asyncio==1.4.0"]
+
+[project.scripts]
+deeptutor-enterprise = "deeptutor_enterprise.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

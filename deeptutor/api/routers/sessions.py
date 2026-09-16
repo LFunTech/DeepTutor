@@ -4,15 +4,13 @@ Unified session history API.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from deeptutor.learning.storage import LearningStore
-from deeptutor.services.session import get_session_store, get_sqlite_session_store
+from deeptutor.services.session import get_session_store
 from deeptutor.services.session.organization import (
     list_all_sessions_snapshot,
     validate_parent_assignment,
@@ -27,11 +25,38 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-class SessionRenameRequest(BaseModel):
+def _session_version_kwargs(request, store):
+    value = request.headers.get("if-match") if request is not None else None
+    if value is None:
+        return {}
+    if not getattr(store, "supports_session_versions", False):
+        raise HTTPException(status_code=400, detail="Session versions are unavailable")
+    try:
+        version = int(value.strip('"'))
+        if version < 1:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session version") from None
+    return {"expected_version": version}
+
+
+class SessionMutationRequest(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def validate_configured_fields(cls, value):
+        from deeptutor.core.providers import get_providers
+
+        if get_providers() is not None and isinstance(value, dict):
+            if set(value) - set(cls.model_fields):
+                raise ValueError("Requested session fields are unavailable")
+        return value
+
+
+class SessionRenameRequest(SessionMutationRequest):
     title: str = Field(..., min_length=1, max_length=100)
 
 
-class BranchSelectionRequest(BaseModel):
+class BranchSelectionRequest(SessionMutationRequest):
     """Edit-branch picker state: `{parent_message_id: chosen_child_id}`.
 
     Stored inside the session preferences blob so it survives reloads
@@ -41,7 +66,7 @@ class BranchSelectionRequest(BaseModel):
     selected_branches: dict[str, int] = Field(default_factory=dict)
 
 
-class SessionOrganizationRequest(BaseModel):
+class SessionOrganizationRequest(SessionMutationRequest):
     """User-controlled organization metadata stored with the conversation."""
 
     course_id: str | None = None
@@ -188,9 +213,11 @@ async def get_session_ask_hint(session_id: str) -> dict[str, Any]:
 
 
 @router.patch("/{session_id}")
-async def rename_session(session_id: str, payload: SessionRenameRequest):
+async def rename_session(session_id: str, payload: SessionRenameRequest, request: Request = None):
     store = get_session_store()
-    updated = await store.update_session_title(session_id, payload.title)
+    updated = await store.update_session_title(
+        session_id, payload.title, **_session_version_kwargs(request, store)
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Session not found")
     session = await store.get_session(session_id)
@@ -198,7 +225,16 @@ async def rename_session(session_id: str, payload: SessionRenameRequest):
 
 
 @router.patch("/{session_id}/organization")
-async def update_session_organization(session_id: str, payload: SessionOrganizationRequest):
+async def update_session_organization(
+    session_id: str, payload: SessionOrganizationRequest, request: Request = None
+):
+    from deeptutor.core.providers import get_providers
+
+    providers = get_providers()
+    if providers is not None:
+        if providers.configuration is None:
+            raise RuntimeError("session policy provider is not configured")
+        providers.configuration.validate_session_update(payload.model_dump(exclude_unset=True))
     store = get_session_store()
     session = await store.get_session(session_id)
     if session is None:
@@ -240,7 +276,9 @@ async def update_session_organization(session_id: str, payload: SessionOrganizat
         updates["archived"] = bool(payload.archived)
 
     if updates:
-        await store.update_session_preferences(session_id, updates)
+        await store.update_session_preferences(
+            session_id, updates, **_session_version_kwargs(request, store)
+        )
         cascade_updates = {key: updates[key] for key in ("course_id", "archived") if key in updates}
         if cascade_updates:
             # Selected-text tutor threads stay with their source conversation.
@@ -255,36 +293,46 @@ async def update_session_organization(session_id: str, payload: SessionOrganizat
 
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
-    store = get_session_store()
-    list_active_turns = getattr(store, "list_active_turns", None)
-    if callable(list_active_turns):
-        from deeptutor.services.session import get_turn_runtime_manager
+    from deeptutor.core.providers import get_providers
 
-        runtime = get_turn_runtime_manager()
-        for turn in await list_active_turns(session_id):
-            await runtime.cancel_turn(turn["id"])
-    deleted = await store.delete_session(session_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Session not found")
-    try:
-        await asyncio.to_thread(LearningStore().detach_session, session_id)
-    except Exception:
-        logger.exception("failed to detach mastery paths for session %s", session_id)
-    try:
-        await get_attachment_store().delete_session(session_id)
-    except Exception:
-        logger.exception("failed to clean up attachments for session %s", session_id)
-    return {"deleted": True, "session_id": session_id}
+    providers = get_providers()
+    if providers is not None:
+        if providers.container is None:
+            raise RuntimeError("application container is not configured")
+        from fastapi.responses import JSONResponse
+
+        from deeptutor.services.session.deletion import SessionCleanupPending
+        from deeptutor.services.session.question_bank import QuestionBankReferenceConflict
+
+        try:
+            deleted = await providers.container.turns.delete_session(session_id)
+        except QuestionBankReferenceConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        except SessionCleanupPending as exc:
+            return JSONResponse(
+                status_code=202,
+                content={"deleted": True, "session_id": session_id, "cleanup": exc.report},
+            )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"deleted": True, "session_id": session_id}
+    raise HTTPException(
+        status_code=503, detail="PostgreSQL application deletion provider is not configured"
+    )
 
 
 @router.put("/{session_id}/branch-selection")
-async def update_branch_selection(session_id: str, payload: BranchSelectionRequest):
-    store = get_sqlite_session_store()
+async def update_branch_selection(
+    session_id: str, payload: BranchSelectionRequest, request: Request = None
+):
+    store = get_session_store()
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     updated = await store.update_session_preferences(
-        session_id, {"selected_branches": dict(payload.selected_branches)}
+        session_id,
+        {"selected_branches": dict(payload.selected_branches)},
+        **_session_version_kwargs(request, store),
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -293,15 +341,29 @@ async def update_branch_selection(session_id: str, payload: BranchSelectionReque
 
 @router.delete("/{session_id}/messages/{message_id}")
 async def delete_turn_by_message(session_id: str, message_id: int):
-    store = get_sqlite_session_store()
-    result = await store.delete_turn_by_message(session_id, message_id)
+    store = get_session_store()
+    from deeptutor.services.session.question_bank import QuestionBankReferenceConflict
+
+    try:
+        result = await store.delete_turn_by_message(session_id, message_id)
+    except QuestionBankReferenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     if result["was_running"]:
         raise HTTPException(
             status_code=409, detail="Cannot delete a message while its turn is running"
         )
     if not result["deleted"]:
         raise HTTPException(status_code=404, detail="Message not found")
-    attachment_store = get_attachment_store()
+    if hasattr(store, "claim_deletion"):
+        from fastapi.responses import JSONResponse
+
+        from deeptutor.services.session.deletion import cleanup_session_resources
+
+        cleanup = await cleanup_session_resources(store)
+        if cleanup["pending"]:
+            return JSONResponse(status_code=202, content={**result, "cleanup": cleanup})
+        return result
+    attachment_store = get_attachment_store() if result["attachment_ids"] else None
     for aid in result["attachment_ids"]:
         try:
             await attachment_store.delete_attachment(session_id, aid)
@@ -314,7 +376,7 @@ async def delete_turn_by_message(session_id: str, message_id: int):
 async def record_quiz_results(session_id: str, payload: QuizResultsRequest):
     if not payload.answers:
         raise HTTPException(status_code=400, detail="Quiz results are required")
-    store = get_sqlite_session_store()
+    store = get_session_store()
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")

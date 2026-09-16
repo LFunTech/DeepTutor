@@ -28,6 +28,8 @@ def learning_policy_for_user(user_id: str, *, is_admin: bool = False) -> dict[st
 
 def current_learning_policy() -> dict[str, Any] | None:
     user = get_current_user()
+    if user.scope.kind == "tenant":
+        return deepcopy(user.learning_policy)
     return learning_policy_for_user(user.id, is_admin=user.is_admin)
 
 

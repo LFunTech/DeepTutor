@@ -11,12 +11,13 @@ progress lines) plus the ``ask_user`` pause/resume flow.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 from typing import Any
 
 from typer.testing import CliRunner
 
-from deeptutor.app import TurnRequest
+from deeptutor.app import DeepTutorApp, TurnRequest
 from deeptutor_cli import common as cli_common
 from deeptutor_cli.common import _resolve_answer
 from deeptutor_cli.main import app
@@ -110,6 +111,10 @@ def _install_fake_runtime(
     *,
     replies: list[dict[str, Any]] | None = None,
 ) -> None:
+    @asynccontextmanager
+    async def _fake_authenticated_app(_auth_token_env=None):  # noqa: ANN001
+        yield DeepTutorApp.__new__(DeepTutorApp)
+
     async def _start_turn(self, request):  # noqa: ANN001
         if isinstance(request, dict):
             request = TurnRequest(**request)
@@ -127,6 +132,7 @@ def _install_fake_runtime(
     monkeypatch.setattr("deeptutor.app.facade.DeepTutorApp.start_turn", _start_turn)
     monkeypatch.setattr("deeptutor.app.facade.DeepTutorApp.stream_turn", _stream_turn)
     monkeypatch.setattr("deeptutor.app.facade.DeepTutorApp.submit_user_reply", _submit_user_reply)
+    monkeypatch.setattr("deeptutor_cli.main.authenticated_app", _fake_authenticated_app)
 
 
 def test_narration_renders_before_tools_and_finish_is_answer(monkeypatch) -> None:

@@ -444,28 +444,45 @@ class PathService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def _assert_production_data_paths_allowed(self, *paths: Path) -> None:
+        from deeptutor.runtime.data_gate import RuntimeDataGate
+
+        RuntimeDataGate(self.workspace_root).evaluate(observed_paths=paths).raise_if_blocking()
+
     def ensure_workspace_dir(self) -> Path:
         path = self.get_workspace_dir()
+        self._assert_production_data_paths_allowed(path)
         return ensure_private_directory(path)
 
     def ensure_notebook_dir(self) -> Path:
         path = self.get_notebook_dir()
+        self._assert_production_data_paths_allowed(path)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def ensure_memory_dir(self) -> Path:
-        self.migrate_legacy_memory_markdown()
         path = self.get_memory_dir()
+        self._assert_production_data_paths_allowed(path)
+        self.migrate_legacy_memory_markdown()
         return ensure_private_directory(path)
 
     def ensure_settings_dir(self) -> Path:
         path = self.get_settings_dir()
+        self._assert_production_data_paths_allowed(path)
         return ensure_private_directory(path)
 
     def ensure_runtime_state_dir(self) -> Path:
-        return ensure_private_directory(self.get_runtime_state_dir())
+        path = self.get_runtime_state_dir()
+        self._assert_production_data_paths_allowed(path)
+        return ensure_private_directory(path)
 
     def ensure_all_directories(self) -> None:
+        self._assert_production_data_paths_allowed(
+            self.get_settings_dir(),
+            self.get_workspace_dir(),
+            self.get_memory_dir(),
+            self.get_notebook_dir(),
+        )
         ensure_private_directory(self.get_user_root())
         self.ensure_settings_dir()
         self.ensure_runtime_state_dir()
@@ -493,18 +510,10 @@ class PathService:
 
 
 def get_path_service() -> PathService:
-    try:
-        from deeptutor.multi_user.paths import get_current_path_service
+    from deeptutor.multi_user.paths import get_current_path_service
 
-        return get_current_path_service()
-    except Exception:
-        import logging as _logging
-
-        _logging.getLogger(__name__).warning(
-            "get_path_service() fell back to default instance; multi-user path resolution failed",
-            exc_info=True,
-        )
-        return PathService.get_instance()
+    # 身份/owner 门禁错误绝不能回退到部署共享目录。
+    return get_current_path_service()
 
 
 __all__ = [

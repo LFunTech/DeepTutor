@@ -6,7 +6,6 @@ from contextvars import ContextVar, Token
 from typing import Any
 
 from .models import CurrentUser
-from .paths import local_admin_user, scope_for_user
 
 _current_user: ContextVar[CurrentUser | None] = ContextVar("deeptutor_current_user", default=None)
 
@@ -20,7 +19,10 @@ def reset_current_user(token: Token[CurrentUser | None]) -> None:
 
 
 def get_current_user() -> CurrentUser:
-    return _current_user.get() or local_admin_user()
+    user = _current_user.get()
+    if user is not None:
+        return user
+    raise PermissionError("authenticated identity is required")
 
 
 def get_current_user_or_none() -> CurrentUser | None:
@@ -28,18 +30,19 @@ def get_current_user_or_none() -> CurrentUser | None:
 
 
 def user_from_token_payload(payload: Any | None) -> CurrentUser:
+    from .models import UserScope
+
     if payload is None:
-        return local_admin_user()
+        raise PermissionError("authenticated identity is required")
+    tenant_id = str(getattr(payload, "tenant_id", "") or "")
     user_id = str(getattr(payload, "user_id", "") or "")
-    username = str(getattr(payload, "username", "") or "local")
-    role = str(getattr(payload, "role", "user") or "user")
-    if role not in {"admin", "user"}:
-        role = "user"
-    if not user_id:
-        user_id = "local-admin" if role == "admin" and username == "local" else username
+    role = str(getattr(payload, "role", "") or "")
+    if not tenant_id or not user_id or role not in {"user", "tenant_admin"}:
+        raise PermissionError("PostgreSQL identity is required")
     return CurrentUser(
         id=user_id,
-        username=username,
-        role=role,  # type: ignore[arg-type]
-        scope=scope_for_user(user_id, is_admin=role == "admin"),
+        username=payload.username,
+        role=role,
+        scope=UserScope(kind="tenant", tenant_id=tenant_id, user_id=user_id, root=None),
+        learning_policy=getattr(payload, "learning_policy", None),
     )

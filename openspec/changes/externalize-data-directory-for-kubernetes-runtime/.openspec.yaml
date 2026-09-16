@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-09-16
+goal: "Align DeepTutor PG-only runtime with Kubernetes Deployment: data/ becomes
+  scratch/projection only; durable state moves to PostgreSQL, S3-compatible
+  object storage, and Secret/Settings providers."

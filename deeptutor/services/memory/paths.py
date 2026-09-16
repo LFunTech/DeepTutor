@@ -17,13 +17,11 @@ import contextlib
 from contextvars import ContextVar
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Literal, get_args
+from typing import Iterator, Literal, get_args
 
-from deeptutor.services.path_service import get_path_service
+from deeptutor.runtime.home import get_runtime_data_root
+from deeptutor.services.path_service import PathService, get_path_service
 from deeptutor.utils.secret_files import ensure_private_directory
-
-if TYPE_CHECKING:
-    from deeptutor.services.path_service import PathService
 
 # When set, memory paths resolve through this PathService instead of the active
 # user's. A partner runtime installs the *owner's* (admin) service for the
@@ -58,11 +56,20 @@ L3Slot = Literal["recent", "profile", "scope", "preferences"]
 
 SURFACES: tuple[Surface, ...] = get_args(Surface)
 L3_SLOTS: tuple[L3Slot, ...] = get_args(L3Slot)
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 def memory_root() -> Path:
     override = _memory_path_service.get()
-    service = override if override is not None else get_path_service()
+    if override is not None:
+        service = override
+    else:
+        try:
+            service = get_path_service()
+        except RuntimeError as exc:
+            if _LOCAL_PATH_UNAVAILABLE not in str(exc):
+                raise
+            service = PathService(workspace_root=get_runtime_data_root())
     return service.get_memory_dir()
 
 

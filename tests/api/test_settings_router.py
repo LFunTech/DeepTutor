@@ -34,6 +34,51 @@ def test_load_ui_settings_migrates_legacy_language_to_response_language(
     assert settings["response_language"] == "zh"
 
 
+def test_load_ui_settings_reads_runtime_settings_dir_without_owner_path_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    (settings_dir / "interface.json").write_text(
+        '{"theme": "dark", "language": "zh"}', encoding="utf-8"
+    )
+
+    def _raise_local_path_unavailable():
+        raise RuntimeError("local path service is unavailable for this scope")
+
+    monkeypatch.setattr(
+        settings_router, "get_runtime_settings_dir", lambda: settings_dir, raising=False
+    )
+    monkeypatch.setattr(
+        settings_router, "get_path_service", _raise_local_path_unavailable, raising=False
+    )
+
+    settings = settings_router.load_ui_settings()
+
+    assert settings["theme"] == "dark"
+    assert settings["language"] == "zh"
+    assert settings["response_language"] == "zh"
+
+
+def test_tour_cache_uses_runtime_settings_dir_without_owner_path_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    settings_dir = tmp_path / "settings"
+
+    def _raise_local_path_unavailable():
+        raise RuntimeError("local path service is unavailable for this scope")
+
+    monkeypatch.setattr(settings_router, "TOUR_CACHE", None)
+    monkeypatch.setattr(
+        settings_router, "get_runtime_settings_dir", lambda: settings_dir, raising=False
+    )
+    monkeypatch.setattr(
+        settings_router, "get_path_service", _raise_local_path_unavailable, raising=False
+    )
+
+    assert settings_router._tour_cache_file() == settings_dir / ".tour_cache.json"
+
+
 def test_both_readers_of_interface_json_agree_on_a_legacy_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

@@ -36,7 +36,7 @@ def pyproject(tmp_path: Path) -> Path:
     path.write_text(
         "[project.optional-dependencies]\n"
         'math-animator = ["manim>=0.19.0"]\n'
-        'matrix-e2e = ["matrix-nio[e2e]>=0.25.2"]\n',
+        'matrix-e2e = ["matrix-nio[e2e]==0.26.0"]\n',
         encoding="utf-8",
     )
     return path
@@ -64,7 +64,7 @@ def test_underscore_and_dash_spellings_resolve_to_the_same_extra(pyproject) -> N
     dashed, _ = install_extras.resolve(extras, ["matrix-e2e"])
     underscored, _ = install_extras.resolve(extras, ["matrix_e2e"])
 
-    assert dashed == underscored == ["matrix-nio[e2e]>=0.25.2"]
+    assert dashed == underscored == ["matrix-nio[e2e]==0.26.0"]
 
 
 def test_unknown_extra_is_reported_without_dropping_the_valid_ones(pyproject) -> None:

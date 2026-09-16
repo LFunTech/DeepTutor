@@ -15,7 +15,6 @@ from deeptutor.services.config import (
     load_system_settings,
 )
 from deeptutor.services.config.origins import normalize_origins
-from deeptutor.services.path_service import get_path_service
 
 ensure_runtime_settings_files()
 export_runtime_settings_to_env(overwrite=True)
@@ -124,6 +123,8 @@ async def lifespan(app: FastAPI):
         application_container = get_application_container()
         app.state.application_container = application_container
     await application_container.start()
+    app.state.auth_provider = getattr(application_container, "auth_provider", None)
+    app.state.resource_provider = getattr(application_container, "resources_provider", None)
     from deeptutor.api.utils.progress_broadcaster import ProgressBroadcaster
     from deeptutor.api.utils.task_log_stream import get_task_stream_manager
     from deeptutor.knowledge.progress_events import install_progress_ports
@@ -132,25 +133,6 @@ async def lifespan(app: FastAPI):
         broadcast=ProgressBroadcaster.get_instance().broadcast,
         emit_task_event=get_task_stream_manager().emit,
     )
-    migration_reports = await application_container.run_startup_data_migrations()
-    legacy_reports = migration_reports["legacy_chat"]
-    migrated_reports = [report for report in legacy_reports if report.get("source_hash")]
-    if migrated_reports:
-        logger.info(
-            "Legacy chat migration complete: imported=%s skipped=%s archived=%s",
-            sum(int(report.get("imported") or 0) for report in migrated_reports),
-            sum(int(report.get("skipped") or 0) for report in migrated_reports),
-            [report.get("archived_to", "") for report in migrated_reports],
-        )
-    workspace_migrated = sum(
-        int(report.get("migrated") or 0) for report in migration_reports["workspace_preferences"]
-    )
-    if workspace_migrated:
-        logger.info(
-            "Workspace session migration complete: migrated=%s scopes=%s",
-            workspace_migrated,
-            len(migration_reports["workspace_preferences"]),
-        )
 
     # Initialize LLM client early so OPENAI_* env vars are available before
     # any downstream provider integrations start.
@@ -278,33 +260,6 @@ async def lifespan(app: FastAPI):
     app.state.background_supervisor = background_supervisor
     await background_supervisor.start()
 
-    # Ping PocketBase if configured — logs a warning (not an error) if unreachable
-    try:
-        from deeptutor.services.pocketbase_client import ping_pocketbase
-
-        await ping_pocketbase()
-    except Exception as e:
-        logger.warning(f"PocketBase startup check failed: {e}")
-
-    # Migrate any v1 memory files (PROFILE.md / SOUL.md / SUMMARY.md) into a
-    # backup folder so the v2 three-layer subsystem starts clean.
-    try:
-        from deeptutor.services.memory import (
-            migrate_partner_surface_if_needed,
-            migrate_v1_if_needed,
-        )
-        from deeptutor.services.path_service import get_path_service
-
-        get_path_service().migrate_legacy_memory_markdown()
-        backup = migrate_v1_if_needed()
-        if backup is not None:
-            logger.info("v1 memory archived to %s", backup)
-        # Rename the legacy ``tutorbot`` memory surface (footnote refs, L2
-        # doc, snapshot/trace dirs, L3 meta keys) to ``partner``.
-        migrate_partner_surface_if_needed()
-    except Exception as e:
-        logger.warning(f"v1 memory migration failed: {e}")
-
     app.state.ready = True
     yield
 
@@ -376,6 +331,26 @@ app = FastAPI(
     # See: https://github.com/HKUDS/DeepTutor/issues/112
     redirect_slashes=False,
 )
+
+
+@app.middleware("http")
+async def application_provider_context(request: Request, call_next):
+    """Bind the process application providers for ordinary HTTP routes.
+
+    WebSocket and SDK turn paths already enter ``provider_context`` explicitly.
+    REST routers need the same context so PG-backed services can resolve the
+    reading catalog and owner-resource provider without falling back to legacy
+    local path discovery.
+    """
+
+    container = getattr(request.app.state, "application_container", None)
+    providers = getattr(container, "providers", None)
+    if providers is None:
+        return await call_next(request)
+    from deeptutor.core.providers import provider_context
+
+    with provider_context(providers):
+        return await call_next(request)
 
 
 @app.middleware("http")
@@ -463,16 +438,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize user directories on startup
+# Initialize deployment-level settings files before router modules import their
+# YAML defaults. Business PG preflight still happens inside lifespan before
+# models/background services start; this block must not open a business store.
 try:
     from deeptutor.services.setup import init_user_directories
 
     init_user_directories()
-except Exception:
-    # Fallback: just create the main directory if it doesn't exist
-    user_dir = get_path_service().get_public_outputs_root()
-    if not user_dir.exists():
-        user_dir.mkdir(parents=True)
+except Exception as exc:
+    logger.warning("Deployment settings bootstrap failed: %s", exc)
 
 # Import routers only after runtime settings are initialized.
 # Some router modules load YAML settings at import time.
@@ -486,6 +460,7 @@ from deeptutor.api.routers import (
     co_writer,
     courses,
     dashboard,
+    governance,
     imports,
     knowledge,
     marginnote4,
@@ -502,6 +477,7 @@ from deeptutor.api.routers import (
     quiz_judge,
     reading,
     reading_extensions,
+    resources,
     sessions,
     settings,
     skills,
@@ -614,6 +590,16 @@ app.include_router(
 )
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"], dependencies=_auth)
 app.include_router(
+    governance.tms_router,
+    prefix="/api/v1/tms",
+    tags=["tms-governance"],
+)
+app.include_router(
+    governance.oms_router,
+    prefix="/api/v1/oms",
+    tags=["oms-governance"],
+)
+app.include_router(
     workspace.settings_router,
     prefix="/api/settings/workspace",
     tags=["workspace-settings"],
@@ -696,6 +682,12 @@ app.include_router(
     attachments.router,
     prefix="/files/attachments",
     tags=["attachments"],
+    dependencies=_auth,
+)
+app.include_router(
+    resources.router,
+    prefix="/files/resources",
+    tags=["resources"],
     dependencies=_auth,
 )
 

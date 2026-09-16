@@ -105,13 +105,17 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
 class CodexCredentialStore:
     """Store credentials only below DeepTutor's explicitly supplied user root."""
 
-    def __init__(self, user_root: Path) -> None:
+    def __init__(self, user_root: Path, *, owner_directory=None) -> None:
         self.root = Path(user_root) / "private" / "openai-codex"
         self.credentials_path = self.root / "credentials.v1.json"
         self.state_path = self.root / "state.v1.json"
         self.catalog_cache_path = self.root / "models-cache.v1.json"
         self.lock_path = self.root / "auth.lock"
         self._thread_lock = threading.Lock()
+        self._owner_directory = owner_directory
+        self._owner_files = None
+        if owner_directory is not None and self.root != owner_directory.path:
+            raise ValueError("owner storage path mismatch")
 
     def assert_safe_location(self) -> None:
         """Raise :class:`CodexAuthError` unless this store sits on plain dirs.
@@ -122,6 +126,12 @@ class CodexCredentialStore:
         redirects the whole store — reading, and worse, relocating — to
         someone else's credentials.
         """
+        if self._owner_directory is not None:
+            try:
+                with self._owner_directory.open(create=True):
+                    return
+            except OSError as exc:
+                raise _unsafe_path() from exc
         _assert_safe_directory(self.root.parent)
         _assert_safe_directory(self.root)
 
@@ -137,22 +147,56 @@ class CodexCredentialStore:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         with self._thread_lock:
+            if self._owner_directory is not None:
+                try:
+                    with self._owner_directory.open(create=True) as files:
+                        with files.lock(self.lock_path.name):
+                            self._owner_files = files
+                            try:
+                                yield
+                            finally:
+                                self._owner_files = None
+                except OSError as exc:
+                    raise _unsafe_path() from exc
+                return
             self._ensure_root()
             with _locked_file(self.lock_path):
                 yield
 
-    @staticmethod
-    def _read_json(path: Path, *, code: str, message: str) -> dict[str, Any] | None:
-        _assert_safe_regular_path(path)
-        if not path.exists():
-            return None
+    def _read_json(self, path: Path, *, code: str, message: str) -> dict[str, Any] | None:
+        if self._owner_files is not None:
+            if not self._owner_files.exists(path.name):
+                return None
+            data = self._owner_files.read(path.name)
+        else:
+            _assert_safe_regular_path(path)
+            if not path.exists():
+                return None
+            try:
+                data = path.read_bytes()
+            except OSError as exc:
+                raise CodexAuthError(code, message, 500) from exc
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(data)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise CodexAuthError(code, message, 500) from exc
         if not isinstance(payload, dict):
             raise CodexAuthError(code, message, 500)
         return payload
+
+    def _write_json(self, path, payload):
+        if self._owner_files is not None:
+            data = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            self._owner_files.write(path.name, data)
+        else:
+            _atomic_write_json(path, payload)
+
+    def _delete_file(self, path):
+        if self._owner_files is not None:
+            self._owner_files.delete(path.name)
+        else:
+            _assert_safe_regular_path(path)
+            path.unlink(missing_ok=True)
 
     def _read_state_unlocked(self) -> dict[str, Any]:
         state = self._read_json(
@@ -219,8 +263,8 @@ class CodexCredentialStore:
                 "schema_version": _SCHEMA_VERSION,
                 "generation": next_generation,
             }
-            _atomic_write_json(self.state_path, next_state)
-            _atomic_write_json(self.credentials_path, committed.to_dict())
+            self._write_json(self.state_path, next_state)
+            self._write_json(self.credentials_path, committed.to_dict())
             return committed
 
     def clear_credentials(self, expected_generation: int | None = None) -> int:
@@ -230,7 +274,7 @@ class CodexCredentialStore:
             if expected_generation is not None and current_generation != expected_generation:
                 raise self._generation_changed()
             next_generation = current_generation + 1
-            _atomic_write_json(
+            self._write_json(
                 self.state_path,
                 {
                     **state,
@@ -239,8 +283,7 @@ class CodexCredentialStore:
                 },
             )
             for path in (self.credentials_path, self.catalog_cache_path):
-                _assert_safe_regular_path(path)
-                path.unlink(missing_ok=True)
+                self._delete_file(path)
             return next_generation
 
     def load_catalog_cache(self) -> dict[str, Any] | None:
@@ -253,9 +296,8 @@ class CodexCredentialStore:
 
     def save_catalog_cache(self, payload: Mapping[str, Any]) -> None:
         with self._locked():
-            _atomic_write_json(self.catalog_cache_path, payload)
+            self._write_json(self.catalog_cache_path, payload)
 
     def clear_catalog_cache(self) -> None:
         with self._locked():
-            _assert_safe_regular_path(self.catalog_cache_path)
-            self.catalog_cache_path.unlink(missing_ok=True)
+            self._delete_file(self.catalog_cache_path)

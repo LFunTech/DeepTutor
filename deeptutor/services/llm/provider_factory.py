@@ -42,6 +42,7 @@ def _provider_cache_key(config: LLMConfig, loop: asyncio.AbstractEventLoop) -> t
         config.temperature,
         config.max_tokens,
         config.reasoning_effort,
+        getattr(config.transport, "disable_ssl_verify", None),
     )
 
 
@@ -95,6 +96,7 @@ def _build_runtime_provider(
             default_model=llm_config.model,
             extra_headers=llm_config.extra_headers or None,
             api_version=llm_config.api_version,
+            disable_ssl_verify=getattr(llm_config.transport, "disable_ssl_verify", None),
         )
     elif backend == "anthropic":
         from deeptutor.services.llm.provider_core.anthropic_provider import AnthropicProvider
@@ -118,6 +120,7 @@ def _build_runtime_provider(
             provider_name=provider_name,
             wire_api=llm_config.wire_api,
             configure_env=configure_env,
+            disable_ssl_verify=getattr(llm_config.transport, "disable_ssl_verify", None),
         )
 
     provider.generation = GenerationSettings(

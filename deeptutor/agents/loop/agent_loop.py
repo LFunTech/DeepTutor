@@ -39,7 +39,7 @@ from deeptutor.agents._shared.capability_result import emit_capability_result
 from deeptutor.agents.loop.ask_user_drafts import AskUserDraftEmitter
 from deeptutor.agents.loop.context_budget import LLMRequestSnapshot
 from deeptutor.agents.loop.dsml_tool_calls import DSMLStreamFilter, extract_dsml_tool_calls
-from deeptutor.core.context import UnifiedContext
+from deeptutor.core.context import UnifiedContext, execution_error_text
 from deeptutor.core.trace import build_trace_metadata, merge_trace_metadata, new_call_id
 from deeptutor.runtime.agentic.messages import assistant_message_with_tool_calls
 from deeptutor.runtime.agentic.think_stream import InlineThinkFilter
@@ -268,6 +268,12 @@ class AgentLoop:
             )
         return payload
 
+    def _error_text(self, error: BaseException) -> str:
+        return execution_error_text(
+            error,
+            redact=self.context.runtime.resource_capabilities is not None,
+        )
+
     def _clean(self, text: str) -> str:
         return clean_thinking_tags(text, self.pipeline.binding, self.pipeline.model).strip()
 
@@ -336,7 +342,7 @@ class AgentLoop:
                 logger.warning(
                     "agent loop round failed after %d round(s); forcing finish: %s",
                     state.rounds,
-                    exc,
+                    self._error_text(exc),
                 )
                 return await self._forced_finish(
                     messages,
@@ -664,7 +670,7 @@ class AgentLoop:
             # The salvage call itself failed (e.g. the provider is still
             # returning unusable data). Don't bubble up and lose the turn —
             # emit the graceful fallback answer instead.
-            logger.warning("forced-finish LLM call failed: %s", exc)
+            logger.warning("forced-finish LLM call failed: %s", self._error_text(exc))
             return await self._finalize_finish(
                 "",
                 continued_answer_parts=continued_answer_parts,
@@ -991,7 +997,7 @@ class AgentLoop:
                         "provider stream failed before output (attempt %d/%d); retrying: %s",
                         attempt + 1,
                         len(_PROVIDER_RETRY_DELAYS) + 1,
-                        exc,
+                        self._error_text(exc),
                     )
                     await self.stream.progress(
                         self.pipeline._t(
@@ -1228,7 +1234,9 @@ class AgentLoop:
                 logger.warning(
                     "provider rejected tool schemas for model=%s; retrying without tools. error=%s",
                     kwargs.get("model"),
-                    logged_error_text(exc),
+                    self._error_text(exc)
+                    if self.context.runtime.resource_capabilities is not None
+                    else logged_error_text(exc),
                 )
                 await self.stream.progress(
                     self.pipeline._t(

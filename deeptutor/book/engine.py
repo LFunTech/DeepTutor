@@ -47,7 +47,9 @@ import logging
 import time
 from typing import Any
 
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.runtime.stream_bus import StreamBus
+from deeptutor.services.path_service import PathService, get_path_service
 
 from . import progress as progress_ops
 from .agents.ideation_agent import IdeationAgent
@@ -2122,11 +2124,16 @@ _engines: dict[str, BookEngine] = {}
 
 
 def get_book_engine() -> BookEngine:
-    from deeptutor.services.path_service import get_path_service
+    try:
+        path_service = get_path_service()
+    except RuntimeError as exc:
+        if "local path service is unavailable for this scope" not in str(exc):
+            raise
+        path_service = PathService(workspace_root=get_runtime_data_root())
 
-    key = str(get_path_service().workspace_root.resolve())
+    key = str(path_service.workspace_root.resolve())
     if key not in _engines:
-        _engines[key] = BookEngine()
+        _engines[key] = BookEngine(storage=BookStorage(path_service=path_service))
     return _engines[key]
 
 

@@ -1,0 +1,17 @@
+{
+  "columns": {
+    "partner_runtime_status": "tenant_id:uuid! owner_id:text! partner_id:text! worker_id:text! version:int8! running:bool! state:text! started_at:text last_reload_error:text payload:jsonb! updated_at_ms:int8! expires_at_ms:int8! ttl_ms:int8!"
+  },
+  "constraints": {
+    "partner_runtime_status": [
+      "CHECK (((length(partner_id) > 0) AND (length(partner_id) <= 128)))",
+      "CHECK (((updated_at_ms >= 0) AND (expires_at_ms >= updated_at_ms)))",
+      "CHECK ((length(worker_id) > 0))",
+      "CHECK ((state = ANY (ARRAY['running'::text, 'stopped'::text, 'reload_failed'::text, 'start_failed'::text])))",
+      "CHECK ((ttl_ms >= 0))",
+      "CHECK ((version >= 1))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id)"
+    ]
+  }
+}

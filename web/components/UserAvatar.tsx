@@ -102,7 +102,7 @@ export function UserAvatar({
     setImageBroken(false);
   }
 
-  const isAdmin = role === "admin";
+  const isAdmin = role === "tenant_admin";
   const showBadge = isAdmin && size >= 40;
   const descriptor = parseAvatarMarker(avatar);
   const isImage =

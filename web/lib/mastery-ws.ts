@@ -12,6 +12,8 @@ export interface MasterySubscribedMessage {
   path_id: string;
   revision: number;
   events: MasteryEvent[];
+  cursor?: string | null;
+  next_cursor?: string | null;
 }
 
 export interface MasteryTopicEventMessage {
@@ -21,6 +23,8 @@ export interface MasteryTopicEventMessage {
   reason: string;
   sequence: number;
   events: MasteryEvent[];
+  cursor?: string | null;
+  next_cursor?: string | null;
 }
 
 export interface MasterySocketErrorMessage {
@@ -40,11 +44,13 @@ export type MasterySocketEnvelope =
 export function masterySubscribePayload(
   pathId: string,
   afterRevision: number,
+  cursor?: string | null,
 ): string {
   return JSON.stringify({
     type: "subscribe",
     path_id: pathId,
     after_revision: Math.max(0, Math.floor(afterRevision)),
+    ...(cursor ? { cursor } : {}),
   });
 }
 
@@ -95,13 +101,16 @@ export interface MasteryTopicSocketHandlers {
 /** One reconnecting, cursor-preserving subscription for a single topic. */
 export class MasteryTopicSocket {
   private cursor: number;
+  private eventCursor: string | null = null;
   private readonly transport: ReconnectingWebSocket;
 
   constructor(
     private readonly pathId: string,
     private readonly handlers: MasteryTopicSocketHandlers,
     initialRevision = 0,
-    options: ReconnectingWebSocketOptions = {},
+    options: ReconnectingWebSocketOptions & {
+      durableCursor?: () => { revision: number; cursor: string | null };
+    } = {},
   ) {
     this.cursor = Math.max(0, initialRevision);
     this.transport = new ReconnectingWebSocket(
@@ -109,8 +118,9 @@ export class MasteryTopicSocket {
       {
         onOpen: () => {
           this.handlers.onConnecting?.();
+          const durable = options.durableCursor?.();
           this.transport.send(
-            masterySubscribePayload(this.pathId, this.cursor),
+            masterySubscribePayload(this.pathId, durable?.revision ?? this.cursor, durable ? durable.cursor : this.eventCursor),
           );
         },
         onMessage: (event) => this.receive(event.data),
@@ -148,6 +158,7 @@ export class MasteryTopicSocket {
     }
     if (message.path_id !== this.pathId) return;
     this.cursor = Math.max(this.cursor, message.revision);
+    if (typeof message.cursor === "string") this.eventCursor = message.cursor;
     this.handlers.onLive?.();
     this.handlers.onEnvelope(message);
   }

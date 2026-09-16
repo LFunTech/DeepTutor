@@ -23,11 +23,13 @@ import json
 import logging
 from typing import Any
 
+from deeptutor.services.config import get_runtime_settings_dir
 from deeptutor.services.path_service import get_path_service
 
 logger = logging.getLogger(__name__)
 
 _SETTINGS_FILE = "subagent.json"
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 DEFAULT_CONSULT_BUDGET = 5
 CONSULT_BUDGET_MIN = 1
@@ -164,7 +166,12 @@ def _coerce_backend(raw: Any) -> BackendConfig:
 
 
 def _settings_path():
-    return get_path_service().get_settings_file(_SETTINGS_FILE)
+    try:
+        return get_path_service().get_settings_file(_SETTINGS_FILE)
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_settings_dir() / _SETTINGS_FILE
+        raise
 
 
 def settings_from_dict(raw: Any) -> SubagentSettings:

@@ -16,6 +16,8 @@ import pytest
 from deeptutor.multi_user.context import reset_current_user, set_current_user
 from deeptutor.multi_user.models import CurrentUser, UserScope
 
+pytest_plugins = ("tests.fixtures.postgres",)
+
 
 @pytest.fixture
 def mu_isolated_root(tmp_path, monkeypatch) -> Path:
@@ -76,8 +78,8 @@ def mu_isolated_root(tmp_path, monkeypatch) -> Path:
     # results as CI; tests that need one patch these back explicitly.
     from deeptutor.services import auth as auth_service
 
-    monkeypatch.setattr(auth_service, "AUTH_USERNAME", "")
-    monkeypatch.setattr(auth_service, "AUTH_PASSWORD_HASH", "")
+    monkeypatch.setattr(auth_service, "AUTH_USERNAME", "", raising=False)
+    monkeypatch.setattr(auth_service, "AUTH_PASSWORD_HASH", "", raising=False)
 
     admin_root.mkdir(parents=True, exist_ok=True)
     return tmp_path

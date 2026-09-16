@@ -1,45 +1,67 @@
 """Unified repository-backed session management."""
 
-from .protocol import SessionStoreProtocol
-from .sqlite_store import (
-    SQLiteSessionStore,
-    get_sqlite_session_store,
-    make_imported_session_id,
+from .protocol import QuestionBankRepository, SessionStoreProtocol
+from .question_bank import (
+    QuestionBankCursorError,
+    QuestionBankQuery,
+    QuestionBankReferenceConflict,
+    QuestionBankVersionConflict,
 )
-from .turn_runtime import TurnRuntimeManager, get_turn_runtime_manager
 
-_pocketbase_store_instances: dict[str, SessionStoreProtocol] = {}
+# 兼容符号仅在显式访问时加载；中立question_bank/protocol不再带入SQLite runtime。
+_LEGACY_EXPORTS = {
+    "get_sqlite_session_store": ".sqlite_store",
+    "make_imported_session_id": ".import_ids",
+    "TurnRuntimeManager": ".turn_runtime",
+    "get_turn_runtime_manager": ".turn_runtime",
+}
 
+
+def __getattr__(name):
+    module_name = _LEGACY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LEGACY_EXPORTS))
 
 def get_session_store() -> SessionStoreProtocol:
     """
     Return the active session store backend.
 
-    When integrations.pocketbase_url is configured, returns a
-    PocketBaseSessionStore. Otherwise falls back to the local
-    SQLiteSessionStore (default, zero-config behaviour).
+    默认业务入口是 PostgreSQL-only。SQLite/PocketBase 工厂只保留为显式
+    离线导入/旧 fixture 的兼容符号，不再作为运行期 fallback。
     """
-    from deeptutor.services.pocketbase_client import is_pocketbase_enabled
+    from deeptutor.core.providers import get_providers
 
-    if is_pocketbase_enabled():
-        from deeptutor.services.config import load_integrations_settings
+    providers = get_providers()
+    if providers is not None:
+        if providers.store is None:
+            raise RuntimeError("session store provider is not configured")
+        return providers.store.get()
 
-        from .pocketbase_store import PocketBaseSessionStore
-        from .scope import pocketbase_scope
+    from deeptutor.app.container import StoreProvider, get_application_container
 
-        url = str(load_integrations_settings().get("pocketbase_url") or "").rstrip("/")
-        scope = pocketbase_scope(url)
-        if scope.cache_key not in _pocketbase_store_instances:
-            store = PocketBaseSessionStore()
-            store.store_scope = scope
-            _pocketbase_store_instances[scope.cache_key] = store
-        return _pocketbase_store_instances[scope.cache_key]
-    return get_sqlite_session_store()
+    container = get_application_container()
+    provider = getattr(container, "store_provider", None)
+    if provider is None or isinstance(provider, StoreProvider):
+        raise RuntimeError("PostgreSQL session store provider is not configured")
+    return provider.get()
 
 
 __all__ = [
     "SessionStoreProtocol",
-    "SQLiteSessionStore",
+    "QuestionBankCursorError",
+    "QuestionBankQuery",
+    "QuestionBankReferenceConflict",
+    "QuestionBankRepository",
+    "QuestionBankVersionConflict",
     "TurnRuntimeManager",
     "get_session_store",
     "get_sqlite_session_store",

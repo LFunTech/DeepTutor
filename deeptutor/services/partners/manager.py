@@ -420,9 +420,19 @@ class PartnerManager:
         last_reload_error: str | None = None,
     ) -> None:
         payload = instance.to_dict(mask_secrets=True) if instance is not None else {}
+        owner_id = instance.config.owner_id if instance is not None else self.owner_id(partner_id)
+        if not owner_id:
+            from deeptutor.multi_user.context import get_current_user_or_none
+
+            actor = get_current_user_or_none()
+            if actor is not None and actor.scope.kind == "tenant":
+                owner_id = actor.id
+        if not owner_id:
+            raise RuntimeError("Partner runtime status requires an explicit owner_id")
         get_partner_runtime_status_repository().set(
             partner_id,
-            owner_id=self.runtime_owner_id,
+            owner_id=owner_id,
+            worker_id=self.runtime_owner_id,
             running=running,
             state=state,
             payload=payload,
@@ -777,7 +787,12 @@ class PartnerManager:
 
         self._rehome_shared_channel_state()
         channels_config = ChannelsConfig(**config.channels)
-        manager = ChannelManager(channels_config, bus, partner_id=partner_id)
+        manager = ChannelManager(
+            channels_config,
+            bus,
+            partner_id=partner_id,
+            owner_id=config.owner_id,
+        )
         if not manager.get_status():
             logger.info("No channels matched config for partner '%s'", partner_id)
             return None
@@ -925,7 +940,14 @@ class PartnerManager:
                         "running",
                         "started_at",
                         "last_reload_error",
+                        "tenant_id",
+                        "owner_id",
                         "runtime_owner_id",
+                        "runtime_worker_id",
+                        "runtime_version",
+                        "runtime_ttl_seconds",
+                        "runtime_expires_at",
+                        "runtime_expired",
                         "runtime_state",
                         "runtime_updated_at",
                     )
@@ -1239,11 +1261,19 @@ class PartnerManager:
         await self.stop_partner(partner_id, preserve_auto_start=False)
         forget_partner_stores(partner_id)
         forget_partner_links(partner_id)
-        get_partner_runtime_status_repository().delete(partner_id)
+        owner_id = self.owner_id(partner_id)
+        if owner_id:
+            get_partner_runtime_status_repository().delete(partner_id, owner_id=owner_id)
+        else:
+            get_partner_runtime_status_repository().delete(partner_id)
         try:
+            import inspect
+
             from deeptutor.services.cron import get_cron_service
 
-            get_cron_service().remove_owner_jobs(f"partner:{partner_id}")
+            removed = get_cron_service().remove_owner_jobs(f"partner:{partner_id}")
+            if inspect.isawaitable(removed):
+                await removed
         except Exception:
             logger.warning("Failed to clear cron jobs for '%s'", partner_id, exc_info=True)
         partner_dir = self._partner_dir(partner_id)

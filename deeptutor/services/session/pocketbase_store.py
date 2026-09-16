@@ -113,6 +113,12 @@ class PocketBaseSessionStore:
     """PocketBase-backed implementation of SessionStoreProtocol."""
 
     def __init__(self) -> None:
+        raise RuntimeError(
+            "PostgreSQL-only runtime no longer supports PocketBase as a session "
+            "backend. Use the PostgreSQL provider for business execution; legacy "
+            "PocketBase data must be handled by the controlled offline export/import "
+            "tools."
+        )
         self._closed = False
         self.store_scope: StoreScope | None = None
 

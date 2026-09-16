@@ -54,6 +54,17 @@ def owner_catalog_service() -> ModelCatalogService:
     administrator behaviour is exactly what it was. For an ordinary user it
     is their own file; for a partner, its owner's.
     """
+    from deeptutor.core.providers import get_providers
+
+    from .context import get_current_user
+
+    user = get_current_user()
+    if user.scope.kind == "tenant":
+        resources = getattr(get_providers(), "resources", None)
+        if resources is None:
+            raise PermissionError("explicit owner resource provider required")
+        directory = resources.bind_directory(user.scope.tenant_id, user.id, "models")
+        return ModelCatalogService.for_owner(directory)
     return ModelCatalogService.get_instance(
         get_owner_path_service().get_settings_file("model_catalog")
     )
@@ -76,7 +87,7 @@ def _personal_catalog_profiles() -> list[dict[str, Any]]:
     # Checked rather than loaded blind: ``load()`` writes a default catalog
     # when the file is absent, and a user who never touched Codex should not
     # get a settings file created on every options request.
-    if not service.path.exists():
+    if not service.exists():
         return []
     profiles = service.load().get("services", {}).get("llm", {}).get("profiles", []) or []
     return [

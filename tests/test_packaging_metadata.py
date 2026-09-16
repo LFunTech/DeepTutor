@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 import tomllib
 
 import pytest
@@ -202,3 +204,94 @@ def test_cli_runtime_dependencies_match_every_install_surface(expected: str) -> 
         .splitlines()
     ]
     assert requirement_lines.count(expected) == 1
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        "psycopg[binary]==3.3.5",
+        "psycopg-pool==3.3.1",
+    ],
+)
+def test_postgres_core_dependencies_match_every_install_surface(expected: str) -> None:
+    """两个公开 wheel 都必须能导入 core PG 底座，requirements 也须一致。"""
+    root = _project(REPOSITORY_ROOT / "pyproject.toml")
+    cli_package = _project(REPOSITORY_ROOT / "packaging" / "deeptutor-cli" / "pyproject.toml")
+
+    assert root["dependencies"].count(expected) == 1
+    assert cli_package["dependencies"].count(expected) == 1
+    assert _cli_requirement_lines().count(expected) == 1
+
+
+def test_aiosqlite_is_not_a_direct_runtime_dependency() -> None:
+    """PG-only runtime 不再需要 async SQLite driver 出现在任何默认安装面。"""
+    root = _project(REPOSITORY_ROOT / "pyproject.toml")
+    cli_package = _project(REPOSITORY_ROOT / "packaging" / "deeptutor-cli" / "pyproject.toml")
+
+    install_surfaces = {
+        "root dependencies": root["dependencies"],
+        "cli extra": root["optional-dependencies"]["cli"],
+        "server extra": root["optional-dependencies"]["server"],
+        "cli wheel dependencies": cli_package["dependencies"],
+        "requirements/cli.txt": _cli_requirement_lines(),
+    }
+    for surface, requirements in install_surfaces.items():
+        assert not [
+            requirement
+            for requirement in requirements
+            if requirement.lower().split("[", 1)[0].split(">", 1)[0] == "aiosqlite"
+        ], surface
+
+
+def test_cli_only_distribution_packages_postgres_migration_sql() -> None:
+    """CLI-only wheel 发布同一 core 包时不能遗漏唯一 migration SQL。"""
+    with (REPOSITORY_ROOT / "packaging" / "deeptutor-cli" / "pyproject.toml").open("rb") as file:
+        package_data = tomllib.load(file)["tool"]["setuptools"]["package-data"]
+
+    assert package_data["deeptutor"].count("**/*.sql") == 1
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        "bcrypt>=4.0.0",
+        "python-jose[cryptography]>=3.3.0",
+    ],
+)
+def test_core_identity_dependencies_reach_cli_only_installs(expected: str) -> None:
+    """CLI-only 发行物包含 core PG 身份模块的直接运行依赖。"""
+    root = _project(REPOSITORY_ROOT / "pyproject.toml")
+    cli_package = _project(REPOSITORY_ROOT / "packaging" / "deeptutor-cli" / "pyproject.toml")
+
+    assert root["dependencies"].count(expected) == 1
+    assert cli_package["dependencies"].count(expected) == 1
+    assert _cli_requirement_lines().count(expected) == 1
+
+
+def test_default_postgres_runtime_import_does_not_require_matrix_extra() -> None:
+    """默认 PG runtime 不能因为离线 Matrix importer 而要求安装 matrix extra。"""
+    code = """
+import importlib.abc
+import sys
+
+
+class BlockNio(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "nio" or fullname.startswith("nio."):
+            raise ModuleNotFoundError("blocked optional nio import")
+        return None
+
+
+sys.meta_path.insert(0, BlockNio())
+from deeptutor.app.postgres_runtime import default_postgres_config_path
+
+print(default_postgres_config_path(home="/tmp/deeptutor-packaging-test"))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

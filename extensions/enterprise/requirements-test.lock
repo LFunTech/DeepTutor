@@ -1,0 +1,16 @@
+# 2026-09-13 隔离验证环境：CPython 3.14.7；外部原生 PostgreSQL 17.9。
+# 仅精确固定以下直接运行/测试/构建前端依赖，不是完整传递依赖或 hash 锁。
+# 必须与含 APPLICATION_HOOK_VERSION=1 的本仓库 core 一起安装；同版本号不代表有 hook。
+# 从仓库根目录：
+# python -m pip install -e '.[server]' -e 'extensions/enterprise[test]' -r extensions/enterprise/requirements-test.lock
+deeptutor==1.6.7
+psycopg[binary]==3.3.5
+psycopg-pool==3.3.1
+packaging==26.3
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
+build==1.6.1
+wheel==0.47.0
+# 上述 wheel 是测试 venv 的版本。PEP 517 隔离构建另实际解析出
+# setuptools==84.0.0、wheel==0.48.0；此文件不锁隔离构建依赖。

@@ -14,12 +14,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from deeptutor.multi_user.context import get_current_user
+from deeptutor.multi_user.roles import can_manage_deployment
 from deeptutor.multi_user.skill_access import (
     assigned_skill_detail,
     assigned_skill_ids,
     assigned_skill_infos,
 )
-from deeptutor.services.skill import get_skill_service
+from deeptutor.services.skill.runtime import call_skill_service, get_runtime_skill_service
 from deeptutor.services.skill.service import (
     InvalidSkillNameError,
     InvalidTagError,
@@ -27,6 +28,7 @@ from deeptutor.services.skill.service import (
     SkillImportError,
     SkillNotFoundError,
     SkillReadOnlyError,
+    SkillService,
     TagExistsError,
     TagNotFoundError,
 )
@@ -76,15 +78,15 @@ class RenameTagRequest(BaseModel):
 
 @router.get("/tags/list")
 async def list_tags() -> dict[str, list[str]]:
-    service = get_skill_service()
-    return {"tags": service.list_tags()}
+    service = get_runtime_skill_service()
+    return {"tags": await call_skill_service(service, "list_tags")}
 
 
 @router.post("/tags/create")
 async def create_tag(payload: CreateTagRequest) -> dict[str, str]:
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        tag = service.create_tag(payload.name)
+        tag = await call_skill_service(service, "create_tag", payload.name)
     except TagExistsError as exc:
         raise HTTPException(status_code=409, detail=f"Tag already exists: {exc}")
     except InvalidTagError as exc:
@@ -94,9 +96,9 @@ async def create_tag(payload: CreateTagRequest) -> dict[str, str]:
 
 @router.put("/tags/{tag}")
 async def rename_tag(tag: str, payload: RenameTagRequest) -> dict[str, str]:
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        new_tag = service.rename_tag(tag, payload.rename_to)
+        new_tag = await call_skill_service(service, "rename_tag", tag, payload.rename_to)
     except TagNotFoundError:
         raise HTTPException(status_code=404, detail=f"Tag not found: {tag}")
     except TagExistsError as exc:
@@ -108,9 +110,9 @@ async def rename_tag(tag: str, payload: RenameTagRequest) -> dict[str, str]:
 
 @router.delete("/tags/{tag}")
 async def delete_tag(tag: str) -> dict[str, str]:
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        service.delete_tag(tag)
+        await call_skill_service(service, "delete_tag", tag)
     except TagNotFoundError:
         raise HTTPException(status_code=404, detail=f"Tag not found: {tag}")
     except InvalidTagError as exc:
@@ -123,10 +125,10 @@ async def delete_tag(tag: str) -> dict[str, str]:
 
 @router.get("/list")
 async def list_skills() -> dict[str, list[dict[str, object]]]:
-    service = get_skill_service()
-    own_items = [info.to_dict() for info in service.list_skills()]
+    service = get_runtime_skill_service()
+    own_items = [info.to_dict() for info in await call_skill_service(service, "list_skills")]
     user = get_current_user()
-    if user.is_admin:
+    if can_manage_deployment(user) or not isinstance(service, SkillService):
         return {"skills": own_items}
     own_names = {item.get("name") for item in own_items}
     merged = list(own_items)
@@ -189,9 +191,9 @@ async def hub_detail(slug: str, hub: str = "eduhub") -> dict[str, object]:
 
 @router.get("/{name}")
 async def get_skill(name: str) -> dict[str, object]:
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        return service.get_detail(name).to_dict()
+        return (await call_skill_service(service, "get_detail", name)).to_dict()
     except SkillNotFoundError:
         # User scope doesn't have it. Fall through to admin-assigned lookup
         # below, which returns 403 if the user has no grant for it.
@@ -200,8 +202,8 @@ async def get_skill(name: str) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc))
 
     user = get_current_user()
-    if user.is_admin:
-        # Admin scope already checked above; nothing else to look at.
+    if can_manage_deployment(user) or not isinstance(service, SkillService):
+        # Admin/production externalized scope already checked above; nothing else to look at.
         raise HTTPException(status_code=404, detail=f"Skill not found: {name}")
     if name not in assigned_skill_ids(user.id):
         raise HTTPException(status_code=403, detail="Skill is not assigned to you")
@@ -213,9 +215,11 @@ async def get_skill(name: str) -> dict[str, object]:
 
 @router.post("/create")
 async def create_skill(payload: CreateSkillRequest) -> dict[str, object]:
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        info = service.create(
+        info = await call_skill_service(
+            service,
+            "create",
             name=payload.name,
             description=payload.description,
             content=payload.content,
@@ -239,14 +243,11 @@ async def install_skill(payload: InstallSkillRequest) -> dict[str, object]:
     (``suspicious`` verdict abort, safe extraction, ``always`` stripping)
     lives in :func:`deeptutor.services.skill.hub.install_from_hub`.
     """
-    import asyncio
+    from deeptutor.services.skill.hub import HubError, install_from_hub_async
 
-    from deeptutor.services.skill.hub import HubError, install_from_hub
-
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        outcome = await asyncio.to_thread(
-            install_from_hub,
+        outcome = await install_from_hub_async(
             payload.ref,
             service=service,
             rename_to=payload.name,
@@ -269,9 +270,11 @@ async def install_skill(payload: InstallSkillRequest) -> dict[str, object]:
 
 @router.put("/{name}")
 async def update_skill(name: str, payload: UpdateSkillRequest) -> dict[str, object]:
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        info = service.update(
+        info = await call_skill_service(
+            service,
+            "update",
             name,
             description=payload.description,
             content=payload.content,
@@ -293,9 +296,9 @@ async def update_skill(name: str, payload: UpdateSkillRequest) -> dict[str, obje
 
 @router.delete("/{name}")
 async def delete_skill(name: str) -> dict[str, str]:
-    service = get_skill_service()
+    service = get_runtime_skill_service()
     try:
-        service.delete(name)
+        await call_skill_service(service, "delete", name)
         return {"status": "deleted", "name": name}
     except SkillNotFoundError:
         raise HTTPException(status_code=404, detail=f"Skill not found: {name}")

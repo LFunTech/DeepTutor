@@ -29,6 +29,8 @@ never both read the same document — no coordination code required in either.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from html import escape
 from importlib import resources
 import logging
@@ -63,6 +65,16 @@ LOCATE_HITS = 4
 LOCATE_SNIPPET_CHARS = 260
 
 _PROMPT_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _run_sync_without_event_loop(callback):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return callback()
+    ctx = copy_context()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(ctx.run, callback).result()
 
 
 def _load_prompts(language: str) -> dict[str, Any]:
@@ -167,9 +179,13 @@ class ReadingCapability:
         if not workspace_id:
             return ""
         try:
-            from deeptutor.reading import ReadingCatalogStore
+            handled, workspace = _run_sync_without_event_loop(
+                lambda: _read_pg_catalog(lambda catalog: catalog.get_workspace(workspace_id))
+            )
+            if not handled:
+                from deeptutor.reading import ReadingCatalogStore
 
-            workspace = ReadingCatalogStore().get_workspace(workspace_id)
+                workspace = ReadingCatalogStore().get_workspace(workspace_id)
         except Exception:
             return ""
         if workspace is None:
@@ -191,10 +207,29 @@ class ReadingCapability:
         try:
             from deeptutor.reading import ReadingStore, material_summary
 
-            store = ReadingStore()
-            manifest = store.manifest(material_id)
-            annotation_count = len(store.annotations(material_id))
-            unit_refs = store.unit_references(material_id)
+            def load():
+                handled, record = _read_pg_catalog(
+                    lambda catalog: catalog.get_material(material_id)
+                )
+                if handled:
+                    if record is None:
+                        return None
+
+                    def resolve(candidate: str):
+                        return record if candidate == material_id else None
+
+                    store = ReadingStore(material_resolver=resolve)
+                else:
+                    store = ReadingStore()
+                manifest = store.manifest(material_id)
+                annotation_count = len(store.annotations(material_id))
+                unit_refs = store.unit_references(material_id)
+                return manifest, annotation_count, unit_refs
+
+            loaded = _run_sync_without_event_loop(load)
+            if loaded is None:
+                return ""
+            manifest, annotation_count, unit_refs = loaded
         except Exception:
             logger.info("reading material %s unavailable for prompt", material_id, exc_info=True)
             return ""
@@ -335,7 +370,17 @@ class ReadingCapability:
     def _locate(material_id: str, question: str) -> list[str]:
         from deeptutor.reading import ReadingStore, search_material
 
-        store = ReadingStore()
+        handled, record = _read_pg_catalog(lambda catalog: catalog.get_material(material_id))
+        if handled:
+            if record is None:
+                return []
+
+            def resolve(candidate: str):
+                return record if candidate == material_id else None
+
+            store = ReadingStore(material_resolver=resolve)
+        else:
+            store = ReadingStore()
         manifest = store.manifest(material_id)
         result = search_material(store, material_id, question, limit=LOCATE_HITS)
         if result.is_empty:
@@ -346,6 +391,24 @@ class ReadingCapability:
             f"{_clip(hit.snippet, LOCATE_SNIPPET_CHARS)}"
             for hit in result.hits
         ]
+
+
+def _read_pg_catalog(callback):
+    try:
+        from deeptutor.core.providers import get_providers
+
+        providers = get_providers()
+        provider = getattr(providers, "reading", None) if providers is not None else None
+        if provider is None or not callable(getattr(provider, "get", None)):
+            return False, None
+        catalog = provider.get()
+        store = getattr(catalog, "_store", None)
+        if store is None:
+            return False, None
+        return True, callback(store)
+    except Exception:
+        logger.info("reading PG catalog lookup failed", exc_info=True)
+        return True, None
 
 
 def _as_int(value: Any) -> int:

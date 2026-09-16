@@ -262,6 +262,10 @@ class RuntimeStatus(WireModel):
     leader_healthy: bool | None = None
     owner_turn_count: int = Field(default=0, ge=0)
     recovery_backlog: int = Field(default=0, ge=0)
+    providers: dict[str, str] = Field(default_factory=dict)
+    data_gate: str = ""
+    cleanup_backlog: int = Field(default=0, ge=0)
+    migration_version: str = ""
     lease_ttl_seconds: int = Field(ge=1)
     renew_interval_seconds: int = Field(ge=1)
     recovery_interval_seconds: int = Field(ge=1)

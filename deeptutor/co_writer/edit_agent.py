@@ -11,9 +11,10 @@ import uuid
 
 from deeptutor.agents.base_agent import BaseAgent
 from deeptutor.co_writer.storage import _atomic_write_json
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.runtime.registry.tool_registry import get_tool_registry
 from deeptutor.services.llm import clean_thinking_tags
-from deeptutor.services.path_service import get_path_service
+from deeptutor.services.path_service import PathService, get_path_service
 from deeptutor.services.rag.pipelines.pageindex import is_pageindex_kb
 from deeptutor.tools.rag_tool import rag_search
 from deeptutor.tools.web_search import web_search
@@ -21,16 +22,25 @@ from deeptutor.tools.web_search import web_search
 
 # Resolved per-call so a per-user PathService (set after auth) routes
 # co-writer history/tool-call files under the caller's own workspace.
+def _path_service_or_runtime() -> PathService:
+    try:
+        return get_path_service()
+    except RuntimeError as exc:
+        if "local path service is unavailable for this scope" in str(exc):
+            return PathService(workspace_root=get_runtime_data_root())
+        raise
+
+
 def _user_dir():
-    return get_path_service().get_co_writer_dir()
+    return _path_service_or_runtime().get_co_writer_dir()
 
 
 def _history_file():
-    return get_path_service().get_co_writer_history_file()
+    return _path_service_or_runtime().get_co_writer_history_file()
 
 
 def tool_calls_dir():
-    return get_path_service().get_co_writer_tool_calls_dir()
+    return _path_service_or_runtime().get_co_writer_tool_calls_dir()
 
 
 def ensure_dirs():

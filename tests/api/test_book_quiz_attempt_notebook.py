@@ -59,12 +59,41 @@ class _FakeResolvedBook:
         return self.learning.load_progress(book_id)
 
 
+def _legacy_store(tmp_path):
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+
+    token = set_current_user(
+        CurrentUser(
+            id="legacy-book-quiz",
+            username="legacy-book-quiz",
+            role="user",
+            scope=UserScope(
+                kind="user",
+                user_id="legacy-book-quiz",
+                root=tmp_path / "legacy-book-quiz",
+            ),
+        )
+    )
+    try:
+        return SQLiteSessionStore(db_path=tmp_path / "sessions.db"), token
+    except Exception:
+        reset_current_user(token)
+        raise
+
+
+def _reset_legacy(token):
+    from deeptutor.multi_user.context import reset_current_user
+
+    reset_current_user(token)
+
+
 def test_quiz_attempt_syncs_focus_check_to_question_bank(tmp_path, monkeypatch) -> None:
-    store = SQLiteSessionStore(db_path=tmp_path / "sessions.db")
+    store, token = _legacy_store(tmp_path)
     asyncio.run(store.create_session(session_id="page-chat-1", title="Page 1 chat"))
     resolved = _FakeResolvedBook()
     monkeypatch.setattr(book_router, "_resolve_book_or_404", lambda _: resolved)
-    monkeypatch.setattr(session_package, "get_sqlite_session_store", lambda: store)
+    monkeypatch.setattr(session_package, "get_session_store", lambda: store)
 
     app = FastAPI()
     app.include_router(book_router.router, prefix="/api")
@@ -95,14 +124,15 @@ def test_quiz_attempt_syncs_focus_check_to_question_bank(tmp_path, monkeypatch) 
     assert entry["section_title"] == "Page 1"
     assert entry["score_trend"] == "new"
     assert entry["resolved"] is False
+    _reset_legacy(token)
 
 
 def test_quiz_attempt_does_not_create_a_synthetic_chat_session(tmp_path, monkeypatch) -> None:
-    store = SQLiteSessionStore(db_path=tmp_path / "sessions.db")
+    store, token = _legacy_store(tmp_path)
     resolved = _FakeResolvedBook()
     resolved.book.metadata = {}
     monkeypatch.setattr(book_router, "_resolve_book_or_404", lambda _: resolved)
-    monkeypatch.setattr(session_package, "get_sqlite_session_store", lambda: store)
+    monkeypatch.setattr(session_package, "get_session_store", lambda: store)
 
     app = FastAPI()
     app.include_router(book_router.router, prefix="/api")
@@ -123,3 +153,4 @@ def test_quiz_attempt_does_not_create_a_synthetic_chat_session(tmp_path, monkeyp
     assert len(resolved.learning.saved) == 1
     assert asyncio.run(store.get_session("book_book-1")) is None
     assert asyncio.run(store.list_notebook_entries(source="book"))["total"] == 0
+    _reset_legacy(token)

@@ -26,6 +26,7 @@ from deeptutor.multi_user.device_credentials import revoke_device_credentials_fo
 from deeptutor.multi_user.grants import (
     LEARNING_AGE_BANDS,
     LEARNING_SURFACES,
+    grant_subject_record,
     learner_grant,
     load_grant,
     normalize_grant,
@@ -41,7 +42,6 @@ from deeptutor.multi_user.guardians import (
     revoke_guardian,
 )
 from deeptutor.multi_user.identity import (
-    get_user_by_id,
     list_user_info,
     set_book_permission,
     set_password,
@@ -277,7 +277,7 @@ def _validate_reading_policy(grant: dict[str, Any]) -> None:
 
 
 def _require_assignable_user(user_id: str) -> tuple[str, dict[str, Any]]:
-    user_record = get_user_by_id(user_id)
+    user_record = grant_subject_record(user_id)
     if user_record is None:
         raise HTTPException(status_code=404, detail="User not found")
     username, record = user_record

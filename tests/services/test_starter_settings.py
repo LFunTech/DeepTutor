@@ -75,3 +75,21 @@ def test_the_service_reads_the_setting(monkeypatch: pytest.MonkeyPatch, scoped: 
     starter_settings.save_starter_settings({"trace_count": 7})
 
     assert suggestions._trace_count() == 7
+
+
+def test_fallback_to_runtime_settings_when_local_path_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings_dir = tmp_path / "runtime-settings"
+
+    def _raise_local_path_unavailable():
+        raise RuntimeError("local path service is unavailable for this scope")
+
+    monkeypatch.setattr(starter_settings, "get_path_service", _raise_local_path_unavailable)
+    monkeypatch.setattr(starter_settings, "get_runtime_settings_dir", lambda: settings_dir, raising=False)
+
+    saved = starter_settings.save_starter_settings({"trace_count": 33})
+
+    assert saved["trace_count"] == 33
+    assert starter_settings.get_starter_settings()["trace_count"] == 33
+    assert json.loads((settings_dir / "starters.json").read_text(encoding="utf-8"))["trace_count"] == 33

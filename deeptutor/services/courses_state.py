@@ -33,12 +33,36 @@ def _as_text(value: object) -> str:
 
 async def _safe_index(
     kind: str,
-    loader: Callable[[], Awaitable[ResourceIndex]],
+    loader: Callable[[], Awaitable[ResourceIndex]] | None,
 ) -> ResourceIndex:
+    if kind in {"mastery_path", "reading_workspace"}:
+        assert loader is not None
+        try:
+            return await loader()
+        except Exception:
+            logger.debug("Course %s index is unavailable", kind, exc_info=True)
+            return {}
+    from deeptutor.learning.runtime import get_learning_runtime
+
     try:
-        return await loader()
+        runtime = get_learning_runtime()
     except Exception:
-        logger.warning("Failed to enumerate course resources of kind %s", kind, exc_info=True)
+        if loader is None:
+            return {}
+        try:
+            return await loader()
+        except Exception:
+            logger.debug("Course %s fallback index is unavailable", kind, exc_info=True)
+            return {}
+    if runtime.source_provider is None:
+        return {}
+    try:
+        await runtime.authorize()
+        result = await runtime.source_provider.course_index(runtime.scope, kind)
+        await runtime.authorize()
+        return result
+    except Exception:
+        logger.debug("PostgreSQL course %s authority index is unavailable", kind, exc_info=True)
         return {}
 
 
@@ -113,9 +137,18 @@ def _weak_points(row: dict[str, Any]) -> list[str]:
 
 
 async def _mastery_path_index() -> ResourceIndex:
-    from deeptutor.learning.service import LearningService
+    from deeptutor.learning.contracts import LearningPaginationRequired
+    from deeptutor.learning.navigation import path_overview_page
 
-    rows = await asyncio.to_thread(LearningService().list_path_overviews)
+    rows, cursor = [], None
+    while True:
+        page = await path_overview_page(cursor=cursor)
+        rows.extend(page["paths"])
+        if len(rows) > 1000:
+            raise LearningPaginationRequired("course mastery index requires cursor pagination")
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
     result: ResourceIndex = {}
     for row in rows:
         path_id = str(row.get("path_id") or row.get("book_id") or "").strip()
@@ -139,18 +172,22 @@ async def _mastery_path_index() -> ResourceIndex:
 
 
 async def _reading_workspace_index() -> ResourceIndex:
-    from deeptutor.reading.catalog_store import ReadingCatalogStore
+    from deeptutor.learning.contracts import LearningPaginationRequired
+    from deeptutor.learning.runtime import get_learning_runtime
+    from deeptutor.persistence.postgres.reading import AsyncReadingCatalogStore
 
-    catalog = ReadingCatalogStore()
-    rows: list[Any] = []
-    offset = 0
+    runtime = get_learning_runtime()
+    catalog = AsyncReadingCatalogStore(runtime.database, runtime.scope)
+    rows, cursor = [], None
     while True:
-        page = await asyncio.to_thread(catalog.list_workspaces, limit=500, offset=offset)
-        rows.extend(page)
-        if len(page) < 500:
+        await runtime.authorize()
+        page = await catalog.run(lambda u: u.list_workspaces_page(cursor=cursor))
+        rows.extend(page.items)
+        if len(rows) > 1000:
+            raise LearningPaginationRequired("course reading index requires cursor pagination")
+        cursor = page.next_cursor
+        if cursor is None:
             break
-        offset += len(page)
-
     result: ResourceIndex = {}
     for row in rows:
         workspace_id = str(getattr(row, "workspace_id", "") or "").strip()
@@ -215,23 +252,32 @@ _INDEX_LOADERS: dict[str, Callable[[], Awaitable[ResourceIndex]]] = {
 async def _resource_indexes() -> dict[str, ResourceIndex]:
     from deeptutor.services.courses import COURSE_RESOURCE_KINDS
 
-    loaders = _INDEX_LOADERS
-    loaded = await asyncio.gather(*(_safe_index(kind, loader) for kind, loader in loaders.items()))
-    indexes = {kind: index for kind, index in zip(loaders, loaded, strict=True)}
-    # No partner-group registry exists in the partner subsystem yet. Keep the
-    # public kind present and empty so persisted references degrade predictably.
-    return {kind: indexes.get(kind, {}) for kind in COURSE_RESOURCE_KINDS}
+    loaded = await asyncio.gather(
+        *(_safe_index(kind, _INDEX_LOADERS.get(kind)) for kind in COURSE_RESOURCE_KINDS)
+    )
+    return dict(zip(COURSE_RESOURCE_KINDS, loaded, strict=True))
 
 
 async def _session_state(course_id: str) -> tuple[dict[str, Any], set[str]]:
+    from deeptutor.learning.contracts import LearningPaginationRequired
+    from deeptutor.learning.runtime import get_learning_runtime
+
     empty = {"active": 0, "archived": 0, "recent": []}
     try:
-        from deeptutor.services.session import get_session_store
-        from deeptutor.services.session.organization import list_all_sessions_snapshot
-
-        sessions = await list_all_sessions_snapshot(get_session_store())
+        runtime = get_learning_runtime()
+        await runtime.authorize()
+        sessions, offset = [], 0
+        while True:
+            page = await runtime.session_store.list_sessions(limit=200, offset=offset)
+            sessions.extend(page)
+            if len(sessions) > 1000:
+                raise LearningPaginationRequired("course session index requires pagination")
+            if len(page) < 200:
+                break
+            offset += len(page)
+        await runtime.authorize()
     except Exception:
-        logger.warning("Failed to aggregate sessions for course %s", course_id, exc_info=True)
+        logger.debug("Course session index is unavailable", exc_info=True)
         return empty, set()
 
     matched = []
@@ -263,39 +309,38 @@ async def _question_bank_state(session_ids: set[str]) -> dict[str, Any]:
     if not session_ids:
         return empty
 
-    try:
-        from deeptutor.services.session import get_sqlite_session_store
+    from deeptutor.learning.runtime import get_learning_runtime
 
-        store = get_sqlite_session_store()
-        total = 0
-        wrong = 0
-        category_counts: dict[str, int] = {}
-        for session_id in sorted(session_ids):
-            all_rows = await store.list_notebook_entries(limit=1, session_id=session_id)
-            total += _as_int(all_rows.get("total"))
+    runtime = get_learning_runtime()
+    await runtime.authorize()
+    store = runtime.session_store
+    total = 0
+    wrong = 0
+    category_counts: dict[str, int] = {}
+    for session_id in sorted(session_ids):
+        all_rows = await store.list_notebook_entries(limit=1, session_id=session_id)
+        total += _as_int(all_rows.get("total"))
 
-            offset = 0
-            while True:
-                wrong_rows = await store.list_notebook_entries(
-                    is_correct=False,
-                    limit=500,
-                    offset=offset,
-                    session_id=session_id,
-                )
-                if offset == 0:
-                    wrong += _as_int(wrong_rows.get("total"))
-                items = wrong_rows.get("items") or []
-                for item in items:
-                    for category in item.get("categories") or []:
-                        name = str(category.get("name") or "").strip()
-                        if name:
-                            category_counts[name] = category_counts.get(name, 0) + 1
-                if len(items) < 500:
-                    break
-                offset += len(items)
-    except Exception:
-        logger.warning("Failed to aggregate the course question bank", exc_info=True)
-        return empty
+        offset = 0
+        while True:
+            wrong_rows = await store.list_notebook_entries(
+                is_correct=False,
+                limit=500,
+                offset=offset,
+                session_id=session_id,
+            )
+            if offset == 0:
+                wrong += _as_int(wrong_rows.get("total"))
+            items = wrong_rows.get("items") or []
+            for item in items:
+                for category in item.get("categories") or []:
+                    name = str(category.get("name") or "").strip()
+                    if name:
+                        category_counts[name] = category_counts.get(name, 0) + 1
+            if len(items) < 500:
+                break
+            offset += len(items)
+    await runtime.authorize()
 
     weak_categories = [
         {"name": name, "wrong": count}

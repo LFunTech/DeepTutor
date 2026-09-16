@@ -32,6 +32,26 @@ def test_cron_repository_does_not_bind_fcntl_at_import() -> None:
     assert "fcntl" not in cron_repository.__dict__
 
 
+def test_default_accessor_requires_postgres_runtime_without_opening_sqlite(monkeypatch) -> None:
+    import deeptutor.app.container as container_mod
+    import deeptutor.services.cron.service as service_mod
+
+    monkeypatch.setattr(service_mod, "_service", None)
+    monkeypatch.setattr(
+        cron_repository.sqlite3,
+        "connect",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("sqlite cron opened")),
+    )
+    monkeypatch.setattr(
+        container_mod,
+        "get_application_container",
+        lambda: SimpleNamespace(postgres_runtime=None),
+    )
+
+    with pytest.raises(RuntimeError, match="PostgreSQL cron service"):
+        service_mod.get_cron_service()
+
+
 def test_cron_repository_uses_msvcrt_locking_on_windows(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,0 +1,605 @@
+{
+  "columns": {
+    "reading_materials": "tenant_id:uuid! owner_id:text! material_id:text! content_id:text! filename:text! title:text! source_kind:text! source_url:text! mime:text! render_mode:text! cover_url:text! duration_seconds:float8! status:text! progress:int4! error_code:text! error_detail:text! last_opened_at:float8! version:int8! created_at:float8! updated_at:float8!",
+    "reading_workspaces": "tenant_id:uuid! owner_id:text! workspace_id:text! title:text! description:text! active_material_id:text version:int8! created_at:float8! updated_at:float8!",
+    "reading_workspace_materials": "tenant_id:uuid! owner_id:text! workspace_id:text! material_id:text! tab_order:int4! pinned:bool! opened:bool! added_at:float8!",
+    "reading_workspace_sessions": "tenant_id:uuid! owner_id:text! workspace_id:text! session_id:text! title:text! active_material_id:text version:int8! created_at:float8! updated_at:float8!",
+    "reading_session_links": "tenant_id:uuid! owner_id:text! workspace_id:text! source_session_id:text! target_session_id:text! created_at:float8!",
+    "notebook_entries": "tenant_id:uuid! owner_id:text! id:int8! session_id:text! turn_id:text! question_id:text! question:text! question_type:text! options:jsonb! correct_answer:text! explanation:text! difficulty:text! user_answer:text! user_answer_images:jsonb! source:text! material_id:text! material_title:text! section_id:text! section_title:text! score_trend:text! is_correct:bool! resolved:bool! bookmarked:bool! followup_session_id:text! ai_judgment:text! created_at:float8! updated_at:float8! version:int8! execution_turn_id:text followup_session_ref:text mastery_path_ref:text mastery_kp_ref:text reading_material_ref:text"
+  },
+  "constraints": {
+    "reading_materials": [
+      "PRIMARY KEY (tenant_id, owner_id, material_id)",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "CHECK ((material_id ~ '^[A-Za-z0-9_-]{1,128}$'::text))",
+      "CHECK ((source_kind = ANY (ARRAY['file'::text, 'web'::text, 'video'::text, 'youtube'::text, 'bilibili'::text, 'audio'::text])))",
+      "CHECK ((status = ANY (ARRAY['queued'::text, 'processing'::text, 'ready'::text, 'failed'::text])))",
+      "CHECK ((version > 0))",
+      "CHECK (((progress >= 0) AND (progress <= 100)))",
+      "CHECK (((status = 'ready'::text) = (progress = 100)))",
+      "CHECK ((duration_seconds >= (0)::double precision))"
+    ],
+    "reading_workspaces": [
+      "PRIMARY KEY (tenant_id, owner_id, workspace_id)",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "CHECK ((workspace_id ~ '^[A-Za-z0-9_-]{1,128}$'::text))",
+      "CHECK ((version > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) ON DELETE SET NULL (active_material_id) DEFERRABLE INITIALLY DEFERRED"
+    ],
+    "reading_workspace_materials": [
+      "PRIMARY KEY (tenant_id, owner_id, workspace_id, material_id)",
+      "UNIQUE (tenant_id, owner_id, workspace_id, tab_order) DEFERRABLE INITIALLY DEFERRED",
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id) REFERENCES enterprise.reading_workspaces(tenant_id, owner_id, workspace_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, material_id) REFERENCES enterprise.reading_materials(tenant_id, owner_id, material_id) ON DELETE CASCADE",
+      "CHECK ((tab_order >= 0))"
+    ],
+    "reading_workspace_sessions": [
+      "PRIMARY KEY (tenant_id, owner_id, session_id)",
+      "UNIQUE (tenant_id, owner_id, workspace_id, session_id)",
+      "CHECK ((session_id ~ '^[A-Za-z0-9_-]{1,128}$'::text))",
+      "CHECK ((version > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id) REFERENCES enterprise.reading_workspaces(tenant_id, owner_id, workspace_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) ON DELETE SET NULL (active_material_id) DEFERRABLE INITIALLY DEFERRED"
+    ],
+    "reading_session_links": [
+      "PRIMARY KEY (tenant_id, owner_id, workspace_id, source_session_id, target_session_id)",
+      "CHECK ((source_session_id <> target_session_id))",
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id, source_session_id) REFERENCES enterprise.reading_workspace_sessions(tenant_id, owner_id, workspace_id, session_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id, target_session_id) REFERENCES enterprise.reading_workspace_sessions(tenant_id, owner_id, workspace_id, session_id) ON DELETE CASCADE"
+    ],
+    "notebook_entries": [
+      "CHECK (((source <> 'mastery_path'::text) OR (material_id <> ''::text)))",
+      "CHECK ((jsonb_typeof(user_answer_images) = 'array'::text))",
+      "CHECK ((score_trend = ANY (ARRAY['new'::text, 'unchanged'::text, 'improved'::text, 'declined'::text])))",
+      "CHECK ((source = ANY (ARRAY['deep_question'::text, 'book'::text, 'mastery_path'::text, 'immersive_reading'::text])))",
+      "CHECK ((version >= 1))",
+      "FOREIGN KEY (tenant_id, owner_id, followup_session_ref) REFERENCES enterprise.sessions(tenant_id, owner_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, mastery_path_ref) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id)",
+      "FOREIGN KEY (tenant_id, owner_id, mastery_path_ref, mastery_kp_ref) REFERENCES enterprise.mastery_knowledge_points(tenant_id, owner_id, path_id, kp_id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_id, execution_turn_id) REFERENCES enterprise.turns(tenant_id, user_id, session_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, id)",
+      "UNIQUE (tenant_id, owner_id, session_id, turn_id, question_id)",
+      "FOREIGN KEY (tenant_id, owner_id, reading_material_ref) REFERENCES enterprise.reading_materials(tenant_id, owner_id, material_id)",
+      "CHECK (((source <> 'immersive_reading'::text) OR (material_id <> ''::text)))"
+    ]
+  },
+  "metadata": {
+    "reading_materials": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "material_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "content_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "filename": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "title": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "source_kind": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "source_url": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "mime": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "render_mode": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "cover_url": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "duration_seconds": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "status": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "progress": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "error_code": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "error_detail": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "last_opened_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "version": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "reading_workspaces": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "workspace_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "title": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "description": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "active_material_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "version": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "reading_workspace_materials": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "workspace_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "material_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "tab_order": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "pinned": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "opened": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "added_at": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "reading_workspace_sessions": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "workspace_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "title": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "active_material_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "version": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "reading_session_links": {
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "workspace_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "source_session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "target_session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "notebook_entries": {
+      "ai_judgment": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "bookmarked": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "correct_answer": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "difficulty": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "execution_turn_id": [
+        "s",
+        "",
+        "CASE WHEN (source <> 'book'::text) THEN NULLIF(turn_id, ''::text) ELSE NULL::text END",
+        "default"
+      ],
+      "explanation": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "followup_session_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "followup_session_ref": [
+        "s",
+        "",
+        "NULLIF(followup_session_id, ''::text)",
+        "default"
+      ],
+      "id": [
+        "",
+        "d",
+        null,
+        null
+      ],
+      "is_correct": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "mastery_kp_ref": [
+        "s",
+        "",
+        "CASE WHEN (source = 'mastery_path'::text) THEN NULLIF(section_id, ''::text) ELSE NULL::text END",
+        "default"
+      ],
+      "mastery_path_ref": [
+        "s",
+        "",
+        "CASE WHEN (source = 'mastery_path'::text) THEN NULLIF(material_id, ''::text) ELSE NULL::text END",
+        "default"
+      ],
+      "material_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "material_title": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "options": [
+        "",
+        "",
+        "'{}'::jsonb",
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "question": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "question_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "question_type": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "resolved": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "score_trend": [
+        "",
+        "",
+        "'new'::text",
+        "default"
+      ],
+      "section_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "section_title": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "source": [
+        "",
+        "",
+        "'deep_question'::text",
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "turn_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "user_answer": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "user_answer_images": [
+        "",
+        "",
+        "'[]'::jsonb",
+        null
+      ],
+      "version": [
+        "",
+        "",
+        "1",
+        null
+      ],
+      "reading_material_ref": [
+        "s",
+        "",
+        "CASE WHEN (source = 'immersive_reading'::text) THEN NULLIF(material_id, ''::text) ELSE NULL::text END",
+        "default"
+      ]
+    }
+  },
+  "indexes": {
+    "reading_materials_recent": "CREATE INDEX reading_materials_recent ON enterprise.reading_materials USING btree (tenant_id, owner_id, updated_at DESC, material_id DESC)",
+    "reading_materials_content": "CREATE INDEX reading_materials_content ON enterprise.reading_materials USING btree (tenant_id, owner_id, content_id, created_at, material_id)",
+    "reading_materials_filename": "CREATE INDEX reading_materials_filename ON enterprise.reading_materials USING btree (tenant_id, owner_id, translate(filename, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'::text, 'abcdefghijklmnopqrstuvwxyz'::text), status, updated_at DESC, material_id)",
+    "reading_workspaces_recent": "CREATE INDEX reading_workspaces_recent ON enterprise.reading_workspaces USING btree (tenant_id, owner_id, updated_at DESC, workspace_id DESC)",
+    "reading_tabs_material": "CREATE INDEX reading_tabs_material ON enterprise.reading_workspace_materials USING btree (tenant_id, owner_id, material_id, workspace_id)",
+    "reading_sessions_recent": "CREATE INDEX reading_sessions_recent ON enterprise.reading_workspace_sessions USING btree (tenant_id, owner_id, workspace_id, updated_at DESC, session_id DESC)",
+    "reading_links_recent": "CREATE INDEX reading_links_recent ON enterprise.reading_session_links USING btree (tenant_id, owner_id, workspace_id, source_session_id, created_at, target_session_id)",
+    "reading_links_target": "CREATE INDEX reading_links_target ON enterprise.reading_session_links USING btree (tenant_id, owner_id, workspace_id, target_session_id)",
+    "reading_workspace_active": "CREATE INDEX reading_workspace_active ON enterprise.reading_workspaces USING btree (tenant_id, owner_id, workspace_id, active_material_id)",
+    "reading_session_active": "CREATE INDEX reading_session_active ON enterprise.reading_workspace_sessions USING btree (tenant_id, owner_id, workspace_id, active_material_id)",
+    "notebook_reading_material": "CREATE INDEX notebook_reading_material ON enterprise.notebook_entries USING btree (tenant_id, owner_id, reading_material_ref)"
+  }
+}

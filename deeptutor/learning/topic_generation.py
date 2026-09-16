@@ -244,21 +244,10 @@ async def ground_topic_sources(
     goal: str,
     sources: list[TopicSource],
 ) -> list[TopicSource]:
-    query = f"{str(name or '').strip()}\n{str(goal or '').strip()}".strip()[:2_000]
+    from deeptutor.learning.runtime import get_learning_runtime
+    from deeptutor.learning.sources import ground_sources
 
-    async def ground(source: TopicSource) -> TopicSource:
-        if source.kind == TopicSourceKind.FILE:
-            return await _ground_file_source(source)
-        return await _ground_knowledge_base_source(source, query=query)
-
-    return list(
-        await asyncio.gather(
-            *(
-                ground(source)
-                for source in sorted(sources, key=lambda item: item.position)[:_MAX_SOURCES]
-            )
-        )
-    )
+    return await ground_sources(get_learning_runtime(), sources, name=name, goal=goal)
 
 
 #: Keys a model reaches for when asked for a module's purpose. The prompt asks
@@ -536,6 +525,9 @@ async def generate_topic_draft(
         module_limit=module_limit,
         must_cover=[str(item).strip() for item in (must_cover or []) if str(item or "").strip()],
     )
+    from deeptutor.learning.runtime import get_learning_runtime
+
+    await get_learning_runtime().check_execution()
     response = await complete(prompt=prompt, system_prompt=system_prompt)
     data = parse_json_response(response, fallback=None)
     if not isinstance(data, dict):

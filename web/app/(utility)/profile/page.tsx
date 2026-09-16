@@ -197,7 +197,7 @@ export default function ProfilePage() {
       : hasImage
         ? null
         : fallback.color;
-  const isAdmin = profile?.role === "admin";
+  const isAdmin = profile?.role === "tenant_admin";
   const lang: Language = i18n.language?.startsWith("zh") ? "zh" : "en";
   const joinedDate = profile?.created_at ? new Date(profile.created_at) : null;
   const joined =

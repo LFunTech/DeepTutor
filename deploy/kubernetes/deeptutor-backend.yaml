@@ -1,0 +1,150 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deeptutor-backend-config
+data:
+  DEEPTUTOR_RUNTIME_MODE: kubernetes
+  DEEPTUTOR_OBJECTSTORE_ENDPOINT: https://s3-compatible.example.internal
+  DEEPTUTOR_OBJECTSTORE_REGION: us-east-1
+  DEEPTUTOR_OBJECTSTORE_BUCKET: deeptutor-runtime
+  DEEPTUTOR_OBJECTSTORE_PATH_STYLE: "true"
+  DEEPTUTOR_OBJECTSTORE_ACCESS_KEY_REF: env:DEEPTUTOR_OBJECTSTORE_ACCESS_KEY
+  DEEPTUTOR_OBJECTSTORE_SECRET_KEY_REF: env:DEEPTUTOR_OBJECTSTORE_SECRET_KEY
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: deeptutor-backend-secrets
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: platform-secret-store
+    kind: ClusterSecretStore
+  target:
+    name: deeptutor-backend-secrets
+  data:
+    - secretKey: DEEPTUTOR_DATABASE_URL
+      remoteRef:
+        key: deeptutor/postgres/runtime-dsn
+    - secretKey: DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+      remoteRef:
+        key: deeptutor/postgres/migration-dsn
+    - secretKey: DEEPTUTOR_OBJECTSTORE_ACCESS_KEY
+      remoteRef:
+        key: deeptutor/objectstore/access-key
+    - secretKey: DEEPTUTOR_OBJECTSTORE_SECRET_KEY
+      remoteRef:
+        key: deeptutor/objectstore/secret-key
+    - secretKey: DEEPTUTOR_AUTH_SIGNING_SECRET
+      remoteRef:
+        key: deeptutor/auth/signing-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deeptutor-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: deeptutor-backend
+  template:
+    metadata:
+      labels:
+        app: deeptutor-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/example/deeptutor-backend:replace-with-digest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DEEPTUTOR_RUNTIME_MODE
+              value: kubernetes
+            - name: DEEPTUTOR_EXECUTION_MODE
+              value: single
+            - name: DEEPTUTOR_POSTGRES_CONFIG
+              value: /etc/deeptutor/postgres.json
+            - name: DEEPTUTOR_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: deeptutor-backend-secrets
+                  key: DEEPTUTOR_DATABASE_URL
+            - name: DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: deeptutor-backend-secrets
+                  key: DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+            - name: DEEPTUTOR_OBJECTSTORE_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: deeptutor-backend-config
+                  key: DEEPTUTOR_OBJECTSTORE_ENDPOINT
+            - name: DEEPTUTOR_OBJECTSTORE_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: deeptutor-backend-config
+                  key: DEEPTUTOR_OBJECTSTORE_REGION
+            - name: DEEPTUTOR_OBJECTSTORE_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: deeptutor-backend-config
+                  key: DEEPTUTOR_OBJECTSTORE_BUCKET
+            - name: DEEPTUTOR_OBJECTSTORE_PATH_STYLE
+              valueFrom:
+                configMapKeyRef:
+                  name: deeptutor-backend-config
+                  key: DEEPTUTOR_OBJECTSTORE_PATH_STYLE
+            - name: DEEPTUTOR_OBJECTSTORE_ACCESS_KEY_REF
+              value: env:DEEPTUTOR_OBJECTSTORE_ACCESS_KEY
+            - name: DEEPTUTOR_OBJECTSTORE_SECRET_KEY_REF
+              value: env:DEEPTUTOR_OBJECTSTORE_SECRET_KEY
+            - name: DEEPTUTOR_OBJECTSTORE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: deeptutor-backend-secrets
+                  key: DEEPTUTOR_OBJECTSTORE_ACCESS_KEY
+            - name: DEEPTUTOR_OBJECTSTORE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: deeptutor-backend-secrets
+                  key: DEEPTUTOR_OBJECTSTORE_SECRET_KEY
+            - name: DEEPTUTOR_AUTH_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: deeptutor-backend-secrets
+                  key: DEEPTUTOR_AUTH_SIGNING_SECRET
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: scratch
+              mountPath: /tmp/deeptutor
+            - name: config-projection
+              mountPath: /etc/deeptutor
+              readOnly: true
+      volumes:
+        - name: scratch
+          emptyDir: {}
+        - name: config-projection
+          configMap:
+            name: deeptutor-postgres-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deeptutor-backend
+spec:
+  selector:
+    app: deeptutor-backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

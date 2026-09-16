@@ -1,5 +1,6 @@
 """Built-in cron — scheduled tasks for chat and partners."""
 
+from deeptutor.services.cron.postgres import PostgresCronService
 from deeptutor.services.cron.repository import CronRepository, SQLiteCronRepository
 from deeptutor.services.cron.service import (
     CronJob,
@@ -17,6 +18,7 @@ __all__ = [
     "CronRepository",
     "CronSchedule",
     "CronService",
+    "PostgresCronService",
     "SQLiteCronRepository",
     "compute_next_run",
     "get_cron_service",

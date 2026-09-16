@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import importlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Iterator
 
 import pytest
 
@@ -48,6 +50,21 @@ def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api")
     return app
+
+
+@contextmanager
+def _test_user_context(tmp_path: Path, *, role: str = "user") -> Iterator[CurrentUser]:
+    user = CurrentUser(
+        id=f"{role}-test-user",
+        username=f"{role}-test-user",
+        role=role,
+        scope=UserScope(kind=role, user_id=f"{role}-test-user", root=tmp_path / role),
+    )
+    token = set_current_user(user)
+    try:
+        yield user
+    finally:
+        reset_current_user(token)
 
 
 def test_knowledge_source_error_translation_is_consistent_and_sanitized() -> None:
@@ -612,6 +629,17 @@ def test_supported_file_types_can_delegate_all_extensions(monkeypatch) -> None:
     assert payload["accept"] == ""
 
 
+def test_upload_policy_legacy_alias_returns_supported_file_types() -> None:
+    """旧前端 bundle 仍可能请求 upload-policy，不能被动态 KB 名路由吞掉。"""
+    with TestClient(_build_app()) as client:
+        canonical = client.get("/api/knowledge-bases/supported-file-types")
+        legacy = client.get("/api/knowledge-bases/upload-policy")
+
+    assert canonical.status_code == 200
+    assert legacy.status_code == 200
+    assert legacy.json() == canonical.json()
+
+
 def test_graphrag_model_compatibility_probes_candidate_without_switching(
     monkeypatch,
 ) -> None:
@@ -1074,7 +1102,7 @@ def test_list_fallback_reports_error_status(monkeypatch, tmp_path: Path) -> None
     (manager.base_dir / "broken-kb").mkdir(parents=True)
     monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: manager)
 
-    with TestClient(_build_app()) as client:
+    with _test_user_context(tmp_path), TestClient(_build_app()) as client:
         response = client.get("/api/knowledge-bases")
 
     assert response.status_code == 200
@@ -1125,7 +1153,7 @@ def test_list_reuses_manager_config_snapshot(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: manager)
     monkeypatch.setattr(knowledge_router_module, "list_visible_kb_access", lambda: [])
 
-    with TestClient(_build_app()) as client:
+    with _test_user_context(tmp_path), TestClient(_build_app()) as client:
         response = client.get("/api/knowledge-bases")
 
     assert response.status_code == 200
@@ -1133,6 +1161,54 @@ def test_list_reuses_manager_config_snapshot(monkeypatch, tmp_path: Path) -> Non
     assert manager.list_calls == 1
     assert manager.default_calls == 1
     assert manager.info_calls == [(name, False, "kb-a") for name in manager.names]
+
+
+def test_list_marks_external_connected_kbs_read_only(monkeypatch, tmp_path: Path) -> None:
+    class _ConnectedKBManager:
+        def __init__(self) -> None:
+            self.base_dir = tmp_path / "knowledge_bases"
+            self.base_dir.mkdir(parents=True)
+
+        def list_knowledge_bases(self) -> list[str]:
+            return ["remote"]
+
+        def get_default(self, *, available_names: list[str] | None = None) -> str:
+            assert available_names == ["remote"]
+            return "remote"
+
+        def get_info(
+            self,
+            name: str,
+            *,
+            refresh_config: bool,
+            default_name: str | None,
+        ) -> dict:
+            assert name == "remote"
+            assert refresh_config is False
+            return {
+                "name": name,
+                "path": str(self.base_dir / name),
+                "is_default": name == default_name,
+                "statistics": {"rag_provider": "lightrag-server", "status": "ready"},
+                "metadata": {
+                    "name": name,
+                    "type": "lightrag_server",
+                    "rag_provider": "lightrag-server",
+                    "server_url": "http://localhost:9621",
+                },
+                "status": "ready",
+                "progress": None,
+            }
+
+    monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: _ConnectedKBManager())
+    monkeypatch.setattr(knowledge_router_module, "list_visible_kb_access", lambda: [])
+    with _test_user_context(tmp_path), TestClient(_build_app()) as client:
+        response = client.get("/api/knowledge-bases")
+
+    assert response.status_code == 200
+    [item] = response.json()
+    assert item["read_only"] is True
+    assert item["metadata"]["type"] == "lightrag_server"
 
 
 def _ready_kb_manager(tmp_path: Path, name: str = "kb") -> "_FakeKBManager":
@@ -1198,7 +1274,7 @@ def test_remote_kb_file_listing_is_empty_without_creating_local_storage(
     manager.register_lightrag_server_kb("remote", "http://localhost:9621")
     monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: manager)
 
-    with TestClient(_build_app()) as client:
+    with _test_user_context(tmp_path), TestClient(_build_app()) as client:
         response = client.get("/api/knowledge-bases/remote/files")
 
     assert response.status_code == 200
@@ -1228,7 +1304,7 @@ def test_remote_kb_rejects_local_file_operations_without_creating_storage(
     manager.register_lightrag_server_kb("remote", "http://localhost:9621")
     monkeypatch.setattr(knowledge_router_module, "get_kb_manager", lambda: manager)
 
-    with TestClient(_build_app()) as client:
+    with _test_user_context(tmp_path), TestClient(_build_app()) as client:
         response = getattr(client, method)(url, **kwargs)
 
     assert response.status_code == 409

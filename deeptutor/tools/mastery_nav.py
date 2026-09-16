@@ -34,7 +34,6 @@ to an empty screen, and the model has no way to tell without being told.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -82,7 +81,7 @@ async def _topic_or_error(path_id: str) -> tuple[dict[str, Any] | None, ToolResu
     ref = _text(path_id)
     if not ref:
         return None, _failure("path_id is required; call mastery_topics for the ids.")
-    topic = await asyncio.to_thread(navigation.find_topic, ref)
+    topic = await navigation.find_topic(ref)
     if topic is None:
         return None, _failure(
             f"No mastery topic {ref!r} exists (or it has no knowledge map yet). "
@@ -191,6 +190,12 @@ class MasteryTopicsTool(_NavTool):
             ),
             parameters=[
                 ToolParameter(
+                    name="cursor",
+                    type="string",
+                    required=False,
+                    description="Continue from the previous response next_cursor",
+                ),
+                ToolParameter(
                     name="query",
                     type="string",
                     description=(
@@ -198,13 +203,23 @@ class MasteryTopicsTool(_NavTool):
                         "lesson names. Leave empty to list everything."
                     ),
                     required=False,
-                )
+                ),
             ],
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        payload = await asyncio.to_thread(navigation.topic_cards, query=_text(kwargs.get("query")))
+        payload = await navigation.topic_cards(
+            query=_text(kwargs.get("query")), cursor=kwargs.get("cursor")
+        )
         if not payload["topics"]:
+            if payload.get("next_cursor"):
+                return _result(
+                    {
+                        **payload,
+                        "instruction": "No match on this page. Continue mastery_topics with next_cursor before concluding no topic exists.",
+                    },
+                    meta_key="mastery_topics",
+                )
             hint = (
                 "No mastery topic matches that. Call mastery_topics with no "
                 "query to see everything the learner has."
@@ -239,10 +254,16 @@ class MasterySessionsTool(_NavTool):
             ),
             parameters=[
                 ToolParameter(
+                    name="cursor",
+                    type="string",
+                    required=False,
+                    description="Continue from the previous response next_cursor",
+                ),
+                ToolParameter(
                     name="path_id",
                     type="string",
                     description="Topic id from mastery_topics (verbatim).",
-                )
+                ),
             ],
         )
 
@@ -250,11 +271,13 @@ class MasterySessionsTool(_NavTool):
         topic, error = await _topic_or_error(kwargs.get("path_id", ""))
         if error is not None or topic is None:
             return error or _failure("path_id is required.")
-        rows = await navigation.topic_sessions(topic["path_id"])
+        page = await navigation.topic_sessions(topic["path_id"], cursor=kwargs.get("cursor"))
+        rows = page["sessions"]
         payload = {
             "path_id": topic["path_id"],
             "path_name": topic["name"],
             **navigation.navigable_session_rows(rows),
+            "next_cursor": page["next_cursor"],
         }
         payload["instruction"] = (
             "Reopen one with mastery_open_session(path_id, session_id), or "
@@ -349,8 +372,17 @@ class MasteryOpenSessionTool(_NavTool):
         if module_error is not None:
             return module_error
 
-        rows = await navigation.topic_sessions(topic["path_id"])
-        session = next((row for row in rows if row["session_id"] == session_id), None)
+        from deeptutor.learning.runtime import get_learning_runtime
+
+        runtime = get_learning_runtime()
+        linked = await runtime.run(lambda u: u.path_id_for_session(session_id))
+        session = (
+            await runtime.session_store.get_session(session_id)
+            if linked == topic["path_id"]
+            else None
+        )
+        if session is not None:
+            session = {**session, "session_id": session_id}
         if session is None:
             # A conversation from another topic (or an invented id) would open
             # a screen whose tutor knows nothing about what was promised here.

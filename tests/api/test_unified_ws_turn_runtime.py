@@ -562,6 +562,120 @@ async def test_turn_runtime_rejects_invalid_llm_selection(
 
 
 @pytest.mark.asyncio
+async def test_turn_runtime_tenant_admin_uses_deployment_default_without_grant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """PG bootstrap admins are tenant admins, not grant recipients.
+
+    With no explicit model pick they should follow the deployment default like
+    admins do, instead of trying to resolve an ordinary-user grant and indexing
+    into an empty assigned-model list.
+    """
+
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+
+    store = SQLiteSessionStore(tmp_path / "chat_history.db")
+    runtime = TurnRuntimeManager(store)
+    captured: dict[str, object] = {}
+
+    class FakeContextBuilder:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def build(self, **kwargs):
+            captured["builder_llm_config"] = kwargs["llm_config"]
+            return SimpleNamespace(
+                conversation_history=[],
+                conversation_summary="",
+                context_text="",
+                token_count=0,
+                budget=0,
+            )
+
+    class FakeOrchestrator:
+        async def handle(self, context):
+            captured["metadata"] = context.metadata
+            yield StreamEvent(
+                type=StreamEventType.CONTENT,
+                source="chat",
+                stage="responding",
+                content="Tenant admin reply",
+                metadata={"call_kind": "llm_final_response"},
+            )
+            yield StreamEvent(type=StreamEventType.DONE, source="chat")
+
+    def fake_activate(selection):
+        captured["activated_selection"] = selection
+        return SimpleNamespace(model="gpt-4o-mini", provider_name="openai"), object()
+
+    monkeypatch.setattr(
+        "deeptutor.services.config.get_model_catalog_service",
+        lambda: SimpleNamespace(load=_model_catalog),
+    )
+    monkeypatch.setattr(
+        "deeptutor.services.llm.config.get_llm_config",
+        lambda: SimpleNamespace(model="gpt-4o-mini", provider_name="openai"),
+    )
+    monkeypatch.setattr(
+        "deeptutor.services.model_selection.runtime.activate_llm_selection",
+        fake_activate,
+    )
+    monkeypatch.setattr(
+        "deeptutor.services.model_selection.runtime.reset_llm_selection",
+        lambda _token: captured.setdefault("reset_called", True),
+    )
+    monkeypatch.setattr(
+        "deeptutor.services.session.context_builder.ContextBuilder", FakeContextBuilder
+    )
+    monkeypatch.setattr("deeptutor.runtime.orchestrator.ChatOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(
+        "deeptutor.services.memory.get_memory_store",
+        lambda: SimpleNamespace(
+            read_l3_concat=lambda: "",
+            emit=_noop_async,
+        ),
+    )
+    monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
+    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+
+    current = CurrentUser(
+        id="tenant-admin",
+        username="admin",
+        role="tenant_admin",
+        scope=UserScope(kind="tenant", user_id="tenant-admin", tenant_id="tenant-1", root=None),
+    )
+    token = set_current_user(current)
+    try:
+        session, turn = await runtime.start_turn(
+            {
+                "type": "start_turn",
+                "content": "hello",
+                "session_id": None,
+                "capability": None,
+                "tools": [],
+                "knowledge_bases": [],
+                "attachments": [],
+                "language": "en",
+                "config": {},
+            }
+        )
+        async for _event in runtime.subscribe_turn(turn["id"], after_seq=0):
+            pass
+    finally:
+        reset_current_user(token)
+
+    detail = await store.get_session_with_messages(session["id"])
+    assert detail is not None
+    assert "llm_selection" not in detail["preferences"]
+    assert "llmSelection" not in detail["messages"][0]["metadata"]["request_snapshot"]
+    assert captured["activated_selection"] is None
+    assert captured["builder_llm_config"].model == "gpt-4o-mini"
+    assert captured["metadata"].get("llm_selection") in (None, {})
+
+
+@pytest.mark.asyncio
 async def test_turn_runtime_allows_model_switching_within_same_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

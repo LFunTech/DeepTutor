@@ -1,18 +1,29 @@
 schema: spec-driven
 context: |
   项目为 DeepTutor，Python/FastAPI 后端与 Next.js 前端，CLI/WebSocket/SDK 共用 agent runtime。
-  架构调整的领域文档位于 docs/eduplus2-integration/，readme.md 为入口；00–13 按主执行路径排列，02 为实施总纲、05 为 Woodpecker。任务包内按执行顺序排序，跨包并行依赖仍以显式说明为准。
-  当前工作仅调整方案，不代表功能已实现或部署。不得为规划执行数据库或集群变更。
-  生产路线固定为：单租户 Kubernetes（PostgreSQL + S3-compatible）→ 多租户及租户管理界面 → 统一运营管理后台。
+  2026-09-13 用户决策：取消全仓 local/SQLite 运行 profile，默认 Web/CLI/SDK/后台必须使用 PostgreSQL，本机部署也必须连接 PG；不以关闭现有功能替代迁移。全量 change migrate-all-sqlite-state-to-postgresql 已于 2026-09-14 获准在当前 master 原目录实施，保留全部已有修改、不提交或推送；实际完成范围以该 change 的 tasks 和 execution-evidence 为准，未完成项不视为已交付。范围含全部直接/间接 SQLite（Matrix/E2EE）、只读源导入与默认入口切换。SQLite 仅限独立离线导入读取/旧格式 fixture，运行态临时缓存也不允许；不改变 S3/图或自动迁移全部 JSON/Markdown 的范围。数据库验证仅使用隔离合成数据；用户已指定 .secrets 中模型配置并授权必要真实模型验收，调用次数与供应商费用暂不设上限，逐调用记录用量且不输出密钥。真实业务数据导入、cutover、发布、提交与归档仍须各自授权。
+  企业化（存储、生产部署、多租户、TMS/OMS、外部集成和维护）的领域文档位于 docs/enterprise/，readme.md 为入口；00–13 按主执行路径排列，02 为实施总纲、05 为 Woodpecker。任务包内按执行顺序排序，跨包并行依赖仍以显式说明为准。
+  前期工作包括方案调整与用户授权的隔离本地 Docker 选型评估；当前首个 A1 子切片已在工作区实现并隔离验证，详见下文及该 change 的执行证据，不代表完整企业路线已交付或生产部署。历史评估对 HugeGraph 仅只读检查；图检索当前仅同步用户 fork 新增 HugeGraphStorage 与多租户方案，未执行新组合测试；不得为规划变更现有数据库/集群数据。
+  生产路线固定为：单租户 Kubernetes（PostgreSQL + HugeGraph + S3-compatible）→ 多租户及租户管理界面 → 统一运营管理后台。
   三个业务里程碑 M1/M2/M3 下按 A1/A2/A3、B1/B2、C1/C2 七个工作包验收，不要求七次生产发布。
   H 可用性工作线独立于租户数量：实际启用多执行者或发布要求高可用前必须通过 G-H，单执行模式需确认非 HA 与容量/恢复目标。
   Woodpecker 流水线为 M1/A3 必交付子环节，从 A1 并行开发，G1 前真实验收构建/推送/迁移/部署/smoke/回退；M2/M3 与 upstream 更新复用，不新增业务工作包。
   K8s 集成环境和 EduPlus2 外部契约准备从 A1 并行；B1 验证最终单租户接入，B2 才开放多租户；C2 不因 C1 可发布而省略。
-  复用现有租户管理界面，平台运营后台另有权限边界；EduPlus2 保持用户/组织/身份权限主数据权威。
-  配置/现有扩展点优先，必要通用核心 hook 和调用收敛 + 独立 deeptutor_enterprise 包/应用外壳；不承诺完整应用仅配置或零 diff，不采用全站 monkey patch。
-  RAG 默认保留 lightrag-server HTTP 查询与 LightRAG 引擎，企业适配补齐 PG/Secret binding、可信授权、托管文档导入/状态/引用/删除/恢复，检索 KV/vector/doc_status/graph 全部外置 PG，S3 保存原文/解析物。
-  默认经授权路由使用固定 workspace LightRAG Server 实例池，不按租户复制整套 DeepTutor；动态多 workspace 服务层非本期默认。workspace 不等于 RLS，锁定 Server/图后端版本并验证低权运行及数据库强制隔离。
+  企业 TMS 入口 /tms、专属 API /api/v1/tms/*：M1 固定租户既有管理功能，B2 完成多租户适配；OMS 入口 /oms、专属 API /api/v1/oms/*：B2 先交付治理 API，C1/C2 交付运营界面。
+  TMS 为 Tenant Management System，OMS 为 Operations Management System（平台运营，非订单）；角色与 tenant.* / ops.* 能力 key 不改名，通用 API、WS 与 EduPlus2 接入路径不变。
+  复用现有租户页面/组件，保留 web/app/(admin)/admin 作为源码基线引用，不宣称目标路由已实现；两级管理权限边界分开，EduPlus2 保持用户/组织/身份权限主数据权威。
+  配置/现有扩展点优先；通用 PG 连接/事务/scope/身份/Store/迁移从首切片下沉 core，默认发行物包含 PG 支持；企业特有集成/资源/治理保留独立 deeptutor_enterprise 包/应用外壳。保持同一 schema_history/ID/数据，不让 core 反向依赖企业包，不复制第二套 PG。首切片无 PG 的 local 兼容只是被新决策替代的历史验收，不承诺零 diff，不采用全站 monkey patch。
+  RAG 技术路线已确定：企业首发 lightrag-server，图检索必需，由 DeepTutor 回答，图后端采用用户 fork 的 HugeGraphStorage；WeKnora 不建首发企业实现。选型确定不等于生产验收；A1/A2 验证真实教材、引用、图事实忠实性、成本/容量、企业生命周期、安全及恢复，G1 继续阻断缺证据的发布。
+  当前 LightRAG adapter 仅负责检索；企业服务补齐 PG/Secret binding、可信授权、固定 workspace 实例池、托管文档导入/状态/引用/删除/恢复。KV/vector/doc_status 存 PG，HugeGraphStorage 将图存入 HugeGraph；S3 原文由企业 ObjectStore 管理；原始文件提交后由 LightRAG 检索链统一解析，其解析组件唯一管理 S3 派生空间并上报 manifest，企业文档 worker 仅协调与对账，实际解析/任务必需组件纳入持久化与对账，不照搬 WeKnora 依赖。
+  用户 LFunTech/LightRAG fork 工作区已注册 HugeGraphStorage，但包含实现的生产 commit/digest 尚待锁定与验收，旧 v1.5.7 PG 图评估不覆盖新组合。HugeGraph scope 只是逻辑分区；A1 锁定 KB 授权粒度与图隔离策略，A2/G1 验证 PG RLS/图服务端权限、受限身份直接 REST/Gremlin 越权拒绝、双租户和同租户私有 KB。graphspace 取决于实际存储部署，不强制一租户一 graphspace。
+  多租户从 M1 设计和测试，M2 才开放真实租户；固定 workspace 实例池不等于每租户整套 DeepTutor，fork 图支持不等于动态多 workspace 或跨部署多写。shared_storage 锁/pending fence 不是持久跨部署 fencing；统一 URI/协调域，同 scope 独立写部署禁止，不确定写必须停全部 writer、服务端确认/对账后受控恢复。PG/HugeGraph/S3 无跨存储事务，持久任务/幂等对账、新 index-version 重建后原子切 binding；受控迁移身份与低权运行分离，HUGEGRAPH_AUTO_CREATE_SCHEMA=false 需实测。
+  S3 保存持久文件、动态 skills/personas 正文及资源包；PG 保存业务状态和 memory/notebook 正文，Secret 管凭证，scratch 只临时使用。企业 S3 原文为权威恢复源，RAG 服务派生副本登记责任/配额/删除；备份/CI 使用独立权限和保留策略。
   保留非托管外部连接只解绑语义；转为托管前核实语料所有权和移交，不能静默删除用户服务器。
+  依赖分层：在持久存储与检索数据面，DeepTutor（含企业包/RagGateway/文档 worker）仅直接访问应用 PG、S3 与 LightRAG API；聊天模型/外部身份等依赖另按各自契约接入；检索 PG/HugeGraph 是 LightRAG 内部依赖，图凭证/locator/schema/ACL/初始化/迁移/恢复归 LightRAG 部署运维。业务 binding 只含服务 endpoint/API Secret、workspace/资源版本及受控部署引用，不解析图连接，不直连图库/检索库、不执行 Gremlin/drop/屏障清理。DeepTutor 通过服务状态/错误保持 fail closed；直接图权限负例由受限检索测试 Job 执行，联合恢复不等于应用跨库操作。
+
+  六类职责以 06 责任矩阵为准：聊天与检索 profile/Secret/执行限额分离，业务总账与检索遥测按 operation ID 幂等对账，远端未确认结束不释放执行预留，缺用量待核算。业务 job 不拥有检索内部队列；取消区分粒度/意图/确认，不把单文档请求映射 workspace pipeline，C2 必需能力缺失仍待适配验收。
+  首发实例由独立运维预开/受控登记，应用原子领取并绑定；池不足等待/超时失败、回收不确定不归池，不在企业包增加 K8s provisioner。external_eligibility/local_enabled/provisioning_status 分来源保存并取交集，外部事件不覆盖本地暂停；M1 not_required 不进入外部模式。个人 session/memory/notebook 使用成员 guard 加 owner/已支持的显式 grant，全入口复验；角色不等于个人数据授权。方案修订轮次仅更改文档；后续用户已批准 add-enterprise-pg-identity-session-slice，工作区已实现并隔离验证企业装配/固定身份/PG文本会话，见该change执行证据。未改既有共享DB/集群，未生产发布，完整A1/G1继续阻断。
+
   不交付过渡部署、双写或新增文件型多租户后端；不提交或推送，除非用户明确要求。
 rules:
   proposal:

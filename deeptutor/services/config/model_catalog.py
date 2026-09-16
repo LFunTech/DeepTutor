@@ -24,10 +24,8 @@ from .embedding_endpoint import (
     normalize_embedding_endpoint_for_display,
 )
 
-# Fallback only — frozen at admin scope at import time. Production code should
-# enter through ``get_model_catalog_service()`` so the path is resolved from the
-# current user's PathService on every call.
-CATALOG_PATH = get_path_service().get_settings_file("model_catalog")
+# 兼容显式离线工具的覆盖点；默认调用惰性解析已授权 scope，不再 import 固化 admin 根。
+CATALOG_PATH: Path | None = None  # 显式旧工具覆盖点；import 不解析用户路径。
 
 # A fixed placeholder is returned to settings clients instead of provider
 # credentials. It is also accepted on write as "keep the stored value", so a
@@ -245,10 +243,11 @@ def _default_catalog() -> dict[str, Any]:
 
 
 class ModelCatalogService:
-    _instances: dict[str, "ModelCatalogService"] = {}
+    _instances: dict[str | tuple[str, str], "ModelCatalogService"] = {}
 
-    def __init__(self, path: Path | None = None):
-        self.path = path or CATALOG_PATH
+    def __init__(self, path: Path | None = None, *, owner_directory=None):
+        self.path = path or CATALOG_PATH or get_path_service().get_settings_file("model_catalog")
+        self._owner_directory = owner_directory
         self._lock = threading.RLock()
 
     @classmethod
@@ -258,6 +257,24 @@ class ModelCatalogService:
         if key not in cls._instances:
             cls._instances[key] = cls(resolved)
         return cls._instances[key]
+
+    @classmethod
+    def for_owner(cls, directory) -> "ModelCatalogService":
+        # 不 resolve 最终文件；即使实例已缓存也要验证当前绑定。
+        with directory.open(create=True) as files:
+            files.exists("model_catalog.json")
+        key = ("owner", str(directory.path))
+        if key not in cls._instances:
+            cls._instances[key] = cls(
+                directory.path / "model_catalog.json", owner_directory=directory
+            )
+        return cls._instances[key]
+
+    def exists(self) -> bool:
+        if self._owner_directory is not None:
+            with self._owner_directory.open(create=True) as files:
+                return files.exists(self.path.name)
+        return self.path.exists()
 
     def load(self) -> dict[str, Any]:
         loaded = self._read_existing_catalog()
@@ -278,6 +295,16 @@ class ModelCatalogService:
         return catalog
 
     def _read_existing_catalog(self) -> dict[str, Any]:
+        if self._owner_directory is not None:
+            with self._owner_directory.open(create=True) as files:
+                if not files.exists(self.path.name):
+                    return {}
+                data = files.read(self.path.name)
+            try:
+                loaded = json.loads(data)
+            except (ValueError, UnicodeDecodeError):
+                return {}
+            return loaded if isinstance(loaded, dict) else {}
         if not self.path.exists() or self.path.stat().st_size == 0:
             return {}
         try:
@@ -290,6 +317,11 @@ class ModelCatalogService:
         with self._lock:
             normalized = deepcopy(catalog)
             self._normalize(normalized)
+            if self._owner_directory is not None:
+                data = (json.dumps(normalized, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+                with self._owner_directory.open(create=True) as files:
+                    files.write(self.path.name, data)
+                return normalized
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd, temp_name = tempfile.mkstemp(
                 prefix=f".{self.path.name}.",
@@ -541,10 +573,11 @@ class ModelCatalogService:
 
 def get_model_catalog_service() -> ModelCatalogService:
     try:
-        from deeptutor.multi_user.context import get_current_user
+        from deeptutor.multi_user.context import get_current_user_or_none
         from deeptutor.multi_user.paths import get_admin_path_service
 
-        if not get_current_user().is_admin:
+        current = get_current_user_or_none()
+        if current is None or current.scope.kind == "tenant" or not current.is_admin:
             return ModelCatalogService.get_instance(
                 get_admin_path_service().get_settings_file("model_catalog")
             )

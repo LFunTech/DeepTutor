@@ -148,8 +148,15 @@ def init_user_directories(project_root: Path | None = None) -> None:
     Args:
         project_root: Project root directory (ignored, kept for API compatibility)
     """
-    # Use PathService for all paths
-    path_service = get_path_service()
+    # Use PathService for all paths. Process startup/import has no request owner;
+    # deployment-level config belongs to the admin workspace and must not fall
+    # through to an implicit current user.
+    try:
+        path_service = get_path_service()
+    except PermissionError:
+        from deeptutor.multi_user.paths import get_admin_path_service
+
+        path_service = get_admin_path_service()
     path_service.ensure_all_directories()
 
     # Only initialize essential configuration files

@@ -32,6 +32,19 @@ def admin_catalog() -> dict[str, Any]:
     return admin_catalog_service().load()
 
 
+def uses_deployment_llm_pool(user: Any) -> bool:
+    """Whether *user* may use the deployment-managed LLM catalog directly.
+
+    PostgreSQL ``tenant_admin`` accounts are tenant account managers, not the
+    legacy filesystem/global admin, so ``CurrentUser.is_admin`` deliberately
+    stays false for them. They still need to run chat and assign the same
+    deployment model pool to ordinary users; otherwise the bootstrap admin is
+    locked out until somebody assigns a model to the admin account.
+    """
+
+    return bool(getattr(user, "is_admin", False) or getattr(user, "can_manage_accounts", False))
+
+
 def _profile_by_id(catalog: dict[str, Any], service: str, profile_id: str) -> dict[str, Any] | None:
     for profile in catalog.get("services", {}).get(service, {}).get("profiles", []) or []:
         if str(profile.get("id") or "") == profile_id:
@@ -123,7 +136,7 @@ def redacted_model_access(user_id: str | None = None) -> dict[str, list[dict[str
 
 def allowed_llm_options() -> dict[str, Any]:
     user = get_current_user()
-    if user.is_admin:
+    if uses_deployment_llm_pool(user):
         return list_llm_options(admin_catalog())
     catalog = admin_catalog()
     llm_service = catalog.get("services", {}).get("llm", {})
@@ -170,6 +183,8 @@ def has_capability_access(capability: str, user_id: str | None = None) -> bool:
     user = get_current_user()
     if user.is_admin:
         return True
+    if getattr(user, "can_manage_accounts", False) and capability == "llm":
+        return bool(list_llm_options(admin_catalog()).get("options"))
     if user_id is None:
         user_id = user.id
     items = redacted_model_access(user_id).get(capability, []) or []
@@ -179,7 +194,7 @@ def has_capability_access(capability: str, user_id: str | None = None) -> bool:
 def apply_allowed_llm_selection(selection: dict[str, Any] | None) -> dict[str, Any] | None:
     """Allow only admin-granted LLM profile/model selections for ordinary users."""
     user = get_current_user()
-    if user.is_admin or not selection:
+    if uses_deployment_llm_pool(user) or not selection:
         return selection
     profile_id = str(selection.get("profile_id") or "")
     model_id = str(selection.get("model_id") or "")

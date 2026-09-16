@@ -8,6 +8,9 @@ import shutil
 import tempfile
 import zipfile
 
+from deeptutor.runtime.home import get_runtime_data_root
+from deeptutor.services.config import get_runtime_settings_dir
+
 from .protocol import VisualizerManifest
 
 _MAX_ARCHIVE_BYTES = 25 * 1024 * 1024
@@ -29,6 +32,7 @@ _ALLOWED_SUFFIXES = {
     ".woff2",
     ".wasm",
 }
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 
 class VisualizerStoreError(ValueError):
@@ -46,9 +50,21 @@ class VisualizerStore:
     ) -> None:
         from deeptutor.services.path_service import get_path_service
 
-        service = get_path_service()
-        self.root = (root or (service.get_user_root() / "visualizers")).resolve()
-        self.state_file = (state_file or service.get_settings_file("visualizers.json")).resolve()
+        service = None
+        try:
+            service = get_path_service()
+        except RuntimeError as exc:
+            if _LOCAL_PATH_UNAVAILABLE not in str(exc):
+                raise
+
+        user_root = service.get_user_root() if service is not None else get_runtime_data_root() / "user"
+        default_state_file = (
+            service.get_settings_file("visualizers.json")
+            if service is not None
+            else get_runtime_settings_dir() / "visualizers.json"
+        )
+        self.root = (root or (user_root / "visualizers")).resolve()
+        self.state_file = (state_file or default_state_file).resolve()
 
     def state(self) -> dict[str, list[str]]:
         try:

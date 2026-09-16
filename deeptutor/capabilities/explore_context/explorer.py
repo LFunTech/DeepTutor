@@ -115,6 +115,9 @@ class ContextExplorer:
             reasoning_effort=self.reasoning_effort,
             wire_api=getattr(cfg, "wire_api", None) or "auto",
             api_format=getattr(cfg, "api_format", None) or "auto",
+            disable_ssl_verify=getattr(
+                getattr(cfg, "transport", None), "disable_ssl_verify", None
+            ),
         )
 
     async def investigate(

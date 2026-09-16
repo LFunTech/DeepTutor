@@ -91,6 +91,8 @@ class TurnRequestPreparer:
         async def _coordinate_execution(self, execution: _TurnExecution) -> None: ...
 
     async def start_turn(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        if self.turn_environment is not None:
+            return await self._start_configured_turn(payload)
         await self._ensure_accepting_turns()
         # ``TurnRuntimeManager`` remains a one-version compatibility facade;
         # transport adapters normally strip their envelope before reaching it.
@@ -315,16 +317,18 @@ class TurnRequestPreparer:
         else:
             # Non-admin users MUST end up with a concrete llm_selection so we
             # never silently fall through to the global LLM client (which is
-            # configured from admin runtime settings). Admin keeps the existing behavior
-            # (None llm_selection → default config from admin scope).
+            # configured from admin runtime settings). Deployment-model-pool
+            # users (legacy admin and PG tenant_admin) keep the existing
+            # behavior (None llm_selection → default config from admin scope).
             from deeptutor.multi_user.context import get_current_user
             from deeptutor.multi_user.model_access import (
                 has_capability_access,
                 redacted_model_access,
+                uses_deployment_llm_pool,
             )
 
             current_user = get_current_user()
-            if not current_user.is_admin:
+            if not uses_deployment_llm_pool(current_user):
                 # Single gate, shared with the frontend lock and any HTTP
                 # surface: no usable LLM grant → a clear terminal error here
                 # instead of a silent fall-through to the global client.
@@ -563,9 +567,11 @@ class TurnRequestPreparer:
                         question_id=str(card_answer.get("question_id") or ""),
                         answer=str(card_answer.get("text") or ""),
                     )
-            except Exception as exc:
+            except BaseException as exc:
                 async with self._lock:
                     self._executions.pop(turn["id"], None)
+                if mastery_lease_acquired:
+                    await self._release_learning_lease(execution)
                 with contextlib.suppress(Exception):
                     await self.store.transition_turn(
                         turn["id"],
@@ -579,16 +585,9 @@ class TurnRequestPreparer:
                 # An administrative reset/delete can cancel the placeholder
                 # while lease acquisition is in flight. Never launch a task
                 # after that cancellation has already become durable.
-                from deeptutor.learning.storage import LearningStore
-
                 async with self._lock:
                     self._executions.pop(turn["id"], None)
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(
-                        LearningStore().release_path_lease,
-                        mastery_binding.path_id,
-                        turn_id=turn["id"],
-                    )
+                await self._release_learning_lease(execution)
                 raise RuntimeError("Mastery turn was cancelled while starting")
         session_metadata: dict[str, Any] = {
             "session_id": session["id"],
@@ -623,14 +622,7 @@ class TurnRequestPreparer:
             async with self._lock:
                 self._executions.pop(turn["id"], None)
             if mastery_binding is not None and mastery_lease_acquired:
-                from deeptutor.learning.storage import LearningStore
-
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(
-                        LearningStore().release_path_lease,
-                        mastery_binding.path_id,
-                        turn_id=turn["id"],
-                    )
+                await self._release_learning_lease(execution)
             with contextlib.suppress(Exception):
                 await self.store.update_turn_status(turn["id"], "failed", str(exc))
             if lease is not None and self.coordinator is not None:

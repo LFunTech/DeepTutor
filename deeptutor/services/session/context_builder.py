@@ -143,11 +143,12 @@ class ContextBuildResult:
 class _ContextSummaryAgent(BaseAgent):
     """Small helper agent for compressing older conversation turns."""
 
-    def __init__(self, language: str = "en") -> None:
+    def __init__(self, language: str = "en", *, agent_params: dict[str, Any] | None = None) -> None:
         super().__init__(
             module_name="chat",
             agent_name="context_summary_agent",
             language=language,
+            agent_params=agent_params,
         )
 
     async def process(self, *_args, **_kwargs) -> dict[str, Any]:
@@ -166,10 +167,12 @@ class ContextBuilder:
         store: SessionStoreProtocol,
         history_budget_ratio: float = 0.35,
         summary_target_ratio: float = 0.40,
+        summary_agent_params: dict[str, Any] | None = None,
     ) -> None:
         self.store = store
         self.history_budget_ratio = history_budget_ratio
         self.summary_target_ratio = summary_target_ratio
+        self.summary_agent_params = summary_agent_params
 
     def _effective_context_window(self, llm_config: LLMConfig) -> int:
         return resolve_effective_context_window(
@@ -270,7 +273,7 @@ class ContextBuilder:
         if not source_text.strip():
             return "", events
 
-        agent = _ContextSummaryAgent(language=language)
+        agent = _ContextSummaryAgent(language=language, agent_params=self.summary_agent_params)
         trace_meta = build_trace_metadata(
             call_id=new_call_id("context-summary"),
             phase="summarize_context",

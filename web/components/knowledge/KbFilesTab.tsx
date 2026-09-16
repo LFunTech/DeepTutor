@@ -61,6 +61,7 @@ export default function KbFilesTab({ kb, task }: KbFilesTabProps) {
       <KbDocumentList
         kbName={kb.name}
         refreshKey={refreshKey}
+        readOnly={kb.read_only}
         selectedFile={selectedFile?.name ?? null}
         onSelect={setSelectedFile}
         collapsed={fileListPanel.collapsed}

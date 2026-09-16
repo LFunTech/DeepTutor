@@ -36,10 +36,15 @@ def test_only_canonical_transport_and_resource_routes_are_registered() -> None:
         "/api/notebook",
         "/api/outputs",
     )
+    allowed_versioned_management = ("/api/v1/tms", "/api/v1/oms")
     assert not {
         path
         for path in paths
         if any(path == prefix or path.startswith(prefix + "/") for prefix in retired_prefixes)
+        and not any(
+            path == prefix or path.startswith(prefix + "/")
+            for prefix in allowed_versioned_management
+        )
     }
     assert "/api/system/runtime-topology" not in paths
 

@@ -17,9 +17,9 @@ class LoggingConfig:
 
 
 def get_default_log_dir() -> Path:
-    from deeptutor.services.path_service import get_path_service
+    from deeptutor.runtime.home import get_runtime_data_root
 
-    return get_path_service().get_logs_dir()
+    return get_runtime_data_root() / "user" / "logs"
 
 
 def load_logging_config() -> LoggingConfig:

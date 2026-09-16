@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
+import types
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +19,7 @@ courses_router_module = importlib.import_module("deeptutor.api.routers.courses")
 courses_service_module = importlib.import_module("deeptutor.services.courses")
 courses_router = courses_router_module.router
 
+from deeptutor.core.providers import ApplicationProviders, provider_context
 from deeptutor.services.courses import COURSE_RESOURCE_KINDS, CourseService
 
 
@@ -79,6 +83,48 @@ def _create_course(client: TestClient, **overrides) -> dict:
     response = client.post("/api/courses", json=payload)
     assert response.status_code == 200
     return response.json()["course"]
+
+
+
+
+def test_list_courses_uses_postgres_runtime_without_local_path_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakePostgresCourseService:
+        def __init__(self, db, scope) -> None:
+            assert db == "sync-db"
+            assert scope == "tenant-scope"
+
+        def list_courses(self):
+            return []
+
+    fake_module = types.ModuleType("deeptutor.persistence.postgres.courses")
+    fake_module.PostgresCourseService = _FakePostgresCourseService
+
+    fake_runtime = SimpleNamespace(
+        sync_db="sync-db",
+        scope_for_current_user=lambda: "tenant-scope",
+    )
+
+    def _raise_local_path_unavailable():
+        raise RuntimeError("local path service is unavailable for this scope")
+
+    monkeypatch.setitem(sys.modules, "deeptutor.persistence.postgres.courses", fake_module)
+    monkeypatch.setattr(
+        courses_service_module,
+        "get_path_service",
+        _raise_local_path_unavailable,
+        raising=False,
+    )
+
+    with provider_context(
+        ApplicationProviders(container=SimpleNamespace(postgres_runtime=fake_runtime))
+    ):
+        with TestClient(_build_app()) as client:
+            response = client.get("/api/courses")
+
+    assert response.status_code == 200
+    assert response.json()["courses"] == []
 
 
 def test_attach_and_detach_resource_round_trip(course_service: CourseService) -> None:

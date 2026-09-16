@@ -89,7 +89,9 @@ _inflight = _hint_cache.inflight
 
 
 def _cache_key(path_id: str, kp_id: str, anchor: str) -> str:
-    return f"{path_id}\0{kp_id}\0{anchor}"
+    from deeptutor.learning.runtime import get_learning_runtime
+
+    return f"{get_learning_runtime().event_scope}\0{path_id}\0{kp_id}\0{anchor}"
 
 
 # ── Material ─────────────────────────────────────────────────────────────
@@ -112,7 +114,7 @@ class _Material:
         return bool(self.waypoint)
 
 
-def _load_position(path_id: str) -> tuple[str, str, str, str, str, str, str]:
+async def _load_position(path_id: str) -> tuple[str, str, str, str, str, str, str]:
     """``(path_name, goal, module, waypoint, kp_type, status, kp_id)``.
 
     Reads the same policy the tutor and the outline read, so the hint is about
@@ -120,10 +122,10 @@ def _load_position(path_id: str) -> tuple[str, str, str, str, str, str, str]:
     at it.
     """
     from deeptutor.learning import policy as learning_policy
-    from deeptutor.learning.storage import LearningStore
+    from deeptutor.learning.runtime import get_learning_runtime
 
-    store = LearningStore()
-    progress = store.load(path_id)
+    snapshot = await get_learning_runtime().run(lambda u: u.get_topic_snapshot(path_id))
+    progress, topic = snapshot[:2] if snapshot else (None, None)
     if progress is None:
         return ("", "", "", "", "", "", "")
     step = learning_policy.next_objective(progress)
@@ -133,7 +135,6 @@ def _load_position(path_id: str) -> tuple[str, str, str, str, str, str, str]:
     # The goal lives on the topic, not on the progress aggregate. Description
     # first: it is the sentence a learner wrote about what they are after,
     # whereas ``goal`` is often just the topic's own name typed twice.
-    topic = store.get_topic(path_id, progress=progress)
     goal = ""
     if topic is not None:
         goal = str(topic.metadata.description or topic.metadata.goal or "")
@@ -157,13 +158,12 @@ async def _load_transcript(session_id: str) -> tuple[list[tuple[str, str]], str]
     """
     if not session_id:
         return ([], "")
-    try:
-        from deeptutor.services.session import get_session_store
+    from deeptutor.learning.runtime import get_learning_runtime
 
-        session = await get_session_store().get_session_with_messages(session_id)
-    except Exception:
-        logger.debug("ask-hint: session %s unreadable", session_id, exc_info=True)
-        return ([], "")
+    runtime = get_learning_runtime()
+    await runtime.authorize()
+    session = await runtime.session_store.get_session_with_messages(session_id)
+    await runtime.authorize()
     if not session:
         return ([], "")
     messages = [
@@ -180,7 +180,7 @@ async def _load_transcript(session_id: str) -> tuple[list[tuple[str, str]], str]
 
 
 async def _collect(path_id: str, session_id: str) -> _Material:
-    position = await asyncio.to_thread(_load_position, path_id)
+    position = await _load_position(path_id)
     path_name, goal, module_name, waypoint, kp_type, status, kp_id = position
     transcript, anchor = await _load_transcript(session_id)
     return _Material(
@@ -374,6 +374,9 @@ async def get_ask_hint(path_id: str, session_id: str = "") -> dict[str, Any]:
     except Exception:
         logger.debug("ask-hint generation failed", exc_info=True)
         return AskHint(hint="", knowledge_point_id="", generated_at=time.time()).to_dict()
+    from deeptutor.learning.runtime import get_learning_runtime
+
+    await get_learning_runtime().authorize()
     return value.to_dict()
 
 

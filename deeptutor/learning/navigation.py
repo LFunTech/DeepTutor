@@ -21,12 +21,11 @@ answer is never mistaken for a complete one.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any
 
 from deeptutor.learning import policy
-from deeptutor.learning.storage import LearningStore
+from deeptutor.learning.runtime import get_learning_runtime
 
 #: Topics returned by one atlas read, newest activity first.
 TOPIC_LIMIT = 20
@@ -38,21 +37,9 @@ SESSION_LIMIT = 20
 LAST_MESSAGE_CHARS = 160
 
 
-def learner_has_topics() -> bool:
-    """Whether this learner has any mastery topic worth navigating to.
-
-    The mount gate for chat's navigation tools, so it runs on every ordinary
-    chat turn. Probing the database file before opening a store keeps that
-    gate from creating one for a learner who has never used a mastery path,
-    and it fails closed: a tool with nothing to list is worse than a tool the
-    learner does not see.
-    """
-    try:
-        if not LearningStore.default_db_path().exists():
-            return False
-        return LearningStore().has_active_topics()
-    except Exception:
-        return False
+async def learner_has_topics() -> bool:
+    """显式 PG 有界 existence 查询；身份/数据库失败必须传播。"""
+    return await get_learning_runtime().run(lambda u: u.has_active_topics())
 
 
 def _clip(rows: list[dict[str, Any]], limit: int) -> tuple[list[dict[str, Any]], int]:
@@ -84,7 +71,7 @@ def _module_outline(summary: dict[str, Any]) -> tuple[list[dict[str, Any]], int]
     return _clip(rows, MODULE_LIMIT)
 
 
-def topic_cards(*, query: str = "", store: LearningStore | None = None) -> dict[str, Any]:
+async def topic_cards(*, query: str = "", store=None, cursor=None) -> dict[str, Any]:
     """Every active topic the learner owns, with its module outline.
 
     ``query`` is matched against the topic's name, its goal and its module
@@ -96,8 +83,11 @@ def topic_cards(*, query: str = "", store: LearningStore | None = None) -> dict[
     inside a chat (keyed by session id, no name, no map) is a scratchpad, not
     somewhere to send a learner back to.
     """
-    store = store or LearningStore()
-    snapshots = store.list_topic_snapshots(status="active")
+    store = store or get_learning_runtime()
+    page = await store.run(
+        lambda u: u.list_topic_page(status="active", cursor=cursor, limit=TOPIC_LIMIT)
+    )
+    snapshots = page.items
     needle = " ".join(str(query or "").split()).casefold()
 
     cards: list[dict[str, Any]] = []
@@ -141,13 +131,14 @@ def topic_cards(*, query: str = "", store: LearningStore | None = None) -> dict[
     cards, clipped = _clip(cards, TOPIC_LIMIT)
     return {
         "topics": cards,
+        "next_cursor": page.next_cursor,
         "total_topics": len(cards) + clipped,
         **({"topics_omitted": clipped} if clipped else {}),
         **({"query": query} if query else {}),
     }
 
 
-def find_topic(path_id: str, *, store: LearningStore | None = None) -> dict[str, Any] | None:
+async def find_topic(path_id: str, *, store=None) -> dict[str, Any] | None:
     """One topic's card, or ``None`` when nothing is stored under *path_id*.
 
     Used to validate a model-supplied id before it becomes a hand-off the
@@ -155,18 +146,17 @@ def find_topic(path_id: str, *, store: LearningStore | None = None) -> dict[str,
     open an empty screen, and the model has no way to tell the difference
     without asking.
     """
-    store = store or LearningStore()
+    store = store or get_learning_runtime()
     try:
-        progress = store.load(path_id) if store.exists(path_id) else None
+        snapshot = await store.run(lambda u: u.get_topic_snapshot(path_id))
     except ValueError:
-        # An id that cannot even be a path id (separators, traversal).
         return None
-    if progress is None:
+    if snapshot is None:
         return None
+    progress, topic, _, _ = snapshot
     summary = policy.map_summary(progress)
     if summary["counts"]["total"] <= 0:
         return None
-    topic = store.get_topic(path_id, progress=progress)
     modules, modules_clipped = _module_outline(summary)
     return {
         "path_id": progress.book_id,
@@ -251,9 +241,7 @@ def resolve_module(topic: dict[str, Any], module_ref: str) -> dict[str, Any] | N
     return None
 
 
-async def topic_sessions(
-    path_id: str, *, store: LearningStore | None = None
-) -> list[dict[str, Any]]:
+async def topic_sessions(path_id: str, *, store=None, cursor=None) -> list[dict[str, Any]]:
     """The conversations held on one topic, most recently active first.
 
     Two stores answer this together: the mastery store knows which sessions
@@ -266,19 +254,15 @@ async def topic_sessions(
     rather than this walk constructing a second one against the default
     workspace root.
     """
-    learning_store = store or LearningStore()
-    session_ids = await asyncio.to_thread(learning_store.list_session_ids, path_id)
-    if not session_ids:
-        return []
-    active_interaction = await asyncio.to_thread(
-        learning_store.get_active_interaction,
-        path_id,
+    learning_store = store or get_learning_runtime()
+    page, active_interaction = await learning_store.run(
+        lambda u: (
+            u.list_session_page(path_id, cursor=cursor, limit=SESSION_LIMIT),
+            u.get_active_interaction(path_id),
+        )
     )
     pending_session_id = active_interaction.session_id if active_interaction else ""
-
-    from deeptutor.services.session import get_session_store
-
-    summaries = await get_session_store().get_session_summaries(session_ids)
+    summaries = await learning_store.session_store.get_session_summaries(page.items)
     rows: list[dict[str, Any]] = []
     for session in summaries:
         session_id = str(session.get("session_id") or session.get("id") or "")
@@ -302,7 +286,7 @@ async def topic_sessions(
             }
         )
     rows.sort(key=lambda row: row["updated_at"], reverse=True)
-    return rows
+    return {"sessions": rows, "next_cursor": page.next_cursor}
 
 
 def navigable_session_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -346,3 +330,29 @@ __all__ = [
     "topic_cards",
     "topic_sessions",
 ]
+
+
+def path_overview(progress):
+    summary = policy.map_summary(progress)
+    counts = summary["counts"]
+    return {
+        "path_id": progress.book_id,
+        "name": policy.path_display_name(progress),
+        "objectives": counts["total"],
+        "mastered": counts["mastered"],
+        "learning": counts["learning"],
+        "not_started": counts["new"],
+        "due_reviews": summary["due_reviews"],
+        "complete": summary["complete"],
+        "open_question": progress.pending_question is not None,
+        "updated_at": progress.updated_at,
+    }
+
+
+async def path_overview_page(*, cursor=None, limit=200, store=None):
+    runtime = store or get_learning_runtime()
+    page = await runtime.run(lambda u: u.list_topic_page(status="", cursor=cursor, limit=limit))
+    return {
+        "paths": [path_overview(item[0]) for item in page.items],
+        "next_cursor": page.next_cursor,
+    }

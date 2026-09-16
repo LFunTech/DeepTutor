@@ -251,29 +251,15 @@ def _load_notebook_material(source_id: str, label: str, budget: int) -> TopicMat
 
 
 def _run_sync(coro: Any) -> Any:
-    """Await *coro* from this synchronous loader.
-
-    ``build_topic_materials`` is documented as storage-bound and is called off
-    the event loop, so a private loop here is safe. If some future caller runs
-    it *on* a loop, close the coroutine and report nothing rather than
-    deadlocking the turn — a missing material degrades the lesson, a wedged
-    turn ends it.
-    """
-    import asyncio
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
+    """旧同步适配不能在PG业务运行中自行创建event loop。"""
     coro.close()
-    logger.warning("Topic material loader called on a running event loop; skipping")
-    return None
+    raise RuntimeError("Use the explicit async learning source provider")
 
 
 def _session_store() -> Any:
-    from deeptutor.services.session import get_sqlite_session_store
+    from deeptutor.learning.runtime import get_learning_runtime
 
-    return get_sqlite_session_store()
+    return get_learning_runtime().session_store
 
 
 def _load_chat_material(source_id: str, label: str, budget: int) -> TopicMaterial:

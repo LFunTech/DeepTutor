@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def execution_error_text(error: BaseException, *, redact: bool = False) -> str:
+    """受控执行不向日志/事件传递可能包含凭证的 provider 原始异常。"""
+    return "LLM execution failed" if redact else str(error)
+
+
 @dataclass
 class Attachment:
     """A file or image attached to the user message."""
@@ -56,6 +61,11 @@ class TurnRuntimeContext:
     subagent_consult_budget: int | None = None
     min_loop_rounds: int = 0
     workspace: WorkspaceRuntimeContext | None = None
+    # None 表示原 local 资源装配；显式空集合表示没有安装任何资源 provider。
+    resource_capabilities: frozenset[str] | None = None
+    llm_config: Any | None = None
+    chat_params: dict[str, Any] | None = None
+    tool_registry: Any | None = None
 
 
 @dataclass

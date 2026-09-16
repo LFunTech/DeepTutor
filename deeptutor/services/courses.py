@@ -578,6 +578,23 @@ class CourseService:
 
 
 def get_course_service() -> CourseService:
+    from deeptutor.core.providers import get_providers
+
+    providers = get_providers()
+    runtime = None
+    if providers is not None and providers.container is not None:
+        runtime = getattr(providers.container, "postgres_runtime", None)
+    if runtime is None:
+        try:
+            from deeptutor.app.container import get_application_container
+
+            runtime = getattr(get_application_container(), "postgres_runtime", None)
+        except Exception:
+            runtime = None
+    if runtime is not None:
+        from deeptutor.persistence.postgres.courses import PostgresCourseService
+
+        return PostgresCourseService(runtime.sync_db, runtime.scope_for_current_user())
     return CourseService()
 
 

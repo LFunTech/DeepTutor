@@ -130,3 +130,22 @@ test("topic socket reconnects with the latest server revision", () => {
 
   client.stop();
 });
+
+test("reconnect retains the event cursor within one revision", () => {
+  const sockets: FakeSocket[] = [];
+  const scheduled: Array<() => void> = [];
+  const client = new MasteryTopicSocket("p", { onEnvelope: () => {} }, 0, {
+    createSocket: () => {
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    },
+    scheduler: { set: (callback) => { scheduled.push(callback); return callback; }, clear: () => {} },
+  });
+  client.start(); sockets[0].open();
+  sockets[0].message({ type: "subscribed", path_id: "p", revision: 2,
+    cursor: "scope-path-revision2-event200", next_cursor: "scope-path-revision2-event200", events: [] });
+  sockets[0].drop(); scheduled[0](); sockets[1].open();
+  assert.equal(JSON.parse(sockets[1].sent[0]).cursor, "scope-path-revision2-event200");
+  client.stop();
+});

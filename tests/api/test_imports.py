@@ -24,9 +24,27 @@ from deeptutor.services.session.sqlite_store import SQLiteSessionStore
 
 @pytest.fixture
 def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SQLiteSessionStore:
-    instance = SQLiteSessionStore(db_path=tmp_path / "test.db")
-    monkeypatch.setattr(imports_router, "get_sqlite_session_store", lambda: instance)
-    return instance
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+
+    token = set_current_user(
+        CurrentUser(
+            id="legacy-imports",
+            username="legacy-imports",
+            role="user",
+            scope=UserScope(
+                kind="user",
+                user_id="legacy-imports",
+                root=tmp_path / "legacy-imports",
+            ),
+        )
+    )
+    try:
+        instance = SQLiteSessionStore(db_path=tmp_path / "test.db")
+        monkeypatch.setattr(imports_router, "get_session_store", lambda: instance)
+        yield instance
+    finally:
+        reset_current_user(token)
 
 
 def _payload(

@@ -17,6 +17,7 @@ pulling the whole file before rendering page one.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import logging
 from pathlib import Path
 import shutil
@@ -39,7 +40,6 @@ from deeptutor.reading import (
     Annotation,
     IngestionStatus,
     MaterialNotFound,
-    ReadingCatalogStore,
     ReadingError,
     ReadingPosition,
     ReadingStore,
@@ -84,17 +84,96 @@ _MEDIA_EXTENSIONS = {
 }
 
 
-def _store() -> ReadingStore:
-    return ReadingStore()
+class ReadingProviderUnavailable(RuntimeError):
+    pass
 
 
-def _catalog() -> ReadingCatalogStore:
-    return ReadingCatalogStore()
+def _store(*materials: Any) -> ReadingStore:
+    cache = {row.material_id: row for row in materials if row is not None}
+
+    def resolve(material_id: str) -> Any | None:
+        return cache.get(material_id)
+
+    return ReadingStore(material_resolver=resolve if cache else None)
 
 
-def _ingestion() -> ReadingIngestionService:
-    catalog = _catalog()
-    return ReadingIngestionService(ReadingStore(catalog.root), catalog)
+def _store_for_workspace(workspace: Any | None) -> ReadingStore:
+    rows = [getattr(tab, "material", None) for tab in getattr(workspace, "tabs", ()) or ()]
+    return _store(*rows)
+
+
+def _pg_catalog():
+    from deeptutor.core.providers import get_providers
+
+    providers = get_providers()
+    provider = getattr(providers, "reading", None) if providers is not None else None
+    if provider is None or not callable(getattr(provider, "get", None)):
+        raise ReadingProviderUnavailable("PostgreSQL reading provider required")
+    catalog = provider.get()
+    if not callable(getattr(catalog, "run", None)):
+        raise ReadingProviderUnavailable("PostgreSQL reading provider required")
+    return catalog
+
+
+async def _pg_catalog_run(callback):
+    return await _pg_catalog().run(callback)
+
+
+def _run_async_blocking(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: asyncio.run(coro)).result()
+
+
+class _AsyncReadingCatalogSyncFacade:
+    """Synchronous catalog surface for legacy ingestion algorithms over PG.
+
+    Reading ingestion predates the async provider layer and calls catalog methods
+    from inside async stages. The facade keeps those calls on the PG provider
+    without exposing `_catalog.sqlite3`; route-level queueing still uses
+    `_pg_catalog_run()` directly.
+    """
+
+    def __init__(self, catalog: Any) -> None:
+        self._catalog = catalog
+
+    def __getattr__(self, name: str):
+        def call(*args, **kwargs):
+            return _run_async_blocking(
+                self._catalog.run(lambda unit: getattr(unit, name)(*args, **kwargs))
+            )
+
+        return call
+
+
+class _WorkspaceCatalogSnapshot:
+    def __init__(self, workspace: Any | None) -> None:
+        self._workspace = workspace
+
+    def get_workspace(self, workspace_id: str) -> Any | None:
+        workspace = self._workspace
+        if workspace is None or getattr(workspace, "workspace_id", None) != workspace_id:
+            return None
+        return workspace
+
+
+def _pg_ingestion_service() -> ReadingIngestionService:
+    return ReadingIngestionService(_store(), _AsyncReadingCatalogSyncFacade(_pg_catalog()))
+
+
+async def _process_url_import(material_id: str) -> None:
+    await _pg_ingestion_service().process_url(material_id)
+
+
+async def _process_material_retry(material_id: str) -> None:
+    await _pg_ingestion_service().retry(material_id)
+
+
+async def _process_media_import(material_id: str) -> None:
+    await _pg_ingestion_service().process_media(material_id)
 
 
 def _new_material_id() -> str:
@@ -121,6 +200,8 @@ def _http_error(exc: Exception) -> HTTPException:
     """
     if isinstance(exc, PermissionError):
         return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, ReadingProviderUnavailable):
+        return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, MaterialNotFound):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ReadingUpgradeConflict):
@@ -396,20 +477,27 @@ async def list_library_materials(
     "where is this used, and what did I upload that is used nowhere" — a
     question the client cannot ask one material at a time.
     """
-    catalog = _catalog()
-    store = _store()
     try:
-        for manifest in store.list_materials():
-            if catalog.get_material(manifest.material_id) is None:
-                catalog.register_manifest(manifest)
-        rows = [
-            row
-            for row in catalog.list_materials(
-                search=search, status=status, library_filter=library_filter
+        assigned = _assigned_material_ids()
+
+        def load(catalog):
+            rows = [
+                row
+                for row in catalog.list_materials(
+                    search=search, status=status, library_filter=library_filter
+                )
+                if assigned is None or row.material_id in assigned
+            ]
+            return (
+                rows,
+                catalog.collections_for_materials([row.material_id for row in rows]),
+                catalog.library_counts(None if assigned is None else sorted(assigned)),
             )
-            if _material_allowed(row.material_id)
-        ]
-        membership = catalog.collections_for_materials([row.material_id for row in rows])
+
+        rows, membership, counts = await _pg_catalog_run(
+            load
+        )
+        store = _store(*rows)
         materials: list[dict[str, Any]] = []
         for row in rows:
             payload = row.to_dict()
@@ -418,12 +506,9 @@ async def list_library_materials(
             payload["size_bytes"] = size_bytes
             payload["unit_count"] = unit_count
             materials.append(payload)
-        # Counts describe every material this account may see, not only the
-        # filtered page and never revoked or unassigned learner material.
-        assigned = _assigned_material_ids()
         return {
             "materials": materials,
-            "counts": catalog.library_counts(None if assigned is None else sorted(assigned)),
+            "counts": counts,
         }
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -437,49 +522,63 @@ async def duplicate_check(payload: DuplicateCheckRequest) -> dict[str, Any]:
     a same-name-different-content upload is the genuinely ambiguous case and
     is reported separately so the client can ask instead of guessing.
     """
-    catalog = _catalog()
-    store = _store()
-
-    def described(record: Any) -> dict[str, Any]:
-        """The match, with the facts that let a user tell two copies apart."""
-        payload_row = record.to_dict()
-        size_bytes, unit_count = _content_facts(store, record)
-        payload_row["size_bytes"] = size_bytes
-        payload_row["unit_count"] = unit_count
-        return payload_row
-
     try:
-        matches: list[dict[str, Any]] = []
-        for item in payload.files:
-            kind = "same_content"
-            record = catalog.find_material_by_content(item.content_id) if item.content_id else None
-            if record is None and item.filename:
-                record = catalog.find_ready_material_by_filename(item.filename, mime=item.mime)
-                kind = "same_name"
-            if record is None or not _material_allowed(record.material_id):
-                continue
+        assigned = _assigned_material_ids()
+
+        def load(catalog):
+            matches: list[tuple[dict[str, str], str, Any, list[dict[str, str]]]] = []
+            for item in payload.files:
+                kind = "same_content"
+                record = (
+                    catalog.find_material_by_content(item.content_id)
+                    if item.content_id
+                    else None
+                )
+                if record is None and item.filename:
+                    record = catalog.find_ready_material_by_filename(item.filename, mime=item.mime)
+                    kind = "same_name"
+                if record is None or (assigned is not None and record.material_id not in assigned):
+                    continue
+                matches.append(
+                    (
+                        {"filename": item.filename, "url": ""},
+                        kind,
+                        record,
+                        catalog.collections_for_material(record.material_id),
+                    )
+                )
+            for url in payload.urls:
+                try:
+                    material_id = url_material_id(url)
+                except Exception:  # noqa: BLE001 - a malformed URL is simply not a match
+                    continue
+                record = catalog.get_material(material_id)
+                if record is None or (assigned is not None and record.material_id not in assigned):
+                    continue
+                matches.append(
+                    (
+                        {"filename": "", "url": url},
+                        "same_content",
+                        record,
+                        catalog.collections_for_material(record.material_id),
+                    )
+                )
+            return matches
+
+        rows = await _pg_catalog_run(load)
+        store = _store(*(row[2] for row in rows))
+        matches = []
+        for query, kind, record, collections in rows:
+            material = record.to_dict()
+            size_bytes, unit_count = _content_facts(store, record)
+            material["size_bytes"] = size_bytes
+            material["unit_count"] = unit_count
             matches.append(
                 {
-                    "query": {"filename": item.filename, "url": ""},
+                    "query": query,
                     "kind": kind,
-                    "material": described(record),
-                    "collections": catalog.collections_for_material(record.material_id),
-                }
-            )
-        for url in payload.urls:
-            try:
-                material_id = url_material_id(url)
-            except Exception:  # noqa: BLE001 - a malformed URL is simply not a match
-                continue
-            record = catalog.get_material(material_id)
-            if record is None or not _material_allowed(record.material_id):
-                continue
-            matches.append(
-                {
-                    "query": {"filename": "", "url": url},
-                    "kind": "same_content",
-                    "material": described(record),
-                    "collections": catalog.collections_for_material(record.material_id),
+                    "material": material,
+                    "collections": collections,
                 }
             )
         return {"matches": matches}
@@ -496,24 +595,28 @@ async def import_urls(
         assert_learning_material("", upload=True)
     except PermissionError as exc:
         raise _http_error(exc) from exc
-    service = _ingestion()
     try:
-        materials = [service.queue_url(url) for url in payload.urls]
-        workspace_id = payload.workspace_id.strip()
-        if workspace_id:
-            for material in materials:
-                service.catalog.add_material(workspace_id, material.material_id)
-            workspace = service.catalog.get_workspace(workspace_id)
-        else:
-            # Naming the collection after its first material is what keeps a
-            # library from filling up with rows all called "Imported reading".
-            workspace = service.catalog.create_workspace(
-                payload.workspace_title
-                or (materials[0].title if materials else "Reading collection"),
-                [row.material_id for row in materials],
-            )
+        def queue(catalog):
+            service = ReadingIngestionService(_store(), catalog)
+            materials = [service.queue_url(url) for url in payload.urls]
+            workspace_id = payload.workspace_id.strip()
+            if workspace_id:
+                for material in materials:
+                    catalog.add_material(workspace_id, material.material_id)
+                workspace = catalog.get_workspace(workspace_id)
+            else:
+                # Naming the collection after its first material is what keeps a
+                # library from filling up with rows all called "Imported reading".
+                workspace = catalog.create_workspace(
+                    payload.workspace_title
+                    or (materials[0].title if materials else "Reading collection"),
+                    [row.material_id for row in materials],
+                )
+            return materials, workspace
+
+        materials, workspace = await _pg_catalog_run(queue)
         for material in materials:
-            background_tasks.add_task(service.process_url, material.material_id)
+            background_tasks.add_task(_process_url_import, material.material_id)
         return {
             "materials": [row.to_dict() for row in materials],
             "workspace": workspace.to_dict() if workspace else None,
@@ -524,15 +627,21 @@ async def import_urls(
 
 @router.post("/materials/{material_id}/retry", status_code=202)
 async def retry_import(material_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
-    service = _ingestion()
     try:
         assert_learning_material(material_id)
-        material = service.catalog.get_material(material_id)
+        material = await _pg_catalog_run(
+            lambda catalog: catalog.update_material_status(
+                material_id,
+                "queued",
+                progress=0,
+            )
+            if catalog.get_material(material_id) is not None
+            else None
+        )
         if material is None:
             raise MaterialNotFound(f"material {material_id!r} not found")
-        service.catalog.update_material_status(material_id, "queued", progress=0)
-        background_tasks.add_task(service.retry, material_id)
-        return {"material": service.catalog.get_material(material_id).to_dict()}
+        background_tasks.add_task(_process_material_retry, material_id)
+        return {"material": material.to_dict()}
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -542,7 +651,7 @@ async def list_workspaces(
     search: str = Query(default="", max_length=200),
 ) -> dict[str, Any]:
     try:
-        rows = _catalog().list_workspaces(search=search)
+        rows = await _pg_catalog_run(lambda catalog: catalog.list_workspaces(search=search))
         return {"workspaces": [_workspace_payload(row) for row in rows]}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -561,10 +670,11 @@ async def list_workspace_index() -> dict[str, Any]:
     single segment, so a literal path below it would never be reached.
     """
     try:
+        rows = await _pg_catalog_run(lambda catalog: catalog.list_workspaces())
         return {
             "collections": [
                 {"workspace_id": row.workspace_id, "title": row.title}
-                for row in _catalog().list_workspaces()
+                for row in rows
             ]
         }
     except Exception as exc:
@@ -575,10 +685,12 @@ async def list_workspace_index() -> dict[str, Any]:
 async def create_workspace(payload: WorkspaceCreateRequest) -> dict[str, Any]:
     try:
         _enforce_learning_materials(*payload.material_ids)
-        row = _catalog().create_workspace(
-            payload.title,
-            payload.material_ids,
-            description=payload.description,
+        row = await _pg_catalog_run(
+            lambda catalog: catalog.create_workspace(
+                payload.title,
+                payload.material_ids,
+                description=payload.description,
+            )
         )
         return {"workspace": row.to_dict()}
     except Exception as exc:
@@ -588,13 +700,17 @@ async def create_workspace(payload: WorkspaceCreateRequest) -> dict[str, Any]:
 @router.get("/workspaces/{workspace_id}")
 async def get_workspace(workspace_id: str) -> dict[str, Any]:
     try:
-        catalog = _catalog()
-        row = catalog.get_workspace(workspace_id)
+        row, sessions = await _pg_catalog_run(
+            lambda catalog: (
+                catalog.get_workspace(workspace_id),
+                catalog.list_sessions(workspace_id),
+            )
+        )
         if row is None:
             raise MaterialNotFound(f"reading workspace {workspace_id!r} not found")
         return {
             "workspace": _workspace_payload(row),
-            "sessions": [session.to_dict() for session in catalog.list_sessions(workspace_id)],
+            "sessions": [session.to_dict() for session in sessions],
         }
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -631,10 +747,12 @@ async def get_workspace_openers(
 @router.patch("/workspaces/{workspace_id}")
 async def update_workspace(workspace_id: str, payload: WorkspaceUpdateRequest) -> dict[str, Any]:
     try:
-        row = _catalog().update_workspace(
-            workspace_id,
-            title=payload.title,
-            description=payload.description,
+        row = await _pg_catalog_run(
+            lambda catalog: catalog.update_workspace(
+                workspace_id,
+                title=payload.title,
+                description=payload.description,
+            )
         )
         return {"workspace": row.to_dict()}
     except Exception as exc:
@@ -646,13 +764,18 @@ async def delete_workspace(workspace_id: str) -> dict[str, Any]:
     from deeptutor.services.session import get_session_store
 
     try:
-        catalog = _catalog()
-        sessions = catalog.list_sessions(workspace_id)
-        if not catalog.delete_workspace(workspace_id):
+        sessions, deleted = await _pg_catalog_run(
+            lambda catalog: (
+                catalog.list_sessions(workspace_id),
+                catalog.delete_workspace(workspace_id),
+            )
+        )
+        if not deleted:
             raise MaterialNotFound(f"reading workspace {workspace_id!r} not found")
-        session_store = get_session_store()
-        for session in sessions:
-            await session_store.delete_session(session.session_id)
+        if sessions:
+            session_store = get_session_store()
+            for session in sessions:
+                await session_store.delete_session(session.session_id)
         return {"status": "ok", "workspace_id": workspace_id}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -664,8 +787,10 @@ async def add_workspace_material(
 ) -> dict[str, Any]:
     try:
         assert_learning_material(payload.material_id)
-        row = _catalog().add_material(
-            workspace_id, payload.material_id, make_active=payload.make_active
+        row = await _pg_catalog_run(
+            lambda catalog: catalog.add_material(
+                workspace_id, payload.material_id, make_active=payload.make_active
+            )
         )
         return {"workspace": row.to_dict()}
     except Exception as exc:
@@ -678,7 +803,9 @@ async def reorder_workspace_materials(
 ) -> dict[str, Any]:
     try:
         _enforce_learning_materials(*payload.material_ids)
-        row = _catalog().reorder_materials(workspace_id, payload.material_ids)
+        row = await _pg_catalog_run(
+            lambda catalog: catalog.reorder_materials(workspace_id, payload.material_ids)
+        )
         return {"workspace": row.to_dict()}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -688,7 +815,9 @@ async def reorder_workspace_materials(
 async def activate_workspace_material(workspace_id: str, material_id: str) -> dict[str, Any]:
     try:
         assert_learning_material(material_id)
-        row = _catalog().set_active_material(workspace_id, material_id)
+        row = await _pg_catalog_run(
+            lambda catalog: catalog.set_active_material(workspace_id, material_id)
+        )
         return {"workspace": row.to_dict()}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -698,7 +827,9 @@ async def activate_workspace_material(workspace_id: str, material_id: str) -> di
 async def remove_workspace_material(workspace_id: str, material_id: str) -> dict[str, Any]:
     try:
         assert_learning_material(material_id)
-        row = _catalog().remove_material(workspace_id, material_id)
+        row = await _pg_catalog_run(
+            lambda catalog: catalog.remove_material(workspace_id, material_id)
+        )
         return {"workspace": row.to_dict()}
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -709,8 +840,13 @@ async def list_reading_sessions(workspace_id: str) -> dict[str, Any]:
     from deeptutor.services.session import get_session_store
 
     try:
-        catalog = _catalog()
-        rows = catalog.list_sessions(workspace_id)
+        rows_and_links = await _pg_catalog_run(
+            lambda catalog: [
+                (row, catalog.list_session_links(workspace_id, row.session_id))
+                for row in catalog.list_sessions(workspace_id)
+            ]
+        )
+        rows = [row for row, _links in rows_and_links]
         # The catalog stores the title a conversation was attached with, which
         # is the placeholder every conversation starts life as: the real name
         # is written by the title model *after* that first turn finishes, into
@@ -734,9 +870,9 @@ async def list_reading_sessions(workspace_id: str) -> dict[str, Any]:
                 row.to_dict()
                 | {
                     "title": titles.get(row.session_id) or row.title,
-                    "linked_session_ids": catalog.list_session_links(workspace_id, row.session_id),
+                    "linked_session_ids": links,
                 }
-                for row in rows
+                for row, links in rows_and_links
             ]
         }
     except Exception as exc:
@@ -749,11 +885,10 @@ async def create_reading_session(
 ) -> dict[str, Any]:
     from deeptutor.services.session import get_session_store
 
-    catalog = _catalog()
     try:
         if payload.active_material_id:
             assert_learning_material(payload.active_material_id)
-        workspace = catalog.get_workspace(workspace_id)
+        workspace = await _pg_catalog_run(lambda catalog: catalog.get_workspace(workspace_id))
         if workspace is None:
             raise MaterialNotFound(f"reading workspace {workspace_id!r} not found")
         active_material_id = payload.active_material_id or workspace.active_material_id
@@ -773,11 +908,13 @@ async def create_reading_session(
                 "reading_material_id": active_material_id or "",
             },
         )
-        reading_session = catalog.attach_session(
-            workspace_id,
-            session["id"],
-            title=payload.title,
-            active_material_id=active_material_id,
+        reading_session = await _pg_catalog_run(
+            lambda catalog: catalog.attach_session(
+                workspace_id,
+                session["id"],
+                title=payload.title,
+                active_material_id=active_material_id,
+            )
         )
         return {"session": reading_session.to_dict()}
     except Exception as exc:
@@ -791,8 +928,9 @@ async def rename_reading_session(
     from deeptutor.services.session import get_session_store
 
     try:
-        catalog = _catalog()
-        row = catalog.rename_session(workspace_id, session_id, payload.title)
+        row = await _pg_catalog_run(
+            lambda catalog: catalog.rename_session(workspace_id, session_id, payload.title)
+        )
         await get_session_store().update_session_title(session_id, payload.title)
         return {"session": row.to_dict()}
     except Exception as exc:
@@ -804,8 +942,10 @@ async def delete_reading_session(workspace_id: str, session_id: str) -> dict[str
     from deeptutor.services.session import get_session_store
 
     try:
-        catalog = _catalog()
-        if not catalog.detach_session(workspace_id, session_id):
+        detached = await _pg_catalog_run(
+            lambda catalog: catalog.detach_session(workspace_id, session_id)
+        )
+        if not detached:
             raise MaterialNotFound("reading session not found")
         await get_session_store().delete_session(session_id)
         return {"status": "ok", "session_id": session_id}
@@ -818,11 +958,15 @@ async def link_reading_session(
     workspace_id: str, session_id: str, payload: ReadingSessionLinkRequest
 ) -> dict[str, Any]:
     try:
-        catalog = _catalog()
-        catalog.link_session(workspace_id, session_id, payload.target_session_id)
+        links = await _pg_catalog_run(
+            lambda catalog: (
+                catalog.link_session(workspace_id, session_id, payload.target_session_id),
+                catalog.list_session_links(workspace_id, session_id),
+            )[1]
+        )
         return {
             "session_id": session_id,
-            "linked_session_ids": catalog.list_session_links(workspace_id, session_id),
+            "linked_session_ids": links,
         }
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -833,11 +977,15 @@ async def unlink_reading_session(
     workspace_id: str, session_id: str, target_session_id: str
 ) -> dict[str, Any]:
     try:
-        catalog = _catalog()
-        catalog.unlink_session(workspace_id, session_id, target_session_id)
+        links = await _pg_catalog_run(
+            lambda catalog: (
+                catalog.unlink_session(workspace_id, session_id, target_session_id),
+                catalog.list_session_links(workspace_id, session_id),
+            )[1]
+        )
         return {
             "session_id": session_id,
-            "linked_session_ids": catalog.list_session_links(workspace_id, session_id),
+            "linked_session_ids": links,
         }
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -849,13 +997,13 @@ async def organize_reading_notes(
 ) -> dict[str, Any]:
     try:
         _enforce_learning_materials(*payload.material_ids)
-        catalog = _catalog()
+        workspace = await _pg_catalog_run(lambda catalog: catalog.get_workspace(workspace_id))
         notes = await asyncio.to_thread(
             organize_workspace_notes,
             workspace_id,
             material_ids=payload.material_ids,
-            catalog=catalog,
-            reading_store=ReadingStore(catalog.root),
+            catalog=_WorkspaceCatalogSnapshot(workspace),
+            reading_store=_store_for_workspace(workspace),
         )
         return {"notes": notes.to_dict()}
     except Exception as exc:
@@ -868,7 +1016,7 @@ async def capture_reading_to_notebook(
 ) -> dict[str, Any]:
     try:
         _enforce_learning_materials(*payload.material_ids)
-        catalog = _catalog()
+        workspace = await _pg_catalog_run(lambda catalog: catalog.get_workspace(workspace_id))
         result = await asyncio.to_thread(
             send_workspace_to_notebook,
             workspace_id,
@@ -876,8 +1024,8 @@ async def capture_reading_to_notebook(
             material_ids=payload.material_ids,
             title=payload.title,
             summary=payload.summary,
-            catalog=catalog,
-            reading_store=ReadingStore(catalog.root),
+            catalog=_WorkspaceCatalogSnapshot(workspace),
+            reading_store=_store_for_workspace(workspace),
         )
         return {"success": True, **result}
     except Exception as exc:
@@ -899,13 +1047,17 @@ async def supported_formats() -> SupportedFormats:
 
 @router.get("/materials", response_model=list[MaterialInfo])
 async def list_materials() -> list[MaterialInfo]:
-    store = _store()
     try:
-        return [
-            _info(store, manifest)
-            for manifest in store.list_materials()
-            if _material_allowed(manifest.material_id)
-        ]
+        assigned = _assigned_material_ids()
+        rows = await _pg_catalog_run(
+            lambda catalog: [
+                row
+                for row in catalog.list_materials(status="ready")
+                if assigned is None or row.material_id in assigned
+            ]
+        )
+        store = _store(*rows)
+        return [_info(store, store.manifest(row.material_id)) for row in rows]
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -956,29 +1108,33 @@ async def upload_material(
 
         store = _store()
         if Path(filename).suffix.lower() in _MEDIA_EXTENSIONS:
-            service = ReadingIngestionService(store, _catalog())
+            service = _pg_ingestion_service()
             record = await service.queue_media(tmp_path, filename=filename)
-            background_tasks.add_task(service.process_media, record.material_id)
+            background_tasks.add_task(_process_media_import, record.material_id)
+            store = _store(record)
             return _detail(store, store.manifest(record.material_id))
         else:
             manifest = store.ingest(tmp_path, filename=filename)
-            catalog = _catalog()
-            if reuse or catalog.get_material(manifest.material_id) is None:
-                catalog.register_manifest(manifest)
-                return _detail(store, manifest)
-            # A separate material over the same extracted content: the bytes
-            # are stored once, while annotations and reading position are kept
-            # apart because the user asked for a second, independent copy.
-            record = catalog.upsert_material(
-                content_id=manifest.material_id,
-                material_id=_new_material_id(),
-                filename=manifest.filename,
-                title=manifest.title,
-                source_kind=SourceKind.FILE,
-                mime=manifest.mime,
-                render_mode=manifest.render_mode,
-                status=IngestionStatus.READY,
-            )
+
+            def register(catalog):
+                if reuse or catalog.get_material(manifest.material_id) is None:
+                    return catalog.register_manifest(manifest)
+                # A separate material over the same extracted content: the bytes
+                # are stored once, while annotations and reading position are kept
+                # apart because the user asked for a second, independent copy.
+                return catalog.upsert_material(
+                    content_id=manifest.material_id,
+                    material_id=_new_material_id(),
+                    filename=manifest.filename,
+                    title=manifest.title,
+                    source_kind=SourceKind.FILE,
+                    mime=manifest.mime,
+                    render_mode=manifest.render_mode,
+                    status=IngestionStatus.READY,
+                )
+
+            record = await _pg_catalog_run(register)
+            store = _store(record)
             return _detail(store, store.manifest(record.material_id))
     except HTTPException:
         raise
@@ -990,9 +1146,12 @@ async def upload_material(
 
 @router.get("/materials/{material_id}", response_model=MaterialDetail)
 async def get_material(material_id: str) -> MaterialDetail:
-    store = _store()
     try:
         assert_learning_material(material_id)
+        record = await _pg_catalog_run(lambda catalog: catalog.get_material(material_id))
+        if record is None:
+            raise MaterialNotFound(f"material {material_id!r} not found")
+        store = _store(record)
         return _detail(store, store.manifest(material_id))
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -1048,23 +1207,37 @@ async def remove_epub_pairing(pairing_id: str) -> dict[str, Any]:
 
 @router.delete("/materials/{material_id}")
 async def delete_material(material_id: str) -> dict[str, Any]:
-    store = _store()
-    catalog = _catalog()
-    record = catalog.get_material(material_id)
-    removed_from = catalog.collections_for_material(material_id) if record else []
     try:
         assert_learning_material_mutation(material_id)
-        shared = record is not None and catalog.count_materials_for_content(record.content_id) > 1
+        record, removed_from, shared = await _pg_catalog_run(
+            lambda catalog: (
+                catalog.get_material(material_id),
+                catalog.collections_for_material(material_id)
+                if catalog.get_material(material_id)
+                else [],
+                (
+                    catalog.count_materials_for_content(
+                        catalog.get_material(material_id).content_id
+                    )
+                    > 1
+                    if catalog.get_material(material_id)
+                    else False
+                ),
+            )
+        )
+        store = _store(record)
         if shared and record is not None:
             # A sibling material still reads this content: drop this row and
             # only the annotations that belong to it.
             store.delete_material_state(material_id, content_id=record.content_id)
-            removed = catalog.delete_material(material_id)
+            removed = await _pg_catalog_run(lambda catalog: catalog.delete_material(material_id))
         else:
             with store.staged_delete(material_id) as staged:
                 if staged:
-                    catalog.delete_material(material_id)
-            removed = staged or bool(record and catalog.delete_material(material_id))
+                    await _pg_catalog_run(lambda catalog: catalog.delete_material(material_id))
+            removed = staged or bool(
+                record and await _pg_catalog_run(lambda catalog: catalog.delete_material(material_id))
+            )
     except Exception as exc:
         raise _http_error(exc) from exc
     if not removed:
@@ -1121,9 +1294,12 @@ async def get_transcript(material_id: str) -> dict[str, Any]:
 @router.get("/materials/{material_id}/units/{locator}", response_model=UnitText)
 async def get_unit(material_id: str, locator: int) -> UnitText:
     """One unit's text — the reader's text view, and the only view for non-PDFs."""
-    store = _store()
     try:
         assert_learning_material(material_id)
+        record = await _pg_catalog_run(lambda catalog: catalog.get_material(material_id))
+        if record is None:
+            raise MaterialNotFound(f"material {material_id!r} not found")
+        store = _store(record)
         manifest = store.manifest(material_id)
         return UnitText(
             locator=locator,

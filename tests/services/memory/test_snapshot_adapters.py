@@ -42,7 +42,16 @@ def partner_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     import deeptutor.multi_user.paths as mu_paths
 
     monkeypatch.setattr(mu_paths, "get_admin_path_service", lambda: _FakePathService(tmp_path))
-    return tmp_path
+    from deeptutor.multi_user.context import reset_current_user, set_current_user
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+
+    token = set_current_user(
+        CurrentUser("admin", "admin", "admin", UserScope("admin", "admin", tmp_path.resolve()))
+    )
+    try:
+        yield tmp_path
+    finally:
+        reset_current_user(token)
 
 
 def test_partner_sessions_become_tagged_entities(partner_tree: Path) -> None:
@@ -122,7 +131,12 @@ def test_non_admin_scope_sees_no_partners(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(mu_paths, "get_admin_path_service", lambda: _FakePathService(admin_root))
 
-    assert adapters.read_partner_entities() == []
+    from deeptutor.multi_user.models import CurrentUser, UserScope
+    from deeptutor.multi_user.paths import user_context
+
+    user = CurrentUser("u1", "alice", "user", UserScope("user", "u1", user_root))
+    with user_context(user):
+        assert adapters.read_partner_entities() == []
 
 
 def test_non_admin_sees_only_assigned_private_partner_sessions(

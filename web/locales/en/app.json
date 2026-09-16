@@ -4007,5 +4007,7 @@
   "references": "references",
   "That question is no longer waiting for an answer, so this was sent as a new message.": "That question is no longer waiting for an answer, so this was sent as a new message.",
   "A knowledge base name cannot contain {{chars}} — these separate paths and URLs.": "A knowledge base name cannot contain {{chars}} — these separate paths and URLs.",
-  "Select text in the document first.": "Select text in the document first."
+  "Select text in the document first.": "Select text in the document first.",
+  "Password must contain 12 to 72 UTF-8 bytes.": "Password must contain 12 to 72 UTF-8 bytes.",
+  "Password (12–72 UTF-8 bytes)": "Password (12–72 UTF-8 bytes)"
 }

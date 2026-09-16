@@ -1,0 +1,920 @@
+{
+  "columns": {
+    "mastery_events": "tenant_id:uuid! owner_id:text! path_id:text! id:int8! revision:int8! event_type:text! payload:jsonb! session_id:text! turn_id:text! session_ref:text turn_ref:text created_at:float8!",
+    "mastery_interactions": "tenant_id:uuid! owner_id:text! path_id:text! interaction_id:text! status:text! question:jsonb! session_id:text! turn_id:text! session_ref:text turn_ref:text user_answer:text! result:jsonb! created_at:float8! updated_at:float8!",
+    "mastery_knowledge_points": "tenant_id:uuid! owner_id:text! path_id:text! kp_id:text! active:bool!",
+    "mastery_path_leases": "tenant_id:uuid! owner_id:text! path_id:text! kind:text! session_id:text turn_id:text operation_id:uuid executor_resource:text! execution_id:uuid! executor_pid:int4! worker_id:text fencing_token:int8 version:int8! acquired_at:float8!",
+    "mastery_path_operations": "tenant_id:uuid! owner_id:text! path_id:text! path_ref:text operation_id:uuid! executor_resource:text! execution_id:uuid! executor_pid:int4! status:text! version:int8! created_at:float8! updated_at:float8!",
+    "mastery_path_sessions": "tenant_id:uuid! owner_id:text! path_id:text! session_id:text! created_at:float8! last_seen_at:float8!",
+    "mastery_paths": "tenant_id:uuid! owner_id:text! path_id:text! state:jsonb! revision:int8! creator_session_id:text creator_assigned:bool! created_at:float8! updated_at:float8!",
+    "mastery_topic_meta": "tenant_id:uuid! owner_id:text! path_id:text! goal:text! description:text! emoji:text! map_seed:int8! status:text! created_at:float8! updated_at:float8!",
+    "mastery_topic_sources": "tenant_id:uuid! owner_id:text! path_id:text! id:text! kind:text! external_id:text! label:text! excerpt:text! position:int4! available:bool! metadata:jsonb! created_at:float8! session_ref:text entry_ref:int8",
+    "notebook_entries": "tenant_id:uuid! owner_id:text! id:int8! session_id:text! turn_id:text! question_id:text! question:text! question_type:text! options:jsonb! correct_answer:text! explanation:text! difficulty:text! user_answer:text! user_answer_images:jsonb! source:text! material_id:text! material_title:text! section_id:text! section_title:text! score_trend:text! is_correct:bool! resolved:bool! bookmarked:bool! followup_session_id:text! ai_judgment:text! created_at:float8! updated_at:float8! version:int8! execution_turn_id:text followup_session_ref:text mastery_path_ref:text mastery_kp_ref:text"
+  },
+  "constraints": {
+    "mastery_events": [
+      "CHECK (((turn_id = ''::text) OR (session_id <> ''::text)))",
+      "CHECK ((length(event_type) > 0))",
+      "CHECK ((revision > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, path_id) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_ref) REFERENCES enterprise.sessions(tenant_id, owner_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_ref, turn_ref) REFERENCES enterprise.turns(tenant_id, user_id, session_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, id)"
+    ],
+    "mastery_interactions": [
+      "CHECK (((turn_id = ''::text) OR (session_id <> ''::text)))",
+      "CHECK ((jsonb_typeof(question) = 'object'::text))",
+      "CHECK ((status = ANY (ARRAY['registered'::text, 'awaiting_input'::text, 'answered'::text, 'graded'::text, 'abandoned'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id, path_id) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_ref) REFERENCES enterprise.sessions(tenant_id, owner_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_ref, turn_ref) REFERENCES enterprise.turns(tenant_id, user_id, session_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, interaction_id)"
+    ],
+    "mastery_knowledge_points": [
+      "FOREIGN KEY (tenant_id, owner_id, path_id) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, path_id, kp_id)"
+    ],
+    "mastery_path_leases": [
+      "CHECK ((((kind = 'turn'::text) AND (session_id IS NOT NULL) AND (turn_id IS NOT NULL) AND (worker_id IS NOT NULL) AND (fencing_token IS NOT NULL) AND (operation_id IS NULL)) OR ((kind = 'operation'::text) AND (session_id IS NULL) AND (turn_id IS NULL) AND (worker_id IS NULL) AND (fencing_token IS NULL) AND (operation_id IS NOT NULL))))",
+      "CHECK ((kind = ANY (ARRAY['turn'::text, 'operation'::text])))",
+      "CHECK ((version > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, path_id) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, path_id, operation_id) REFERENCES enterprise.mastery_path_operations(tenant_id, owner_id, path_id, operation_id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_id, turn_id) REFERENCES enterprise.turns(tenant_id, user_id, session_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, path_id)",
+      "UNIQUE (tenant_id, owner_id, operation_id)",
+      "UNIQUE (tenant_id, owner_id, turn_id)"
+    ],
+    "mastery_path_operations": [
+      "CHECK (((path_ref = path_id) OR (path_ref IS NULL)))",
+      "CHECK (((status <> 'active'::text) OR (path_ref IS NOT NULL)))",
+      "CHECK ((status = ANY (ARRAY['active'::text, 'completed'::text, 'failed'::text, 'interrupted'::text])))",
+      "CHECK ((version > 0))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, path_ref) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE SET NULL (path_ref)",
+      "PRIMARY KEY (tenant_id, owner_id, operation_id)",
+      "UNIQUE (tenant_id, owner_id, path_id, operation_id)"
+    ],
+    "mastery_path_sessions": [
+      "FOREIGN KEY (tenant_id, owner_id, path_id) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, session_id)"
+    ],
+    "mastery_paths": [
+      "CHECK ((jsonb_typeof(state) = 'object'::text))",
+      "CHECK ((revision >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, creator_session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, path_id)"
+    ],
+    "mastery_topic_meta": [
+      "CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id, path_id) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, path_id)"
+    ],
+    "mastery_topic_sources": [
+      "CHECK ((\"position\" >= 0))",
+      "CHECK (((kind <> 'chat'::text) OR (external_id <> ''::text)))",
+      "CHECK ((kind = ANY (ARRAY['goal'::text, 'book'::text, 'notebook'::text, 'knowledge_base'::text, 'file'::text, 'chat'::text, 'question_bank'::text, 'cowriter'::text, 'partner_group'::text])))",
+      "FOREIGN KEY (tenant_id, owner_id, entry_ref) REFERENCES enterprise.notebook_entries(tenant_id, owner_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, path_id) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_ref) REFERENCES enterprise.sessions(tenant_id, owner_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, path_id, id)",
+      "UNIQUE (tenant_id, owner_id, path_id, \"position\")"
+    ],
+    "notebook_entries": [
+      "CHECK (((source <> 'mastery_path'::text) OR (material_id <> ''::text)))",
+      "CHECK ((jsonb_typeof(user_answer_images) = 'array'::text))",
+      "CHECK ((score_trend = ANY (ARRAY['new'::text, 'unchanged'::text, 'improved'::text, 'declined'::text])))",
+      "CHECK ((source = ANY (ARRAY['deep_question'::text, 'book'::text, 'mastery_path'::text, 'immersive_reading'::text])))",
+      "CHECK ((version >= 1))",
+      "FOREIGN KEY (tenant_id, owner_id, followup_session_ref) REFERENCES enterprise.sessions(tenant_id, owner_id, id)",
+      "FOREIGN KEY (tenant_id, owner_id, mastery_path_ref) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id)",
+      "FOREIGN KEY (tenant_id, owner_id, mastery_path_ref, mastery_kp_ref) REFERENCES enterprise.mastery_knowledge_points(tenant_id, owner_id, path_id, kp_id)",
+      "FOREIGN KEY (tenant_id, owner_id, session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id) ON DELETE CASCADE",
+      "FOREIGN KEY (tenant_id, owner_id, session_id, execution_turn_id) REFERENCES enterprise.turns(tenant_id, user_id, session_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, id)",
+      "UNIQUE (tenant_id, owner_id, session_id, turn_id, question_id)"
+    ]
+  },
+  "indexes": {
+    "mastery_events_cursor": "CREATE INDEX mastery_events_cursor ON enterprise.mastery_events USING btree (tenant_id, owner_id, path_id, revision, id)",
+    "mastery_events_pkey": "CREATE UNIQUE INDEX mastery_events_pkey ON enterprise.mastery_events USING btree (tenant_id, owner_id, id)",
+    "mastery_events_session": "CREATE INDEX mastery_events_session ON enterprise.mastery_events USING btree (tenant_id, owner_id, session_ref, turn_ref)",
+    "mastery_interactions_pkey": "CREATE UNIQUE INDEX mastery_interactions_pkey ON enterprise.mastery_interactions USING btree (tenant_id, owner_id, interaction_id)",
+    "mastery_interactions_recent": "CREATE INDEX mastery_interactions_recent ON enterprise.mastery_interactions USING btree (tenant_id, owner_id, path_id, created_at DESC, interaction_id DESC)",
+    "mastery_interactions_session": "CREATE INDEX mastery_interactions_session ON enterprise.mastery_interactions USING btree (tenant_id, owner_id, session_ref, turn_ref)",
+    "mastery_knowledge_points_pkey": "CREATE UNIQUE INDEX mastery_knowledge_points_pkey ON enterprise.mastery_knowledge_points USING btree (tenant_id, owner_id, path_id, kp_id)",
+    "mastery_leases_session": "CREATE INDEX mastery_leases_session ON enterprise.mastery_path_leases USING btree (tenant_id, owner_id, session_id, turn_id)",
+    "mastery_meta_status": "CREATE INDEX mastery_meta_status ON enterprise.mastery_topic_meta USING btree (tenant_id, owner_id, status, path_id)",
+    "mastery_one_active_question": "CREATE UNIQUE INDEX mastery_one_active_question ON enterprise.mastery_interactions USING btree (tenant_id, owner_id, path_id) WHERE (status = ANY (ARRAY['registered'::text, 'awaiting_input'::text, 'answered'::text]))",
+    "mastery_operations_executor": "CREATE INDEX mastery_operations_executor ON enterprise.mastery_path_operations USING btree (tenant_id, owner_id, execution_id, status)",
+    "mastery_operations_path": "CREATE INDEX mastery_operations_path ON enterprise.mastery_path_operations USING btree (tenant_id, owner_id, path_ref)",
+    "mastery_path_leases_pkey": "CREATE UNIQUE INDEX mastery_path_leases_pkey ON enterprise.mastery_path_leases USING btree (tenant_id, owner_id, path_id)",
+    "mastery_path_leases_tenant_id_owner_id_operation_id_key": "CREATE UNIQUE INDEX mastery_path_leases_tenant_id_owner_id_operation_id_key ON enterprise.mastery_path_leases USING btree (tenant_id, owner_id, operation_id)",
+    "mastery_path_leases_tenant_id_owner_id_turn_id_key": "CREATE UNIQUE INDEX mastery_path_leases_tenant_id_owner_id_turn_id_key ON enterprise.mastery_path_leases USING btree (tenant_id, owner_id, turn_id)",
+    "mastery_path_operations_pkey": "CREATE UNIQUE INDEX mastery_path_operations_pkey ON enterprise.mastery_path_operations USING btree (tenant_id, owner_id, operation_id)",
+    "mastery_path_operations_tenant_id_owner_id_path_id_operatio_key": "CREATE UNIQUE INDEX mastery_path_operations_tenant_id_owner_id_path_id_operatio_key ON enterprise.mastery_path_operations USING btree (tenant_id, owner_id, path_id, operation_id)",
+    "mastery_path_sessions_pkey": "CREATE UNIQUE INDEX mastery_path_sessions_pkey ON enterprise.mastery_path_sessions USING btree (tenant_id, owner_id, session_id)",
+    "mastery_paths_creator": "CREATE INDEX mastery_paths_creator ON enterprise.mastery_paths USING btree (tenant_id, owner_id, creator_session_id)",
+    "mastery_paths_pkey": "CREATE UNIQUE INDEX mastery_paths_pkey ON enterprise.mastery_paths USING btree (tenant_id, owner_id, path_id)",
+    "mastery_paths_recent": "CREATE INDEX mastery_paths_recent ON enterprise.mastery_paths USING btree (tenant_id, owner_id, updated_at DESC, path_id DESC)",
+    "mastery_sessions_path": "CREATE INDEX mastery_sessions_path ON enterprise.mastery_path_sessions USING btree (tenant_id, owner_id, path_id, last_seen_at DESC, session_id DESC)",
+    "mastery_sources_entry": "CREATE INDEX mastery_sources_entry ON enterprise.mastery_topic_sources USING btree (tenant_id, owner_id, entry_ref)",
+    "mastery_sources_session": "CREATE INDEX mastery_sources_session ON enterprise.mastery_topic_sources USING btree (tenant_id, owner_id, session_ref)",
+    "mastery_topic_meta_pkey": "CREATE UNIQUE INDEX mastery_topic_meta_pkey ON enterprise.mastery_topic_meta USING btree (tenant_id, owner_id, path_id)",
+    "mastery_topic_sources_pkey": "CREATE UNIQUE INDEX mastery_topic_sources_pkey ON enterprise.mastery_topic_sources USING btree (tenant_id, owner_id, path_id, id)",
+    "mastery_topic_sources_tenant_id_owner_id_path_id_position_key": "CREATE UNIQUE INDEX mastery_topic_sources_tenant_id_owner_id_path_id_position_key ON enterprise.mastery_topic_sources USING btree (tenant_id, owner_id, path_id, \"position\")",
+    "notebook_mastery_ref": "CREATE INDEX notebook_mastery_ref ON enterprise.notebook_entries USING btree (tenant_id, owner_id, mastery_path_ref, mastery_kp_ref)"
+  },
+  "metadata": {
+    "mastery_events": {
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "event_type": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "id": [
+        "",
+        "a",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "payload": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "revision": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "session_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "session_ref": [
+        "s",
+        "",
+        "NULLIF(session_id, ''::text)",
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "turn_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "turn_ref": [
+        "s",
+        "",
+        "NULLIF(turn_id, ''::text)",
+        "default"
+      ]
+    },
+    "mastery_interactions": {
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "interaction_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "question": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "result": [
+        "",
+        "",
+        "'{}'::jsonb",
+        null
+      ],
+      "session_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "session_ref": [
+        "s",
+        "",
+        "NULLIF(session_id, ''::text)",
+        "default"
+      ],
+      "status": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "turn_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "turn_ref": [
+        "s",
+        "",
+        "NULLIF(turn_id, ''::text)",
+        "default"
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "user_answer": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ]
+    },
+    "mastery_knowledge_points": {
+      "active": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "kp_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "mastery_path_leases": {
+      "acquired_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "execution_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "executor_pid": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "executor_resource": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "fencing_token": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "kind": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "operation_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "turn_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "version": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "worker_id": [
+        "",
+        "",
+        null,
+        "default"
+      ]
+    },
+    "mastery_path_operations": {
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "execution_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "executor_pid": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "executor_resource": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "operation_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_ref": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "status": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "version": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "mastery_path_sessions": {
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "last_seen_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "mastery_paths": {
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "creator_assigned": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "creator_session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "revision": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "state": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "mastery_topic_meta": {
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "description": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "emoji": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "goal": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "map_seed": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "status": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "mastery_topic_sources": {
+      "available": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "entry_ref": [
+        "s",
+        "",
+        "CASE WHEN (kind = 'question_bank'::text) THEN (external_id)::bigint ELSE NULL::bigint END",
+        null
+      ],
+      "excerpt": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "external_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "kind": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "label": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "metadata": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "path_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "position": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "session_ref": [
+        "s",
+        "",
+        "CASE WHEN ((kind = 'chat'::text) AND (external_id !~~ 'partner:%'::text)) THEN NULLIF(external_id, ''::text) ELSE NULL::text END",
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ]
+    },
+    "notebook_entries": {
+      "ai_judgment": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "bookmarked": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "correct_answer": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "created_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "difficulty": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "execution_turn_id": [
+        "s",
+        "",
+        "CASE WHEN (source <> 'book'::text) THEN NULLIF(turn_id, ''::text) ELSE NULL::text END",
+        "default"
+      ],
+      "explanation": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "followup_session_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "followup_session_ref": [
+        "s",
+        "",
+        "NULLIF(followup_session_id, ''::text)",
+        "default"
+      ],
+      "id": [
+        "",
+        "d",
+        null,
+        null
+      ],
+      "is_correct": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "mastery_kp_ref": [
+        "s",
+        "",
+        "CASE WHEN (source = 'mastery_path'::text) THEN NULLIF(section_id, ''::text) ELSE NULL::text END",
+        "default"
+      ],
+      "mastery_path_ref": [
+        "s",
+        "",
+        "CASE WHEN (source = 'mastery_path'::text) THEN NULLIF(material_id, ''::text) ELSE NULL::text END",
+        "default"
+      ],
+      "material_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "material_title": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "options": [
+        "",
+        "",
+        "'{}'::jsonb",
+        null
+      ],
+      "owner_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "question": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "question_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "question_type": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "resolved": [
+        "",
+        "",
+        "false",
+        null
+      ],
+      "score_trend": [
+        "",
+        "",
+        "'new'::text",
+        "default"
+      ],
+      "section_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "section_title": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "session_id": [
+        "",
+        "",
+        null,
+        "default"
+      ],
+      "source": [
+        "",
+        "",
+        "'deep_question'::text",
+        "default"
+      ],
+      "tenant_id": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "turn_id": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "updated_at": [
+        "",
+        "",
+        null,
+        null
+      ],
+      "user_answer": [
+        "",
+        "",
+        "''::text",
+        "default"
+      ],
+      "user_answer_images": [
+        "",
+        "",
+        "'[]'::jsonb",
+        null
+      ],
+      "version": [
+        "",
+        "",
+        "1",
+        null
+      ]
+    }
+  }
+}

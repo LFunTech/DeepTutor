@@ -1,31 +1,52 @@
 from __future__ import annotations
 
+import pytest
+
+from deeptutor.core.providers import ApplicationProviders, provider_context
 import deeptutor.services.session as session_package
+from deeptutor.services.session.scope import StoreScope
 import deeptutor.services.session.turn_runtime as turn_runtime_module
 
 
-def test_pocketbase_store_and_runtime_factories_are_stable(
-    monkeypatch,
-) -> None:
-    """One configured PocketBase scope must resolve to one process-local runtime."""
+class _StoreProvider:
+    def __init__(self, store) -> None:
+        self._store = store
 
-    monkeypatch.setattr(
-        "deeptutor.services.pocketbase_client.is_pocketbase_enabled",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "deeptutor.services.config.load_integrations_settings",
-        lambda: {"pocketbase_url": "http://pocketbase:8090"},
-    )
-    session_package._pocketbase_store_instances.clear()
+    def get(self):
+        return self._store
+
+
+class _Store:
+    store_scope = StoreScope("postgres", "factory-test", "owner-1", tenant_id="tenant-1")
+
+
+class _OtherStore:
+    store_scope = StoreScope("postgres", "factory-test", "owner-2", tenant_id="tenant-1")
+
+
+def test_session_factory_fails_closed_without_postgres_provider() -> None:
+    """旧 PocketBase/SQLite fallback 已被新 PG-only 契约替代。"""
+
+    assert not hasattr(session_package, "_pocketbase_store_instances")
+    with pytest.raises(Exception, match="postgres.*missing|PostgreSQL session store provider is not configured"):
+        session_package.get_session_store()
+
+
+def test_provider_context_supplies_one_pg_store_and_runtime_per_scope() -> None:
     turn_runtime_module._runtime_instances.clear()
+    first = _Store()
+    second = _OtherStore()
 
-    first_store = session_package.get_session_store()
-    second_store = session_package.get_session_store()
-    first_runtime = turn_runtime_module.get_turn_runtime_manager()
-    second_runtime = turn_runtime_module.get_turn_runtime_manager()
+    with provider_context(ApplicationProviders(store=_StoreProvider(first))):
+        assert session_package.get_session_store() is first
+        first_runtime = turn_runtime_module.get_turn_runtime_manager()
+        second_runtime = turn_runtime_module.get_turn_runtime_manager()
 
-    assert first_store is second_store
+    with provider_context(ApplicationProviders(store=_StoreProvider(second))):
+        other_runtime = turn_runtime_module.get_turn_runtime_manager()
+
     assert first_runtime is second_runtime
-    assert first_runtime.store is first_store
-    assert len(turn_runtime_module._runtime_instances) == 1
+    assert first_runtime.store is first
+    assert other_runtime is not first_runtime
+    assert other_runtime.store is second
+    assert len(turn_runtime_module._runtime_instances) == 2

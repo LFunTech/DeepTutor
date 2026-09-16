@@ -23,56 +23,67 @@ is testable on its own and the capability that drives it
 
 from __future__ import annotations
 
-from deeptutor.reading.catalog_models import (
-    IngestionStatus,
-    MaterialRecord,
-    ReadingSessionRecord,
-    SourceKind,
-    WorkspaceRecord,
-    WorkspaceTab,
-)
-from deeptutor.reading.catalog_store import ReadingCatalogStore
-from deeptutor.reading.epub_bilingual import (
-    create_epub_pairing,
-    delete_epub_pairing,
-    list_epub_pairings,
-    recommend_epub_candidates,
-)
-from deeptutor.reading.export import ExportFormat, ExportResult, export_material
-from deeptutor.reading.extract import Extraction, extract_material
-from deeptutor.reading.models import (
-    ANNOTATION_COLORS,
-    Annotation,
-    AnnotationKind,
-    MaterialManifest,
-    MaterialNotFound,
-    OutlineEntry,
-    ReadingBookmark,
-    ReadingError,
-    ReadingPosition,
-    ReadingUpgradeConflict,
-    Rect,
-    RenderMode,
-    SearchHit,
-    TextPositionSelector,
-    TextQuoteSelector,
-    TextSelector,
-    UnitKind,
-    UnitReference,
-)
-from deeptutor.reading.search import SearchResult, search_units
-from deeptutor.reading.service import (
-    QuoteCheck,
-    RenderedUnits,
-    material_summary,
-    parse_locators,
-    render_outline,
-    render_units,
-    search_material,
-    unit_timestamps,
-    verify_quote,
-)
-from deeptutor.reading.store import ReadingStore, content_hash
+from importlib import import_module
+
+_EXPORTS = {
+    "IngestionStatus": "deeptutor.reading.catalog_models",
+    "MaterialRecord": "deeptutor.reading.catalog_models",
+    "ReadingSessionRecord": "deeptutor.reading.catalog_models",
+    "SourceKind": "deeptutor.reading.catalog_models",
+    "WorkspaceRecord": "deeptutor.reading.catalog_models",
+    "WorkspaceTab": "deeptutor.reading.catalog_models",
+    "ReadingCatalogStore": "deeptutor.reading.catalog_store",
+    "create_epub_pairing": "deeptutor.reading.epub_bilingual",
+    "delete_epub_pairing": "deeptutor.reading.epub_bilingual",
+    "list_epub_pairings": "deeptutor.reading.epub_bilingual",
+    "recommend_epub_candidates": "deeptutor.reading.epub_bilingual",
+    "ExportFormat": "deeptutor.reading.export",
+    "ExportResult": "deeptutor.reading.export",
+    "export_material": "deeptutor.reading.export",
+    "Extraction": "deeptutor.reading.extract",
+    "extract_material": "deeptutor.reading.extract",
+    "ANNOTATION_COLORS": "deeptutor.reading.models",
+    "Annotation": "deeptutor.reading.models",
+    "AnnotationKind": "deeptutor.reading.models",
+    "MaterialManifest": "deeptutor.reading.models",
+    "MaterialNotFound": "deeptutor.reading.models",
+    "OutlineEntry": "deeptutor.reading.models",
+    "ReadingBookmark": "deeptutor.reading.models",
+    "ReadingError": "deeptutor.reading.models",
+    "ReadingPosition": "deeptutor.reading.models",
+    "ReadingUpgradeConflict": "deeptutor.reading.models",
+    "Rect": "deeptutor.reading.models",
+    "RenderMode": "deeptutor.reading.models",
+    "SearchHit": "deeptutor.reading.models",
+    "TextPositionSelector": "deeptutor.reading.models",
+    "TextQuoteSelector": "deeptutor.reading.models",
+    "TextSelector": "deeptutor.reading.models",
+    "UnitKind": "deeptutor.reading.models",
+    "UnitReference": "deeptutor.reading.models",
+    "SearchResult": "deeptutor.reading.search",
+    "search_units": "deeptutor.reading.search",
+    "QuoteCheck": "deeptutor.reading.service",
+    "RenderedUnits": "deeptutor.reading.service",
+    "material_summary": "deeptutor.reading.service",
+    "parse_locators": "deeptutor.reading.service",
+    "render_outline": "deeptutor.reading.service",
+    "render_units": "deeptutor.reading.service",
+    "search_material": "deeptutor.reading.service",
+    "unit_timestamps": "deeptutor.reading.service",
+    "verify_quote": "deeptutor.reading.service",
+    "ReadingStore": "deeptutor.reading.store",
+    "content_hash": "deeptutor.reading.store",
+}
+
+
+def __getattr__(name):
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(name)
+    value = getattr(import_module(module), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "ANNOTATION_COLORS",

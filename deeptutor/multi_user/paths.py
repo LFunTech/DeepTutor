@@ -17,6 +17,7 @@ in place by :func:`migrate_legacy_multi_user_tree`.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -24,6 +25,7 @@ import shutil
 import stat
 import threading
 from typing import Iterator
+import uuid
 
 from deeptutor.runtime.home import get_runtime_home
 from deeptutor.services.path_service import PathService
@@ -118,6 +120,8 @@ def ensure_scope_workspace(scope: UserScope) -> Path:
     elsewhere — e.g. partner workspaces under ``data/partners/<id>/workspace``.
     For regular users both paths are identical.
     """
+    if scope.root is None or scope.tenant_id:
+        raise RuntimeError("local workspace is unavailable for this scope")
     root = scope.root.resolve()
     PathService(workspace_root=root).ensure_all_directories()
     (root / "knowledge_bases").mkdir(parents=True, exist_ok=True)
@@ -138,6 +142,8 @@ def ensure_system_dirs() -> None:
 
 
 def get_path_service_for_scope(scope: UserScope) -> PathService:
+    if scope.root is None or scope.tenant_id:
+        raise RuntimeError("local path service is unavailable for this scope")
     key = scope.cache_key
     service = _path_services.get(key)
     if service is None:
@@ -155,7 +161,7 @@ def get_current_path_service() -> PathService:
 
     user = get_current_user_or_none()
     if user is None:
-        return PathService.get_instance()
+        raise PermissionError("authenticated owner required")
     if user.scope.kind == "user":
         ensure_scope_workspace(user.scope)
     return get_path_service_for_scope(user.scope)
@@ -179,12 +185,13 @@ def _resolve_owner() -> tuple[str, PathService]:
 
     user = get_current_user_or_none()
     if user is None:
-        # No request scope: CLI runs and background jobs act as the deployment.
-        return LOCAL_ADMIN_ID, PathService.get_instance()
+        raise PermissionError("explicit owner required")
+    if user.scope.kind == "tenant":
+        raise PermissionError("tenant resources require an explicit owner provider")
     if is_partner_user_id(user.id):
         # A partner is a synthetic user, not a person: it has a workspace but no
         # account, so an asset keyed to an account belongs to its owner.
-        return LOCAL_ADMIN_ID, get_admin_path_service()
+        raise PermissionError("partner resources require an explicit owner binding")
     if user.scope.kind == "user":
         ensure_scope_workspace(user.scope)
         return user.id, get_path_service_for_scope(user.scope)
@@ -245,8 +252,21 @@ def get_owner_secrets_dir() -> Path:
     return owner_secrets_dir(current_owner_id())
 
 
+def _tenant_owner_id(tenant_id: str, user_id: str) -> str:
+    """Stable safe key for per-account system state in a PostgreSQL tenant."""
+
+    tenant_hex = uuid.UUID(str(tenant_id)).hex
+    user_digest = hashlib.sha256(str(user_id or "").encode("utf-8")).hexdigest()[:24]
+    return f"t_{tenant_hex}_{user_digest}"
+
+
 def current_owner_id() -> str:
     """Id of the account owning the current scope (a partner's is its owner's)."""
+    from .context import get_current_user_or_none
+
+    user = get_current_user_or_none()
+    if user is not None and user.scope.kind == "tenant":
+        return _tenant_owner_id(user.scope.tenant_id, user.id or user.scope.user_id)
     return _resolve_owner()[0]
 
 

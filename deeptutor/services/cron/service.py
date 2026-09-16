@@ -52,6 +52,7 @@ class CronOwner:
     """Who scheduled the job and where its output goes."""
 
     kind: str  # "chat" | "partner"
+    tenant_id: str = ""  # PG runtime tenant; legacy/local payloads leave it empty
     user_id: str = ""  # chat: owning user
     is_admin: bool = True  # chat: scope restore
     session_id: str = ""  # chat: reply lands in this session
@@ -285,6 +286,25 @@ class CronService:
             self._changed()
         return removed
 
+    def set_job_enabled(
+        self, job_id: str, enabled: bool, *, owner_key: str | None = None
+    ) -> bool:
+        """Pause/resume a job without deleting its schedule."""
+        self._load()
+        job = self._jobs.get(job_id)
+        if job is None:
+            return False
+        if owner_key is not None and job.owner.key != owner_key:
+            return False
+        if job.enabled == enabled:
+            return True
+        job.enabled = enabled
+        if enabled and job.state.next_run_at_ms is None:
+            job.state.next_run_at_ms = compute_next_run(job.schedule, _now_ms())
+        self.repository.upsert(asdict(job))
+        self._changed()
+        return True
+
     def remove_owner_jobs(self, owner_key: str) -> int:
         """Drop every job belonging to *owner_key* (e.g. a destroyed partner)."""
         self._load()
@@ -404,18 +424,33 @@ _service: CronService | None = None
 
 
 def get_cron_service() -> CronService:
-    """Process-wide cron service, anchored at the admin workspace."""
-    global _service
-    if _service is None:
-        from deeptutor.multi_user.paths import get_admin_path_service
-        from deeptutor.services.cron.executor import execute_job
+    """Process-wide cron service.
 
-        root = get_admin_path_service().workspace_root / "cron"
-        _service = CronService(
-            store_path=root / "jobs.sqlite3",
-            legacy_store_path=root / "jobs.json",
-            on_job=execute_job,
-        )
+    Default runtime is PostgreSQL-only. The SQLite-backed ``CronService``
+    remains available only for explicit legacy tests/callers that construct it
+    themselves or inject ``_service``; this accessor must not initialize
+    ``jobs.json``/``jobs.sqlite3``.
+    """
+    global _service
+    if _service is not None:
+        return _service
+
+    from deeptutor.app.container import get_application_container
+
+    container = get_application_container()
+    runtime = getattr(container, "postgres_runtime", None)
+    if runtime is None:
+        raise RuntimeError("PostgreSQL cron service is not configured")
+
+    from deeptutor.services.cron.executor import execute_job
+    from deeptutor.services.cron.postgres import PostgresCronService
+
+    _service = PostgresCronService(
+        runtime.sync_db,
+        tenant_id=str(runtime.config.tenant_id),
+        worker_id=container.worker_id,
+        on_job=execute_job,
+    )
     return _service
 
 

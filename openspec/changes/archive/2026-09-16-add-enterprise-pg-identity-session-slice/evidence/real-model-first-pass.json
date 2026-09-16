@@ -1,0 +1,77 @@
+{
+  "model": "qwen-plus",
+  "secret_source": ".secrets/.test-secrets（仅进程内读取）",
+  "endpoint_host": "llm-fhu3jf04d5umyeda.cn-beijing.maas.aliyuncs.com",
+  "elapsed_seconds": 70.88,
+  "turns": [
+    {
+      "turn_id": "turn_80c1a975c84046f381c67c37a25c7adf",
+      "events": 77,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0004733999999999999,
+          "total_tokens": 2226,
+          "total_calls": 1,
+          "prompt_tokens": 1916,
+          "completion_tokens": 310
+        }
+      ]
+    },
+    {
+      "turn_id": "turn_92988c78154847e8ad288e2a8298b289",
+      "events": 101,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0005466,
+          "total_tokens": 2342,
+          "total_calls": 1,
+          "prompt_tokens": 1908,
+          "completion_tokens": 434
+        }
+      ]
+    },
+    {
+      "turn_id": "turn_1970d5c57c4e49d7bea45f21abbcc017",
+      "events": 101,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0005466,
+          "total_tokens": 2342,
+          "total_calls": 1,
+          "prompt_tokens": 1908,
+          "completion_tokens": 434
+        }
+      ]
+    },
+    {
+      "turn_id": "turn_781cc43d94744e0a91ccb83cfc0ff729",
+      "events": 187,
+      "status": "completed",
+      "cost_summary": [
+        {
+          "total_cost_usd": 0.0011091,
+          "total_tokens": 4856,
+          "total_calls": 2,
+          "prompt_tokens": 4010,
+          "completion_tokens": 846
+        }
+      ]
+    }
+  ],
+  "budget_limits": {
+    "max_rounds_per_turn": 3,
+    "max_output_tokens_per_chat_call": 512,
+    "turns": 4,
+    "title_max_tokens": 80
+  },
+  "note": "真实调用，不含凭证/正文；cost_summary为core用量估算，非供应商账单。",
+  "acceptance": "首次模型连通性记录；后发现 WS 默认 parent=None 丢弃续聊上下文，因此本记录不作为完整续聊验收。修复后另存 real-model-smoke.json。",
+  "additional_diagnostic_usage": {
+    "prompt_tokens": 11,
+    "completion_tokens": 1,
+    "total_tokens": 12
+  }
+}

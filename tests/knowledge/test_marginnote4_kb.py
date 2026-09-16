@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 from deeptutor.knowledge.manager import KnowledgeBaseManager
-from deeptutor.services.path_service import PathService
 
 
 def _seed_mn4(manager: KnowledgeBaseManager, name: str, db_path: str = "") -> None:
@@ -79,7 +78,7 @@ def test_register_marginnote4_kb_default_path(tmp_path: Path) -> None:
     manager = KnowledgeBaseManager(base_dir=str(tmp_path / "kbs"))
     entry = manager.register_marginnote4_kb("AutoPath")
     assert entry["type"] == "marginnote4"
-    assert "db_path" not in entry  # capability derives default from name
+    assert "db_path" not in entry  # runtime uses PG kb_id, not a derived SQLite path
 
 
 def test_register_marginnote4_kb_rejects_duplicate(tmp_path: Path) -> None:
@@ -114,28 +113,22 @@ def test_connected_kbs_backed_by_an_index_stay_retrievable() -> None:
         assert supports_rag_retrieval({"type": kb_type}) is True
 
 
-def test_deleting_the_kb_removes_its_synced_store(tmp_path: Path, monkeypatch) -> None:
-    """The store is ours, unlike an Obsidian vault, so the delete claim holds.
+def test_deleting_the_kb_does_not_touch_legacy_source_path(tmp_path: Path) -> None:
+    """Deleting a connected MN4 KB drops only the pointer.
 
-    Leaving it behind would also resurrect every paired device the moment a
-    library of the same name is connected again.
+    Runtime objects/devices now live in PostgreSQL.  A legacy ``db_path`` is
+    source metadata, so deleting the pointer must not unlink a user's snapshot.
     """
-    monkeypatch.setenv("DEEPTUTOR_HOME", str(tmp_path / "home"))
-    PathService.reset_instance()
-    try:
-        from deeptutor.capabilities.marginnote4.store import MarginNoteStore, resolve_db_path
+    legacy = tmp_path / "stores" / "legacy.db"
+    legacy.parent.mkdir()
+    legacy.write_text("legacy snapshot", encoding="utf-8")
 
-        manager = KnowledgeBaseManager(base_dir=str(tmp_path / "kbs"))
-        manager.register_marginnote4_kb("Lib")
-        db_path = resolve_db_path("Lib", metadata={})
-        MarginNoteStore(db_path).pair_device(device_name="iPad")
-        assert db_path.is_file()
+    manager = KnowledgeBaseManager(base_dir=str(tmp_path / "kbs"))
+    manager.register_marginnote4_kb("Lib", db_path=str(legacy))
 
-        assert manager.delete_knowledge_base("Lib", confirm=True) is True
-        assert not db_path.exists()
-        assert "Lib" not in manager.config.get("knowledge_bases", {})
-    finally:
-        PathService.reset_instance()
+    assert manager.delete_knowledge_base("Lib", confirm=True) is True
+    assert legacy.read_text(encoding="utf-8") == "legacy snapshot"
+    assert "Lib" not in manager.config.get("knowledge_bases", {})
 
 
 def test_deleting_an_obsidian_kb_leaves_its_vault_alone(tmp_path: Path) -> None:
@@ -155,44 +148,20 @@ def test_deleting_an_obsidian_kb_leaves_its_vault_alone(tmp_path: Path) -> None:
     assert (vault / "notes" / "a.md").is_file()
 
 
-def test_register_rejects_a_name_that_derives_an_existing_store(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Distinct names can still derive one SQLite file.
+def test_register_allows_names_that_used_to_collide_by_default_store(tmp_path: Path) -> None:
+    """Names no longer derive a default SQLite store, so punctuation is safe."""
 
-    ``default_db_path`` keeps only alphanumerics, ``-`` and ``_``, so "My Lib"
-    and "My.Lib" both land on ``My_Lib.db``. Sharing it would merge two
-    libraries' objects and let either one's paired devices sync into the other.
-
-    The pair used to be "My Lib" / "My/Lib". A ``/`` is now refused by
-    ``validate_knowledge_base_name`` before this guard is reached, so the
-    collision needs a character the name rule allows — a dot does.
-    """
-    monkeypatch.setenv("DEEPTUTOR_HOME", str(tmp_path / "home"))
-    PathService.reset_instance()
-    try:
-        manager = KnowledgeBaseManager(base_dir=str(tmp_path / "kbs"))
-        manager.register_marginnote4_kb("My Lib")
-
-        with pytest.raises(ValueError, match="already uses that MarginNote store"):
-            manager.register_marginnote4_kb("My.Lib")
-
-        # A name that differs by more than punctuation is fine.
-        manager.register_marginnote4_kb("Other Lib")
-        assert set(manager.config["knowledge_bases"]) == {"My Lib", "Other Lib"}
-    finally:
-        PathService.reset_instance()
+    manager = KnowledgeBaseManager(base_dir=str(tmp_path / "kbs"))
+    manager.register_marginnote4_kb("My Lib")
+    manager.register_marginnote4_kb("My.Lib")
+    manager.register_marginnote4_kb("Other Lib")
+    assert set(manager.config["knowledge_bases"]) == {"My Lib", "My.Lib", "Other Lib"}
 
 
-def test_register_rejects_a_pinned_path_another_library_owns(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("DEEPTUTOR_HOME", str(tmp_path / "home"))
-    PathService.reset_instance()
-    try:
-        shared = tmp_path / "stores" / "shared.db"
-        manager = KnowledgeBaseManager(base_dir=str(tmp_path / "kbs"))
-        manager.register_marginnote4_kb("First", db_path=str(shared))
+def test_register_rejects_a_pinned_source_path_another_library_owns(tmp_path: Path) -> None:
+    shared = tmp_path / "stores" / "shared.db"
+    manager = KnowledgeBaseManager(base_dir=str(tmp_path / "kbs"))
+    manager.register_marginnote4_kb("First", db_path=str(shared))
 
-        with pytest.raises(ValueError, match="already uses that MarginNote store"):
-            manager.register_marginnote4_kb("Second", db_path=str(shared))
-    finally:
-        PathService.reset_instance()
+    with pytest.raises(ValueError, match="already uses that MarginNote source path"):
+        manager.register_marginnote4_kb("Second", db_path=str(shared))

@@ -33,6 +33,7 @@ from .exceptions import LLMConfigError
 
 if TYPE_CHECKING:
     from .traffic_control import TrafficController
+    from .transport import LLMTransportConfig
 
 
 class LLMConfigUpdate(TypedDict, total=False):
@@ -91,16 +92,14 @@ def _setup_openai_env_vars_early() -> None:
     """
     Set OPENAI_* environment variables early for OpenAI-compatible SDKs.
 
-    Some SDK helpers read credentials/endpoints from process environment.
-    This is called at module import time so downstream calls have consistent
-    environment regardless of entrypoint.
+    Some SDK helpers read credentials/endpoints from process environment, but
+    PG-only/default configured applications must be able to import this module
+    before file-backed runtime settings or provider Secrets are available.
+    Therefore import time is intentionally side-effect free; application
+    startup calls :func:`initialize_environment` explicitly once configuration
+    has been selected.
     """
-    try:
-        resolved = resolve_llm_runtime_config()
-    except Exception:
-        return
-    if _is_openai_compatible(resolved.binding, resolved.api_format):
-        _set_openai_env_vars(resolved.api_key, resolved.effective_url, source="early init")
+    return
 
 
 # Execute early setup at module import time
@@ -129,6 +128,7 @@ class LLMConfig:
     max_concurrency: int = 20
     requests_per_minute: int = 600
     traffic_controller: TrafficController | None = None
+    transport: LLMTransportConfig | None = None
 
     def __post_init__(self) -> None:
         if self.effective_url is None:

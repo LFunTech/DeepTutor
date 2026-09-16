@@ -25,11 +25,13 @@ import signal
 import tempfile
 import time
 
+from deeptutor.services.config import get_runtime_settings_dir
 from deeptutor.services.path_service import get_path_service
 
 logger = logging.getLogger(__name__)
 
 _CACHE_FILE = "claude_models_cache.json"
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 # Bounds for the capture: total wall-clock, and the terminal geometry (wide
 # enough that description columns don't wrap into the model name).
@@ -42,7 +44,12 @@ _SELECT_MARKERS = "✔✓●◉※"
 
 
 def _cache_path():
-    return get_path_service().get_settings_file(_CACHE_FILE)
+    try:
+        return get_path_service().get_settings_file(_CACHE_FILE)
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_settings_dir() / _CACHE_FILE
+        raise
 
 
 def load_cached_claude_models() -> tuple[list[dict[str, str]], str]:

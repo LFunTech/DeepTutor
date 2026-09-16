@@ -76,6 +76,7 @@ class AzureOpenAIProvider(LLMProvider):
         default_model: str = "gpt-5.2-chat",
         extra_headers: dict[str, str] | None = None,
         api_version: str | None = None,
+        disable_ssl_verify: bool | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -108,7 +109,7 @@ class AzureOpenAIProvider(LLMProvider):
             default_headers=headers,
             default_query=default_query,
             max_retries=0,
-            **openai_client_kwargs(),
+            **openai_client_kwargs(disable_ssl_verify=disable_ssl_verify),
         )
 
     @staticmethod

@@ -56,9 +56,18 @@ def _load_yaml_file(file_path: Path) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _path_service_for_config():
+    try:
+        return get_path_service()
+    except PermissionError:
+        from deeptutor.multi_user.paths import get_admin_path_service
+
+        return get_admin_path_service()
+
+
 def _inject_runtime_paths(config: dict[str, Any]) -> dict[str, Any]:
     """Expose canonical runtime paths without treating YAML paths as user-editable state."""
-    path_service = get_path_service()
+    path_service = _path_service_for_config()
     normalized = dict(config or {})
     tools = dict(normalized.get("tools", {}) or {})
     exec_config = dict(tools.get("exec", {}) or {})
@@ -122,7 +131,12 @@ def load_config_with_main(config_file: str, project_root: Path | None = None) ->
     if project_root is None:
         project_root = PROJECT_ROOT
 
-    config_path, _ = resolve_config_path(config_file, project_root)
+    try:
+        config_path, _ = resolve_config_path(config_file, project_root)
+    except FileNotFoundError:
+        if config_file == "main.yaml":
+            return _inject_runtime_paths({})
+        raise
     return _inject_runtime_paths(_load_yaml_file(config_path))
 
 
@@ -144,7 +158,12 @@ async def load_config_with_main_async(
     if project_root is None:
         project_root = PROJECT_ROOT
 
-    config_path, _ = resolve_config_path(config_file, project_root)
+    try:
+        config_path, _ = resolve_config_path(config_file, project_root)
+    except FileNotFoundError:
+        if config_file == "main.yaml":
+            return _inject_runtime_paths({})
+        raise
     return _inject_runtime_paths(await _load_yaml_file_async(config_path))
 
 
@@ -227,6 +246,13 @@ def get_agent_params(module_name: str) -> dict:
         >>> params["temperature"]  # 0.3
         >>> params["max_tokens"]   # 8192
     """
+    from deeptutor.core.providers import get_providers
+
+    providers = get_providers()
+    if providers is not None:
+        if providers.configuration is None:
+            raise RuntimeError("agent configuration provider is not configured")
+        return providers.configuration.agent_params(module_name)
     global_defaults = {
         "temperature": 0.5,
         "max_tokens": 4096,

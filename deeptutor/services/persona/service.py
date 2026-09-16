@@ -34,6 +34,7 @@ from typing import Any
 
 import yaml
 
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.path_service import get_path_service
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
@@ -50,6 +51,16 @@ PRESETS_DIR = Path(__file__).resolve().parent / "presets"
 # these well-known names are migrated automatically — arbitrary user skills
 # cannot be classified safely and stay where they are.
 LEGACY_PERSONA_SKILLS: tuple[str, ...] = ("peer", "teacher", "research-assistant")
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
+
+
+def _workspace_dir() -> Path:
+    try:
+        return get_path_service().get_workspace_dir()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_data_root() / "user" / "workspace"
+        raise
 
 
 @dataclass(slots=True)
@@ -100,7 +111,7 @@ class PersonaService:
     """CRUD + context rendering for PERSONA.md files under one workspace."""
 
     def __init__(self, root: Path | None = None) -> None:
-        self._root = root or (get_path_service().get_workspace_dir() / "personas")
+        self._root = root or (_workspace_dir() / "personas")
 
     @property
     def root(self) -> Path:
@@ -349,7 +360,7 @@ def get_persona_service() -> PersonaService:
     persona-type skills (idempotent, see
     :meth:`PersonaService.migrate_legacy_skills`).
     """
-    workspace = get_path_service().get_workspace_dir()
+    workspace = _workspace_dir()
     root = (workspace / "personas").resolve()
     key = str(root)
     if key not in _instances:

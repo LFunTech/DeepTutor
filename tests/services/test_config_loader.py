@@ -49,10 +49,19 @@ def test_load_config_with_main_raises_for_unknown_missing_config(tmp_path: Path)
         load_config_with_main("nonexistent_module.yaml", tmp_path)
 
 
+def test_load_config_with_main_treats_missing_main_as_empty_runtime_config(
+    tmp_path: Path,
+) -> None:
+    config = load_config_with_main("main.yaml", tmp_path)
+
+    assert config["paths"]["knowledge_bases_dir"].endswith("data/knowledge_bases")
+    assert not (tmp_path / "data" / "user" / "settings" / "main.yaml").exists()
+
+
 def test_load_config_with_main_uses_explicit_project_root() -> None:
     config = load_config_with_main("main.yaml", PROJECT_ROOT)
 
-    assert "system" in config
+    assert "paths" in config
     assert (
         Path(config["paths"]["solve_output_dir"])
         .as_posix()

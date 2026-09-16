@@ -15,6 +15,7 @@ import tempfile
 import threading
 from typing import Any
 
+from deeptutor.services.config import get_runtime_settings_dir
 from deeptutor.services.path_service import get_path_service
 from deeptutor.tools.builtin import USER_TOGGLEABLE_TOOL_NAMES
 
@@ -50,7 +51,10 @@ def _interface_settings_file():
     # Resolved on every call so a per-user PathService (set after auth)
     # routes reads to the caller's own ``settings/interface.json`` instead
     # of the admin scope frozen at import time.
-    return get_path_service().get_settings_file("interface")
+    try:
+        return get_path_service().get_settings_file("interface")
+    except (PermissionError, RuntimeError):
+        return get_runtime_settings_dir() / "interface.json"
 
 
 def _normalize_language(language: Any, default: str = "en") -> str:

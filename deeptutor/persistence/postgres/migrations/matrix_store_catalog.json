@@ -1,0 +1,94 @@
+{
+  "columns": {
+    "matrix_accounts": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! secret_id:text! secret_version:int4! shared:bool! account_ciphertext:bytea! account_nonce:bytea! created_at_ms:int8! updated_at_ms:int8!",
+    "matrix_olm_sessions": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! sender_key:text! session_id:text! secret_id:text! secret_version:int4! creation_time:timestamptz! last_usage_date:timestamptz! session_ciphertext:bytea! session_nonce:bytea! updated_at_ms:int8!",
+    "matrix_megolm_inbound_sessions": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! room_id:text! sender_key:text! session_id:text! fp_key:text! secret_id:text! secret_version:int4! session_ciphertext:bytea! session_nonce:bytea! updated_at_ms:int8!",
+    "matrix_forwarded_chains": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! room_id:text! sender_key:text! session_id:text! position:int4! chain_sender_key:text!",
+    "matrix_device_keys": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! user_id:text! key_device_id:text! display_name:text! deleted:bool! updated_at_ms:int8!",
+    "matrix_device_key_values": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! user_id:text! key_device_id:text! key_type:text! key_value:text!",
+    "matrix_device_trust_state": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! user_id:text! key_device_id:text! state:text! updated_at_ms:int8!",
+    "matrix_encrypted_rooms": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! room_id:text!",
+    "matrix_sync_tokens": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! token:text! updated_at_ms:int8!",
+    "matrix_outgoing_key_requests": "tenant_id:uuid! owner_id:text! partner_id:text! matrix_user_id:text! device_id:text! request_id:text! session_id:text! room_id:text! algorithm:text!"
+  },
+  "constraints": {
+    "matrix_accounts": [
+      "CHECK (((created_at_ms >= 0) AND (updated_at_ms >= created_at_ms)))",
+      "CHECK (((length(partner_id) > 0) AND (length(partner_id) <= 128)))",
+      "CHECK ((length(device_id) > 0))",
+      "CHECK ((length(matrix_user_id) > 0))",
+      "CHECK ((length(secret_id) > 0))",
+      "CHECK ((octet_length(account_nonce) = 12))",
+      "CHECK ((secret_version >= 1))",
+      "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id)"
+    ],
+    "matrix_olm_sessions": [
+      "CHECK ((last_usage_date >= creation_time))",
+      "CHECK ((length(secret_id) > 0))",
+      "CHECK ((length(sender_key) > 0))",
+      "CHECK ((length(session_id) > 0))",
+      "CHECK ((octet_length(session_nonce) = 12))",
+      "CHECK ((secret_version >= 1))",
+      "CHECK ((updated_at_ms >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id) REFERENCES enterprise.matrix_accounts(tenant_id, owner_id, partner_id, matrix_user_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, sender_key, session_id)"
+    ],
+    "matrix_megolm_inbound_sessions": [
+      "CHECK ((length(fp_key) > 0))",
+      "CHECK ((length(room_id) > 0))",
+      "CHECK ((length(secret_id) > 0))",
+      "CHECK ((length(sender_key) > 0))",
+      "CHECK ((length(session_id) > 0))",
+      "CHECK ((octet_length(session_nonce) = 12))",
+      "CHECK ((secret_version >= 1))",
+      "CHECK ((updated_at_ms >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id) REFERENCES enterprise.matrix_accounts(tenant_id, owner_id, partner_id, matrix_user_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, room_id, sender_key, session_id)"
+    ],
+    "matrix_forwarded_chains": [
+      "CHECK ((length(chain_sender_key) > 0))",
+      "CHECK ((\"position\" >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, room_id, sender_key, session_id) REFERENCES enterprise.matrix_megolm_inbound_sessions(tenant_id, owner_id, partner_id, matrix_user_id, device_id, room_id, sender_key, session_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, room_id, sender_key, session_id, \"position\")"
+    ],
+    "matrix_device_keys": [
+      "CHECK ((length(key_device_id) > 0))",
+      "CHECK ((length(user_id) > 0))",
+      "CHECK ((updated_at_ms >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id) REFERENCES enterprise.matrix_accounts(tenant_id, owner_id, partner_id, matrix_user_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, user_id, key_device_id)"
+    ],
+    "matrix_device_key_values": [
+      "CHECK ((length(key_type) > 0))",
+      "CHECK ((length(key_value) > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, user_id, key_device_id) REFERENCES enterprise.matrix_device_keys(tenant_id, owner_id, partner_id, matrix_user_id, device_id, user_id, key_device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, user_id, key_device_id, key_type)"
+    ],
+    "matrix_device_trust_state": [
+      "CHECK ((state = ANY (ARRAY['unset'::text, 'verified'::text, 'blacklisted'::text, 'ignored'::text])))",
+      "CHECK ((updated_at_ms >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, user_id, key_device_id) REFERENCES enterprise.matrix_device_keys(tenant_id, owner_id, partner_id, matrix_user_id, device_id, user_id, key_device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, user_id, key_device_id)"
+    ],
+    "matrix_encrypted_rooms": [
+      "CHECK ((length(room_id) > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id) REFERENCES enterprise.matrix_accounts(tenant_id, owner_id, partner_id, matrix_user_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, room_id)"
+    ],
+    "matrix_sync_tokens": [
+      "CHECK ((length(token) > 0))",
+      "CHECK ((updated_at_ms >= 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id) REFERENCES enterprise.matrix_accounts(tenant_id, owner_id, partner_id, matrix_user_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id)"
+    ],
+    "matrix_outgoing_key_requests": [
+      "CHECK ((length(algorithm) > 0))",
+      "CHECK ((length(request_id) > 0))",
+      "CHECK ((length(room_id) > 0))",
+      "CHECK ((length(session_id) > 0))",
+      "FOREIGN KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id) REFERENCES enterprise.matrix_accounts(tenant_id, owner_id, partner_id, matrix_user_id, device_id) ON DELETE CASCADE",
+      "PRIMARY KEY (tenant_id, owner_id, partner_id, matrix_user_id, device_id, request_id)"
+    ]
+  }
+}

@@ -6,8 +6,8 @@ library (resolved by :mod:`deeptutor.capabilities.marginnote4.binding`). As a
 on the seven MarginNote tools (plus the ``ask_user`` floor), navigating the
 synced study data rather than retrieving flattened RAG chunks.
 
-The store path is injected into each tool call as ``_db_path`` server-side;
-the model never supplies it.
+The PG KB id is injected into each tool call as ``_mn4_kb_id`` server-side;
+the model never supplies storage paths or database credentials.
 """
 
 from __future__ import annotations
@@ -63,7 +63,9 @@ class MarginNoteCapability(KnowledgeCapability):
         if binding is None:
             return kwargs
         updated = dict(kwargs)
-        updated["_db_path"] = binding["db_path"]
+        updated.pop("_db_path", None)
+        updated["_mn4_kb_id"] = binding["kb_id"]
+        updated["_marginnote_name"] = binding["name"]
         return updated
 
     def pre_loop_seed(self, context: UnifiedContext) -> str:

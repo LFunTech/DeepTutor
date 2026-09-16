@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import logging
+import os
 from pathlib import Path
 import secrets
 import shutil
@@ -19,7 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 
 from deeptutor.services.config.model_catalog import ModelCatalogService
-from deeptutor.services.config.runtime_settings import load_system_settings
+from deeptutor.services.config.runtime_settings import DEFAULT_SYSTEM_SETTINGS, load_system_settings
 
 from .catalog import CodexModelCatalog
 from .constants import (
@@ -1116,6 +1117,16 @@ def _codex_secrets_root() -> Path:
     is mounted for nobody, so the store now lives under the owner's directory
     there instead, keyed by the same owner resolution as before.
     """
+    from deeptutor.core.providers import get_providers
+    from deeptutor.multi_user.context import get_current_user
+
+    user = get_current_user()
+    if user.scope.kind == "tenant":
+        resources = getattr(get_providers(), "resources", None)
+        if resources is None:
+            raise PermissionError("explicit owner resource provider required")
+        # PG 运行入口不搜索/搬移旧本地 Secret；只使用显式 tenant+owner 目录。
+        return resources.owner_root(user.scope.tenant_id, user.id, "secrets")
     from deeptutor.multi_user.paths import get_owner_secrets_dir
 
     secrets_root = get_owner_secrets_dir()
@@ -1197,13 +1208,39 @@ def _owner_model_catalog_service() -> ModelCatalogService:
     return owner_catalog_service()
 
 
+def _callback_forward_port() -> int:
+    """Resolve frontend port without reopening file settings inside app providers."""
+
+    try:
+        return int(load_system_settings()["frontend_port"])
+    except RuntimeError as exc:
+        if "file runtime settings are unavailable in a configured application" not in str(exc):
+            raise
+    raw = os.environ.get("FRONTEND_PORT", "")
+    return int(raw) if raw else int(DEFAULT_SYSTEM_SETTINGS["frontend_port"])
+
+
 def get_codex_oauth_service() -> CodexOAuthService:
     secrets_root = _codex_secrets_root()
     key = str(secrets_root)
     service = _SERVICE_INSTANCES.get(key)
     if service is None:
-        callback_forward_port = load_system_settings()["frontend_port"]
-        store = CodexCredentialStore(secrets_root)
+        callback_forward_port = _callback_forward_port()
+        from deeptutor.core.providers import get_providers
+        from deeptutor.multi_user.context import get_current_user_or_none
+
+        user = get_current_user_or_none()
+        directory = None
+        if user is not None and user.scope.kind == "tenant":
+            directory = get_providers().resources.bind_directory(
+                user.scope.tenant_id, user.id, "secrets", codex=True
+            )
+        # 前面的 _codex_secrets_root 已执行身份/owner 门禁；显式离线根保留原构造契约。
+        store = (
+            CodexCredentialStore(secrets_root, owner_directory=directory)
+            if directory is not None
+            else CodexCredentialStore(secrets_root)
+        )
         http = httpx.AsyncClient(timeout=30)
         catalog = CodexModelCatalog(store, http=http)
         service = CodexOAuthService(

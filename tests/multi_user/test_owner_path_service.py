@@ -8,8 +8,15 @@ resolve to the human who owns the partner (#711), while workspace-keyed assets
 
 from __future__ import annotations
 
+import re
+import uuid
+
+import pytest
+
 from deeptutor.multi_user.context import reset_current_user, set_current_user
+from deeptutor.multi_user.models import CurrentUser, UserScope
 from deeptutor.multi_user.paths import (
+    current_owner_id,
     get_admin_path_service,
     get_current_path_service,
     get_owner_path_service,
@@ -49,3 +56,39 @@ def test_partner_scope_resolves_to_its_owner(mu_isolated_root) -> None:
 
 def test_no_active_scope_falls_back_to_the_current_path_service(mu_isolated_root) -> None:
     assert get_owner_path_service().get_user_root() == (get_current_path_service().get_user_root())
+
+
+def test_tenant_scope_has_safe_owner_id_without_filesystem_owner_path(
+    mu_isolated_root,
+) -> None:
+    """Per-account system state needs a tenant-safe key, but no local workspace fallback."""
+
+    tenant_a = str(uuid.uuid4())
+    tenant_b = str(uuid.uuid4())
+
+    def resolve(tenant_id: str) -> str:
+        token = set_current_user(
+            CurrentUser(
+                id="same/user@example.com",
+                username="same",
+                role="user",
+                scope=UserScope(
+                    kind="tenant",
+                    tenant_id=tenant_id,
+                    user_id="same/user@example.com",
+                    root=None,
+                ),
+            )
+        )
+        try:
+            owner_id = current_owner_id()
+            with pytest.raises(PermissionError, match="explicit owner provider"):
+                get_owner_path_service()
+            return owner_id
+        finally:
+            reset_current_user(token)
+
+    first = resolve(tenant_a)
+    assert first == resolve(tenant_a)
+    assert first != resolve(tenant_b)
+    assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", first)

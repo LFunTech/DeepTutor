@@ -36,10 +36,13 @@ class TurnLifecycle:
         coordinator: RuntimeCoordinator | None = None,
         owner_id: str = "",
         turn_engine: Any | None = None,
+        turn_environment: Any | None = None,
     ) -> None:
         from deeptutor.services.session import get_session_store
 
         self.store = store or get_session_store()
+        self.turn_environment = turn_environment
+        self._closed = False
         self.coordinator = coordinator
         self.owner_id = owner_id
         if turn_engine is None:
@@ -70,6 +73,7 @@ class TurnLifecycle:
         """Stop accepting work and deterministically release runtime resources."""
         async with self._lock:
             self._accepting_turns = False
+            self._closed = True
             executions = list(self._executions.values())
             reply_queues = list(self._reply_queues.values())
             self._reply_queues.clear()
@@ -163,6 +167,10 @@ class TurnLifecycle:
         }
 
     def _turns_blocked_for_update_locked(self) -> bool:
+        if self._closed:
+            return True
+        if self.turn_environment is not None:
+            return not self._accepting_turns
         if self._accepting_turns:
             return False
         if not self._managed_update_is_active():

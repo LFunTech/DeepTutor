@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -44,6 +45,70 @@ def test_default_workspace_keeps_runtime_compatible_layout(workspace_service) ->
     assert binding.root == paths.get_workspace_dir().resolve()
     assert binding.is_default is True
     assert (binding.root / "outputs").is_dir()
+
+
+def test_default_workspace_is_recreated_after_runtime_data_is_deleted(
+    workspace_service,
+) -> None:
+    service, paths = workspace_service
+    root = paths.get_workspace_dir().resolve()
+    shutil.rmtree(root)
+    token = set_current_user(
+        CurrentUser(
+            id="user-1",
+            username="user@example.test",
+            role="user",
+            scope=UserScope(kind="user", user_id="user-1", root=paths.workspace_root),
+        )
+    )
+    try:
+        binding = service.current_binding(ensure_output=True)
+
+        assert binding.root == root
+        assert binding.is_default is True
+        assert (root / "outputs").is_dir()
+    finally:
+        reset_current_user(token)
+
+
+def test_workspace_uses_runtime_dirs_when_local_path_service_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from deeptutor.services.workspace import service as service_module
+
+    data_root = tmp_path / "data"
+    settings_dir = data_root / "user" / "settings"
+    workspace_root = data_root / "user" / "workspace"
+    workspace_root.mkdir(parents=True)
+    token = set_current_user(
+        CurrentUser(
+            id="user-1",
+            username="user@example.test",
+            role="tenant_admin",
+            scope=UserScope(kind="tenant", tenant_id="tenant-1", user_id="user-1", root=None),
+        )
+    )
+
+    def _raise_local_path_unavailable():
+        raise RuntimeError("local path service is unavailable for this scope")
+
+    monkeypatch.setattr(service_module, "get_path_service", _raise_local_path_unavailable)
+    monkeypatch.setattr(service_module, "get_runtime_data_root", lambda: data_root, raising=False)
+    monkeypatch.setattr(
+        service_module, "get_runtime_settings_dir", lambda: settings_dir, raising=False
+    )
+    try:
+        service = ContentWorkspaceService()
+
+        binding = service.current_binding()
+        status = service.describe_current()
+
+        assert binding.root == workspace_root.resolve()
+        assert service._settings_file() == settings_dir / "content_workspace.json"
+        assert status["status"] == "ready"
+        assert status["workspace_id"] == binding.workspace_id
+    finally:
+        reset_current_user(token)
 
 
 def test_custom_workspace_is_saved_and_turn_output_is_scoped(

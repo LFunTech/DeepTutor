@@ -1,0 +1,251 @@
+{
+  "version": 1,
+  "status": "baseline-contract-not-postgresql-domain-acceptance",
+  "database_acceptance": "real-postgresql-only",
+  "scope": "question notebook, learning/mastery, reading, cron, Partners runtime status, MarginNote 4, Memory chat/quiz snapshot",
+  "cross_domain": [
+    "业务 PG 测试只能使用每测试独立真实 PostgreSQL、产品 migration、受限运行角色和可信 scope。",
+    "SQLite/JSON 节点仅证明旧格式/用户可见基线，不得注入 PG adapter 测试或运行 provider。",
+    "所有正文、关联、版本、事件/游标变化以单事务 commit 为可见边界；失败、取消、超时不得部分可见。",
+    "每域后续 PG 测试至少覆盖跨 tenant、同 tenant 跨 owner、管理员无个人 grant、连接复用、两连接并发和受限角色 DDL 拒绝。",
+    "外部文件载荷与 PG 无跨库事务，必须验证补偿或待核对状态。"
+  ],
+  "legacy_fixture_policy": {
+    "purpose": "offline-import-and-behavior-baseline-only",
+    "runtime_provider_allowed": false,
+    "postgres_substitute_allowed": false,
+    "requires_temporary_runtime_home": true
+  },
+  "legacy_representative_nodes": {
+    "question_notebook": "tests/services/session/test_sqlite_store.py::test_upsert_notebook_entries_updates_on_conflict",
+    "learning_mastery": "deeptutor/learning/tests/test_storage.py::TestSaveLoad::test_stale_snapshot_is_rejected_instead_of_losing_progress",
+    "reading_catalog": "tests/reading/test_catalog_store.py::test_workspace_tabs_keep_order_and_active_material_valid",
+    "cron": "tests/services/cron/test_cron_service.py::TestJobManagement::test_add_list_cancel_persist",
+    "partners_runtime_status": "tests/services/partners/test_runtime_status.py::test_runtime_status_is_shared_and_does_not_persist_channel_credentials",
+    "marginnote4": "tests/capabilities/marginnote4/test_store.py::test_ingest_handles_deletions",
+    "memory_snapshot": "tests/services/memory/test_snapshot_probes.py::test_probe_matches_full_read_when_ids_and_timestamps_disagree"
+  },
+  "matrix": {
+    "included_in_domains": false,
+    "hard_prerequisite_task": "1.23",
+    "schema_frozen": false,
+    "note": "现有 matrix-preflight 仅为实验输入；在 nio/libolm 精确协议与线程模型实测前不得冻结 schema 或宣称 PG adapter 可行。"
+  },
+  "domains": {
+    "question_notebook": {
+      "contract": {
+        "dto": "保留 QuestionBankQuery、NotebookEntry/Category/API DTO；条目与分类公开 ID 为整数。",
+        "ids": "(session_id, turn_id, question_id) 幂等 upsert；turn_id=None 仅匹配旧空命名空间。",
+        "ordering": "created_at 后用整数 id 同向唯一打破并列；分类按名称、材料按不区分大小写标题稳定输出。",
+        "pagination": "保留规范化 limit 1..500 与 offset 基线；PG adapter 另补有界稳定游标，不能无界读取。",
+        "conflicts": "分类 trim 后不区分大小写判重并映射 409；bulk 忽略坏 entry 但保留有效项，失败事务不得部分提交。",
+        "cas": "旧 entry 无 version/并发 patch 为偶然 last-writer-wins；PG task 1.12 必须明确 CAS/冲突，不把缺陷冻结为要求。",
+        "deletion": "删除 session/entry/category 的 join 生命周期原子；跨课程、学习与附件引用须级联、拒绝或补偿且不可悬空可读。",
+        "recovery": "只恢复已提交条目/分类/答题状态；取消或数据库失败不发布假成功，附件与 PG 失败须有补偿语义。",
+        "owner_constraints": "所有 entry/category/join 与 session/turn 使用 tenant_id+owner_id 复合 FK/RLS；管理员无个人 grant 不得读正文。"
+      },
+      "legacy_test_nodes": [
+        "tests/services/session/test_sqlite_store.py::test_upsert_notebook_entries_updates_on_conflict",
+        "tests/services/session/test_sqlite_store.py::test_list_notebook_entries_intersects_session_filters",
+        "tests/services/session/test_sqlite_store.py::test_notebook_review_metadata_filters_and_transitions",
+        "tests/services/session/test_sqlite_store.py::test_entries_cascade_on_session_delete",
+        "tests/services/session/test_sqlite_store.py::test_category_crud",
+        "tests/services/session/test_sqlite_store.py::test_entry_category_association",
+        "tests/api/test_notebook_router.py::test_quiz_state_isolated_per_turn",
+        "tests/api/test_notebook_router.py::test_lookup_without_turn_id_only_matches_legacy_namespace",
+        "tests/api/test_question_bank_api.py::test_search_treats_wildcards_literally",
+        "tests/api/test_question_bank_api.py::test_sort_is_stable_across_a_same_timestamp_batch",
+        "tests/api/test_question_bank_api.py::test_case_only_duplicate_category_is_rejected",
+        "tests/api/test_question_bank_api.py::test_bulk_link_and_unlink",
+        "tests/api/test_book_quiz_attempt_notebook.py::test_quiz_attempt_syncs_focus_check_to_question_bank",
+        "tests/tools/test_question_bank_tool.py::test_bad_ids_do_not_sink_the_good_ones",
+        "tests/agents/question/test_pipeline.py::test_history_loader_returns_session_scoped_entries"
+      ],
+      "postgres_acceptance": [
+        "task 1.11/1.12/1.13 增加真实 PG adapter 契约断言",
+        "双 tenant、同 tenant 双 owner、admin 无 grant、同 ID 共存",
+        "并发 upsert/category/patch、批量失败回滚、稳定分页与附件补偿"
+      ]
+    },
+    "learning_mastery": {
+      "contract": {
+        "dto": "保留 LearningProgress、topic/source、interaction/event/lease 及 mastery quiz/error/review DTO。",
+        "ids": "path/interaction/session/turn 标识规则保持；同 ID 跨 scope 可共存，interaction 不可改挂其它 path。",
+        "ordering": "事件按 revision,id；source 按 position 再唯一键；atlas/session/interaction 必补唯一 tie-breaker。",
+        "pagination": "事件游标明确整 revision 重放或 (revision,event_id)；所有列表须有上界和稳定游标。",
+        "conflicts": "每 path 单 active interaction、每 turn 单 lease；两个真实连接竞争只允许一方成功且 loser 得领域冲突。",
+        "cas": "LearningProgress version 严格 expected->actual+1；同事务的 progress/interaction/topic/event 要么全提交要么全回滚。",
+        "deletion": "path/session 删除按知识点、owner 与其它 session 关系决定，关联/事件/lease/topic/source 原子清理。",
+        "recovery": "event hub 仅唤醒；从已提交记录恢复，租约须有中断/generation 语义且不重跑旧模型问题。",
+        "owner_constraints": "所有 mastery 表以 tenant+owner+path 复合约束/RLS；目录隔离不是数据库隔离证据。"
+      },
+      "legacy_test_nodes": [
+        "deeptutor/learning/tests/test_storage.py::TestSaveLoad::test_stale_snapshot_is_rejected_instead_of_losing_progress",
+        "deeptutor/learning/tests/test_storage.py::TestSaveLoad::test_transaction_serializes_concurrent_mutations",
+        "deeptutor/learning/tests/test_storage.py::TestTopicMetadata::test_topic_metadata_and_mixed_sources_roundtrip",
+        "deeptutor/learning/tests/test_storage.py::TestSingleMembership::test_moving_to_another_path_leaves_the_first_one",
+        "deeptutor/learning/tests/test_storage.py::TestPathSessionOwnership::test_owned_path_is_deleted_only_after_its_last_session_detaches",
+        "deeptutor/learning/tests/test_storage.py::TestPathLease::test_only_one_turn_can_own_a_path",
+        "deeptutor/learning/tests/test_storage.py::TestInteractionsAndEvents::test_transaction_persists_interaction_and_redacted_event",
+        "deeptutor/learning/tests/test_storage.py::TestInteractionsAndEvents::test_partial_unique_index_rejects_two_active_questions",
+        "deeptutor/learning/tests/test_storage.py::TestInteractionsAndEvents::test_terminal_interaction_cannot_be_reopened",
+        "deeptutor/learning/tests/test_api_endpoints.py::TestTopicProductApi::test_topic_websocket_reconnects_from_cursor_and_rejects_invalid_topics",
+        "deeptutor/learning/tests/test_api_endpoints.py::TestInitModules::test_concurrent_administrative_mutation_returns_conflict",
+        "deeptutor/learning/tests/test_mastery_tools.py::test_duplicate_quiz_and_grade_are_idempotent",
+        "deeptutor/learning/tests/test_mastery_tools.py::test_switch_into_a_path_busy_elsewhere_keeps_the_current_one",
+        "tests/capabilities/test_mastery_capability.py::test_mastery_sync_carries_provenance_to_question_bank"
+      ],
+      "postgres_acceptance": [
+        "task 1.16/1.17 增加真实 PG adapter 契约断言",
+        "两个连接验证 version CAS、active interaction、lease 与 commit 后事件",
+        "重启/断连恢复且旧执行者不可推进"
+      ]
+    },
+    "reading_catalog": {
+      "contract": {
+        "dto": "保留 MaterialRecord、WorkspaceTab、WorkspaceRecord、ReadingSessionRecord、SourceKind/IngestionStatus。",
+        "ids": "material/workspace/session ID 格式与 content 去重保持；同标识跨 scope 可共存。",
+        "ordering": "tab position、active material、session/link 和 material 列表须有唯一 tie-breaker，不能依赖文件目录顺序。",
+        "pagination": "material/workspace/session 列表采用有界稳定游标；保留搜索/集合/计数过滤。",
+        "conflicts": "material upsert/manifest 去重与 workspace version 并发更新给出确定结果，错误关联使整个事务不变。",
+        "cas": "workspace/tab 排列及 active material 变更须版本 CAS，不能延续 SQLite 进程内串行假设。",
+        "deletion": "被 workspace/session/link 使用的材料按既定冲突/清理语义处理；外部载荷失败执行补偿或待核对。",
+        "recovery": "换进程/工作目录从 PG 恢复 workspace/tab/session/link，正文仍经受控资源引用读取。",
+        "owner_constraints": "material/workspace/tab/session/link 使用 tenant+owner 复合 FK/RLS；ReadingStore 不得旁路 _catalog.sqlite3。"
+      },
+      "legacy_test_nodes": [
+        "tests/reading/test_catalog_store.py::test_material_upsert_is_idempotent_and_searchable",
+        "tests/reading/test_catalog_store.py::test_workspace_tabs_keep_order_and_active_material_valid",
+        "tests/reading/test_catalog_store.py::test_reading_sessions_and_explicit_historical_links",
+        "tests/reading/test_catalog_store.py::test_two_catalog_roots_cannot_see_each_other",
+        "tests/reading/test_router.py::test_library_lists_collection_membership_and_totals",
+        "tests/reading/test_router.py::test_duplicate_check_separates_same_content_from_same_name",
+        "tests/reading/test_router.py::test_reuse_false_keeps_a_second_copy_with_its_own_annotations",
+        "tests/reading/test_router.py::test_deleting_a_material_reports_where_it_was_used",
+        "tests/reading/test_router.py::test_delete_material_restores_content_when_catalog_cleanup_fails",
+        "tests/reading/test_turn_wiring.py::test_open_material_is_persisted_with_the_user_message",
+        "tests/reading/test_references.py::test_references_resolve_the_persisted_revision_not_current_content",
+        "tests/reading/test_workspace_tools.py::test_switch_tab_rebinds_later_read_tools"
+      ],
+      "postgres_acceptance": [
+        "task 1.18/1.19 增加真实 PG adapter 契约断言",
+        "workspace version/tab 顺序/跨 owner FK 与稳定分页",
+        "PG 与外部内容失败补偿且禁止 _catalog.sqlite3 旁路"
+      ]
+    },
+    "cron": {
+      "contract": {
+        "dto": "保留 CronJob、CronSchedule、CronOwner、CronJobState/RunRecord 及 at/every/cron 时区语义。",
+        "ids": "job ID 稳定；owner key 仅为业务 DTO，不可代替可信 tenant/owner 授权列。",
+        "ordering": "job/run history/due 查询按 next_run、created 与唯一 id 稳定排序。",
+        "pagination": "列表与 execution 历史必须有界、可稳定翻页；不得 fetch-all JSON/SQLite。",
+        "conflicts": "暂停/删除/调度竞争通过数据库原子 claim 与版本校验，只有当前执行权可派发。",
+        "cas": "schedule/meta/execution 分代；旧 worker 完成写拒绝，不能用当前 SQLite read-run-write 窗口。",
+        "deletion": "cancel/remove owner 与已领取 execution 原子协调；不确定外部副作用保持待核对而非盲目重发。",
+        "recovery": "重启恢复 next_run/启停/执行记录；已确认不重复，结果未知不冒充 exactly-once。",
+        "owner_constraints": "显式 tenant_id+business owner+job FK/RLS；后台 leader 使用受控执行身份。"
+      },
+      "legacy_test_nodes": [
+        "tests/services/cron/test_cron_service.py::TestComputeNextRun::test_at_future_and_expired",
+        "tests/services/cron/test_cron_service.py::TestComputeNextRun::test_cron_expression",
+        "tests/services/cron/test_cron_service.py::TestValidateSchedule::test_rejects_unknown_tz",
+        "tests/services/cron/test_cron_service.py::TestJobManagement::test_add_list_cancel_persist",
+        "tests/services/cron/test_cron_service.py::TestJobManagement::test_owner_scoping",
+        "tests/services/cron/test_cron_service.py::TestJobManagement::test_two_service_instances_observe_each_others_changes",
+        "tests/services/cron/test_cron_service.py::TestSchedulerLoop::test_due_job_fires_and_one_shot_is_removed",
+        "tests/services/cron/test_cron_service.py::TestSchedulerLoop::test_failed_run_records_error",
+        "tests/services/cron/test_cron_tool.py::TestCronTool::test_schedule_every_and_list_and_cancel",
+        "tests/services/cron/test_cron_tool.py::TestCronTool::test_partner_owner_round_trip"
+      ],
+      "postgres_acceptance": [
+        "task 1.20/1.21 增加真实 PG repository/入口断言",
+        "原子 claim、时区边界、暂停删除竞争、generation CAS",
+        "不确定外部结果持久待核对且重启不盲目重发"
+      ]
+    },
+    "partners_runtime_status": {
+      "contract": {
+        "dto": "状态投影需结构化 allowlist DTO，包含 tenant/business owner/partner/worker/generation/version/TTL，禁止任意敏感 payload。",
+        "ids": "partner_id 在 tenant+business_owner scope 内稳定；worker_id 不等同业务 owner。",
+        "ordering": "list 使用稳定 partner_id/updated_at tie-breaker，不依赖 dict 或无序查询。",
+        "pagination": "状态列表有界；过期项 get/list/detail 语义一致。",
+        "conflicts": "旧 worker 写、停、删必须被 generation/version 拒绝；新 leader 接管可验证。",
+        "cas": "所有状态投影更新校验 generation/version，时间戳不得单独充当 fencing token。",
+        "deletion": "删除 partner 后旧 worker 不得复活状态；与 cron/config 的跨域顺序失败语义明确。",
+        "recovery": "投影可后台重建；TTL/expiry 和 leader reader 跨连接恢复，敏感字段不从旧 payload 恢复。",
+        "owner_constraints": "tenant_id+business_owner_id+partner_id 复合约束/RLS；管理员无 grant 不得读个人状态。"
+      },
+      "legacy_test_nodes": [
+        "tests/services/partners/test_runtime_status.py::test_runtime_status_is_shared_and_does_not_persist_channel_credentials",
+        "tests/api/test_partners_router.py::TestConfigAndSoul::test_get_masks_secrets_by_default",
+        "tests/services/partners/test_partner_runtime.py::TestLiveTurn::test_manager_captures_authenticated_actor_for_private_history"
+      ],
+      "postgres_acceptance": [
+        "task 1.22 增加真实 PG repository/入口断言",
+        "generation/TTL/old-worker/跨 scope/leader-reader 两连接",
+        "payload allowlist 与嵌套凭证、错误信息脱敏"
+      ]
+    },
+    "marginnote4": {
+      "contract": {
+        "dto": "保留 MarginNoteObject、SyncBatch/SyncResult、PairedDevice；token 只返回一次且只存安全校验材料。",
+        "ids": "object/device/cursor/tombstone 以 tenant+owner+kb+device 复合键；明确跨设备 object winner。",
+        "ordering": "search/list/doc/tag/link 使用确定唯一 tie-breaker；JSON links 不得用文本 LIKE 误匹配。",
+        "pagination": "search/list 使用有界 keyset cursor，limit clamp；通配符按字面搜索。",
+        "conflicts": "stale cursor/乱序/重复 batch 给出幂等结果或冲突；撤销与 ingest 竞争旧批次必须失败。",
+        "cas": "cursor/batch/version 单调 CAS，不能以服务器 wall-clock 冒充源位置；tombstone 版本阻止旧对象复活。",
+        "deletion": "对象删除与 tombstone/cursor 原子；KB/设备撤销删除 scoped rows，不接受 db_path 授权旁路。",
+        "recovery": "提交前中断全回滚，提交后重试返回既有结果；token 导入/恢复不恢复明文或撤销权。",
+        "owner_constraints": "tenant+owner+kb+device FK/RLS 覆盖 objects/devices/cursors/tombstones，错误 KB/owner 直接拒绝。"
+      },
+      "legacy_test_nodes": [
+        "tests/capabilities/marginnote4/test_store.py::test_pair_device_returns_token",
+        "tests/capabilities/marginnote4/test_store.py::test_revoke_device_blocks_token",
+        "tests/capabilities/marginnote4/test_store.py::test_ingest_updates_existing",
+        "tests/capabilities/marginnote4/test_store.py::test_ingest_handles_deletions",
+        "tests/capabilities/marginnote4/test_store.py::test_search_finds_common_term_across_objects",
+        "tests/capabilities/marginnote4/test_store.py::test_linked_objects_bidirectional",
+        "tests/capabilities/marginnote4/test_store.py::test_cursor_advances",
+        "tests/api/test_marginnote4_router.py::test_unauthenticated_sync_writes_nothing_to_disk",
+        "tests/api/test_marginnote4_router.py::test_pair_then_sync_round_trip",
+        "tests/api/test_marginnote4_router.py::test_revoked_device_cannot_sync",
+        "tests/api/test_marginnote4_router.py::test_pair_refuses_when_sync_would_read_another_workspace",
+        "tests/api/test_marginnote4_router.py::test_sync_batch_is_bounded",
+        "tests/knowledge/test_marginnote4_kb.py::test_deleting_the_kb_removes_its_synced_store"
+      ],
+      "postgres_acceptance": [
+        "task 1.27/1.28 增加真实 PG Store/API/KB 断言",
+        "batch/cursor/tombstone 原子幂等与撤销竞争",
+        "跨 KB/owner、稳定搜索分页、外部载荷补偿"
+      ]
+    },
+    "memory_snapshot": {
+      "contract": {
+        "dto": "保留 Entity、EntityStamp、ChangeEntry；chat/quiz reader 与 probe 的 identity/fingerprint 定义一致。",
+        "ids": "chat entity=session；quiz 改用稳定 entry ID 或含 turn 的兼容映射，不能继续 session:question 碰撞。",
+        "ordering": "消息按 created_at,id；entity/change 列表使用唯一 tie-breaker，probe 与 full read 选择同一末行。",
+        "pagination": "reader/probe 使用相同 PG snapshot 与有界 keyset cursor；change log 读取不得无界反转全文件。",
+        "conflicts": "并发 insert/update/delete 下不漏不重；读取错误必须显式，不得降级为空造成 mass removal。",
+        "cas": "refresh 仅在完整读取成功且基于当前 snapshot/version 更新 state；失败不覆盖状态或追加 removed。",
+        "deletion": "已提交删除/撤权在下一快照可见；reader 失败和真正空集合严格区分。",
+        "recovery": "从 PG 权威恢复 fingerprint/stamp；不枚举旧数据库路径、不靠文件 mtime，不把错误当全删。",
+        "owner_constraints": "reader/probe/background 均绑定可信 tenant+owner/grant，管理员任务不可枚举他人文件读取正文。"
+      },
+      "legacy_test_nodes": [
+        "tests/services/memory/test_snapshot_probes.py::test_probe_matches_full_read",
+        "tests/services/memory/test_snapshot_probes.py::test_probe_matches_full_read_when_ids_and_timestamps_disagree",
+        "tests/services/memory/test_snapshot_probes.py::test_probe_stamps_empty_session_as_zero",
+        "tests/services/memory/test_snapshot_probes.py::test_read_stamps_falls_back_when_a_probe_raises",
+        "tests/services/memory/test_recall.py::test_recent_merges_surfaces_newest_first",
+        "tests/services/memory/test_recall.py::test_recent_respects_limit_and_surface_filter",
+        "tests/services/memory/test_modes.py::test_update_l2_idempotent_when_no_new_entities",
+        "tests/api/test_memory_resolver.py::test_resolve_entry_returns_owning_surface"
+      ],
+      "postgres_acceptance": [
+        "task 1.29 增加真实 PG reader/probe/background 断言",
+        "quiz ID/fingerprint 与 chat probe/full snapshot 等价",
+        "PG 故障/撤权显式失败且不写 mass removals"
+      ]
+    }
+  }
+}

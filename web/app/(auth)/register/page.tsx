@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useTranslation } from "react-i18next";
-import { register, checkIsFirstUser, fetchAuthStatus } from "@/lib/auth";
+import { register, checkIsFirstUser, fetchAuthStatus, validAccountPassword } from "@/lib/auth";
 
 export default function RegisterPage() {
   const { t } = useTranslation();
@@ -35,6 +35,10 @@ export default function RegisterPage() {
     e.preventDefault();
     setError("");
 
+    if (!validAccountPassword(password)) {
+      setError(t("Password must contain 12 to 72 UTF-8 bytes."));
+      return;
+    }
     if (password !== confirmPassword) {
       setError(t("Passwords do not match"));
       return;
@@ -123,7 +127,7 @@ export default function RegisterPage() {
               placeholder="••••••••"
             />
             <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              {t("At least 8 characters")}
+              {t("Password (12–72 UTF-8 bytes)")}
             </p>
           </div>
 

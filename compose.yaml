@@ -33,8 +33,10 @@
 #     Files you create on the host are visible as your own user inside.
 #   * Host-side port bindings are LOOPBACK ONLY (127.0.0.1:). Drop the
 #     `127.0.0.1:` prefix to expose on all interfaces.
-#   * Two services: `deeptutor` (backend+frontend in one GHCR image, run
-#     under supervisord) and `pocketbase` (optional auth/storage sidecar).
+#   * Main service: `deeptutor` (backend+frontend in one GHCR image, run
+#     under supervisord). `pocketbase` is retained only as a legacy
+#     export/import source for migration tests; it is not a runtime business
+#     backend.
 #     The sandbox-runner sidecar from docker-compose.yml is intentionally
 #     NOT included: the main app falls back to bwrap (Linux, if installed
 #     in the image) or the restricted subprocess backend controlled by
@@ -60,6 +62,11 @@
 #     NEXT_PUBLIC_API_BASE_EXTERNAL, AUTH_ENABLED, POCKETBASE_URL, etc.
 #     and re-exports them from the JSONs on every start. So: edit JSONs
 #     + `podman compose restart deeptutor`, NOT compose env vars.
+#   * Business runtime is PostgreSQL-only. Provide postgres.json plus backend
+#     Secret env refs (DEEPTUTOR_DATABASE_URL, separate migration DSN, identity
+#     secrets) before starting business traffic. Missing PG config/schema/role
+#     fails readiness; it must not fall back to SQLite or PocketBase. Do not
+#     expose DSNs as NEXT_PUBLIC_* or checked-in examples.
 # ============================================
 
 name: deeptutor
@@ -83,12 +90,12 @@ services:
       retries: 10
 
   # ----------------------------------------------------------
-  # PocketBase — optional auth + storage sidecar
+  # PocketBase — legacy migration source only
   # ----------------------------------------------------------
-  # Activated by setting `integrations.pocketbase_url` to
-  # `http://pocketbase:8090` in data/user/settings/integrations.json.
-  # Leave blank to run with the SQLite fallback (single-user / invite-only).
+  # This service is not a DeepTutor runtime auth/storage backend. Use it only
+  # for read-only export/import exercises of legacy PocketBase data.
   pocketbase:
+    profiles: ["legacy-pocketbase"]
     image: ghcr.io/muchobien/pocketbase:latest
     container_name: deeptutor-pocketbase
     pull_policy: always
@@ -103,7 +110,7 @@ services:
       - "127.0.0.1:${HOST_PORT_POCKETBASE:-8090}:8090"
     volumes:
       # Bind mount a host directory so the host user (UID $UID) owns
-      # the SQLite DB and pocketbase's public/hooks dirs. With
+      # PocketBase's legacy source DB and public/hooks dirs. With
       # userns_mode: keep-id, the process inside is also UID $UID, so
       # reads and writes line up. (The pocketbase image's entrypoint
       # uses --dir=/pb_data --publicDir=/pb_public --hooksDir=/pb_hooks
@@ -184,9 +191,14 @@ services:
       # data/user/settings/model_catalog.json should use
       # `http://host.containers.internal:PORT` (podman) — NOT localhost,
       # which inside the container is the container's own loopback.
-      # Uncomment to enable PocketBase auth (also set integrations.json):
-      #   - POCKETBASE_URL=http://pocketbase:8090
-      #   - POCKETBASE_EXTERNAL_URL=http://localhost:8090
+      # PostgreSQL-only runtime Secret refs are supplied by the deployment
+      # secret manager or host environment; do not commit literal DSNs here and
+      # do not expose them as NEXT_PUBLIC_*:
+      #   - DEEPTUTOR_POSTGRES_CONFIG=/app/data/user/settings/postgres.json
+      #   - DEEPTUTOR_DATABASE_URL
+      #   - DEEPTUTOR_MIGRATION_DATABASE_URL
+      #   - DEEPTUTOR_IDENTITY_SIGNING_KEY
+      #   - DEEPTUTOR_AUTH_EPOCH
     healthcheck:
       test:
         - CMD
@@ -199,8 +211,6 @@ services:
       start_period: 60s
     depends_on:
       redis:
-        condition: service_healthy
-      pocketbase:
         condition: service_healthy
     networks:
       - deeptutor

@@ -108,6 +108,37 @@ async def fill_preview_text(attachments: list[dict[str, Any]]) -> None:
     """
     if not any(_needs_preview_text(att) for att in attachments):
         return
+    from deeptutor.core.providers import get_providers
+
+    if get_providers() is not None:
+        # PG 模式不再把 legacy outputs/workspace URL 当路径授权。
+        import tempfile
+        from urllib.parse import urlsplit
+
+        from deeptutor.persistence.postgres.session_resources import attachment_key
+        from deeptutor.services.storage import get_attachment_store
+        from deeptutor.utils.document_extractor import extract_text_from_path_isolated
+
+        store = get_attachment_store()
+        for attachment in attachments:
+            if not _needs_preview_text(attachment):
+                continue
+            parts = urlsplit(str(attachment.get("url") or "")).path.split("/")
+            sid = unquote(parts[3]) if len(parts) == 6 else ""
+            key, filename = attachment_key(attachment, sid)
+            data = await store.read_attachment(
+                session_id=sid, attachment_id=str(key), filename=filename
+            )
+            # 只解析当前 PG 授权后读到的 bytes；临时副本不是另一份业务权威。
+            with tempfile.TemporaryDirectory(prefix="dt-attachment-preview-") as scratch:
+                path = Path(scratch) / "payload"
+                path.write_bytes(data)
+                text = await extract_text_from_path_isolated(
+                    path, filename_hint=filename, max_chars=_PREVIEW_TEXT_MAX_CHARS
+                )
+                if text.strip():
+                    attachment["extracted_text"] = text
+        return
     from deeptutor.utils.document_extractor import (
         DocumentExtractionError,
         extract_text_from_path_isolated,
@@ -160,7 +191,10 @@ def _resolve_artifact_path(url: str) -> Path | None:
             return None
     if not url.startswith(_OUTPUTS_URL_PREFIX):
         return None
-    service = get_path_service()
+    try:
+        service = get_path_service()
+    except PermissionError:
+        return None
     candidate = service.get_public_outputs_root() / unquote(url[len(_OUTPUTS_URL_PREFIX) :])
     if not service.is_public_output_path(candidate):
         return None

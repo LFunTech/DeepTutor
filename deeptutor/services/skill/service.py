@@ -58,6 +58,7 @@ from typing import Any
 
 import yaml
 
+from deeptutor.runtime.home import get_runtime_data_root
 from deeptutor.services.path_service import get_path_service
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
@@ -74,10 +75,22 @@ BUILTIN_SKILLS_ROOT = Path(__file__).resolve().parents[2] / "skills" / "builtin"
 # Hard cap for read_skill payloads so a huge reference file cannot flood the
 # context window. Mirrors the truncation posture of the other read tools.
 _MAX_READ_CHARS = 100_000
+_LOCAL_PATH_UNAVAILABLE = "local path service is unavailable for this scope"
 
 # Provenance ledger for skills imported from an external hub (ClawHub, …).
 # Sits beside ``.tags.json`` so the UI/CLI can show "from clawhub@1.2.0" and
 # an update path knows where each imported skill came from.
+
+
+def _workspace_dir() -> Path:
+    try:
+        return get_path_service().get_workspace_dir()
+    except RuntimeError as exc:
+        if _LOCAL_PATH_UNAVAILABLE in str(exc):
+            return get_runtime_data_root() / "user" / "workspace"
+        raise
+
+
 _HUB_LOCK_FILE = ".hub-lock.json"
 
 # Bounds for importing a skill package from an untrusted source. A skill is a
@@ -224,7 +237,7 @@ class SkillService:
         root: Path | None = None,
         builtin_root: Path | None = BUILTIN_SKILLS_ROOT,
     ) -> None:
-        self._root = root or (get_path_service().get_workspace_dir() / "skills")
+        self._root = root or (_workspace_dir() / "skills")
         self._builtin_root = builtin_root
 
     @property
@@ -1027,7 +1040,7 @@ _instances: dict[str, SkillService] = {}
 
 
 def get_skill_service() -> SkillService:
-    root = (get_path_service().get_workspace_dir() / "skills").resolve()
+    root = (_workspace_dir() / "skills").resolve()
     key = str(root)
     if key not in _instances:
         _instances[key] = SkillService(root=root)

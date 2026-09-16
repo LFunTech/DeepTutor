@@ -1,6 +1,6 @@
 """Low-latency wake-up channel for durable Mastery Topic events.
 
-SQLite remains the replay authority.  This hub only tells connected clients
+The selected durable store remains the replay authority.  This hub only tells connected clients
 that a committed topic changed so they can read the durable event tail and
 refresh the map immediately.  Publishing is synchronous and thread-safe,
 which lets learning transactions running inside ``asyncio.to_thread`` wake an
@@ -34,7 +34,7 @@ class TopicSubscription:
         self._hub = hub
         self.path_id = path_id
         self.scope = scope
-        # A wake-up is only a hint to replay SQLite. Keeping the newest signal
+        # A wake-up is only a hint to replay committed durable events. Keeping the newest signal
         # is sufficient and prevents a slow/background tab from accumulating
         # an unbounded in-memory queue.
         self.queue: asyncio.Queue[TopicSignal] = asyncio.Queue(maxsize=1)

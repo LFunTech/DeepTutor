@@ -12,7 +12,7 @@ import uuid as _uuid
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
-from deeptutor.services.session import get_sqlite_session_store
+from deeptutor.services.session import get_session_store
 from deeptutor.services.storage import get_attachment_store
 
 logger = logging.getLogger(__name__)
@@ -225,7 +225,7 @@ async def _persist_answer_images(
 
 @router.post("/entries/upsert")
 async def upsert_single_entry(payload: UpsertEntryRequest):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     images_records = await _persist_answer_images(payload.session_id, payload.user_answer_images)
     item = payload.model_dump()
     # The store expects ``user_answer_images`` as a plain list of dicts
@@ -295,7 +295,7 @@ async def list_entries(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> NotebookEntryListResponse:
-    store = get_sqlite_session_store()
+    store = get_session_store()
     session_ids = await _course_session_ids(store, course_id)
     result = await store.list_notebook_entries(
         category_id=category_id,
@@ -331,7 +331,7 @@ async def lookup_entry(
         "without logging noisy 404s.",
     ),
 ):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     entry = await store.find_notebook_entry(session_id, question_id, turn_id=turn_id)
     if entry is None:
         if missing_ok:
@@ -342,7 +342,7 @@ async def lookup_entry(
 
 @router.get("/entries/{entry_id}", response_model=NotebookEntryItem)
 async def get_entry(entry_id: int) -> NotebookEntryItem:
-    store = get_sqlite_session_store()
+    store = get_session_store()
     entry = await store.get_notebook_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -351,7 +351,7 @@ async def get_entry(entry_id: int) -> NotebookEntryItem:
 
 @router.patch("/entries/{entry_id}")
 async def update_entry(entry_id: int, payload: EntryUpdateRequest):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     updates = payload.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -363,7 +363,7 @@ async def update_entry(entry_id: int, payload: EntryUpdateRequest):
 
 @router.delete("/entries/{entry_id}")
 async def delete_entry(entry_id: int):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     deleted = await store.delete_notebook_entry(entry_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -375,7 +375,7 @@ async def delete_entry(entry_id: int):
 
 @router.post("/entries/categories/bulk")
 async def bulk_link_entries(payload: BulkCategoryRequest):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     changed = await store.link_entries_to_category(
         payload.entry_ids, payload.category_id, link=payload.link
     )
@@ -389,7 +389,7 @@ async def bulk_link_entries(payload: BulkCategoryRequest):
 
 @router.post("/entries/{entry_id}/categories")
 async def add_entry_to_category(entry_id: int, payload: CategoryAddRequest):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     entry = await store.get_notebook_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -401,7 +401,7 @@ async def add_entry_to_category(entry_id: int, payload: CategoryAddRequest):
 
 @router.delete("/entries/{entry_id}/categories/{category_id}")
 async def remove_entry_from_category(entry_id: int, category_id: int):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     removed = await store.remove_entry_from_category(entry_id, category_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Link not found")
@@ -420,7 +420,7 @@ async def question_bank_stats(
     Takes the same course scope as the listing: showing one course's questions
     next to whole-library counts would make the rail lie about how much is there.
     """
-    store = get_sqlite_session_store()
+    store = get_session_store()
     session_ids = await _course_session_ids(store, course_id)
     return QuestionBankStats(**await store.question_bank_stats(session_ids))
 
@@ -430,7 +430,7 @@ async def list_question_bank_materials(
     course_id: str = Query(default=""),
 ) -> list[QuestionBankMaterial]:
     """Materials represented in the unified review history."""
-    store = get_sqlite_session_store()
+    store = get_session_store()
     session_ids = await _course_session_ids(store, course_id)
     return [
         QuestionBankMaterial(**item)
@@ -448,14 +448,14 @@ async def list_categories(course_id: str = Query(default="")):
     Without the scope the rail would offer "Address translation 3" inside a
     course holding none of those three.
     """
-    store = get_sqlite_session_store()
+    store = get_session_store()
     session_ids = await _course_session_ids(store, course_id)
     return await store.list_categories(session_ids)
 
 
 @router.post("/categories", response_model=CategoryItem, status_code=201)
 async def create_category(payload: CategoryCreateRequest):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     try:
         return await store.create_category(payload.name)
     except ValueError as exc:
@@ -464,7 +464,7 @@ async def create_category(payload: CategoryCreateRequest):
 
 @router.patch("/categories/{category_id}")
 async def rename_category(category_id: int, payload: CategoryRenameRequest):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     try:
         updated = await store.rename_category(category_id, payload.name)
     except ValueError as exc:
@@ -476,7 +476,7 @@ async def rename_category(category_id: int, payload: CategoryRenameRequest):
 
 @router.delete("/categories/{category_id}")
 async def delete_category(category_id: int):
-    store = get_sqlite_session_store()
+    store = get_session_store()
     deleted = await store.delete_category(category_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Category not found")
