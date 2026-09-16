@@ -108,7 +108,7 @@ def register(app: typer.Typer) -> None:
             help="Allow http://127.0.0.1 only for isolated local tests.",
         ),
     ) -> None:
-        """Delete a session and all of its turns/messages."""
+        """Move a session to the recycle bin, or delete via the configured PG runtime."""
         run_business(
             _delete_session(
                 session_id,

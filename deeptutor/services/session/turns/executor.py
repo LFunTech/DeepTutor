@@ -45,6 +45,7 @@ from .._turn_runtime_shared import (
     _repair_chinese_emphasis_for_persistence,
     _request_snapshot_metadata,
     _resolve_selection_tutor_context,
+    _resolve_turn_failure_metadata,
     _resolve_turn_outcome,
     _should_capture_assistant_content,
     _stamp_ask_user_content_offset,
@@ -425,6 +426,38 @@ class TurnExecutor:
                 }
                 for r in attachment_records
             ]
+
+            # Images attached in earlier turns of this conversation stay
+            # readable (#1438): re-attach them (URL-only; the multimodal layer
+            # resolves the bytes from the attachment store at request time) so
+            # a vision model keeps seeing an image the learner attached before.
+            # Text attachments are not repeated here — the source inventory's
+            # historical walk already serves them. Selection tutoring is
+            # deliberately isolated from conversation context.
+            if not selection_tutor_context:
+                from deeptutor.services.session.source_inventory import (
+                    collect_prior_image_attachments,
+                )
+
+                prior_images = await collect_prior_image_attachments(
+                    self.store,
+                    session_id=session_id,
+                    leaf_message_id=branch_parent_id,
+                    exclude_urls={
+                        str(r.get("url") or "") for r in attachment_records if r.get("url")
+                    },
+                )
+                attachments.extend(
+                    Attachment(
+                        type="image",
+                        url=rec["url"],
+                        base64="",
+                        filename=rec.get("filename", ""),
+                        mime_type=rec.get("mime_type", ""),
+                        id=rec.get("id", ""),
+                    )
+                    for rec in prior_images
+                )
 
             sidebar_system_context = ""
             if selection_tutor_context:
@@ -1010,6 +1043,7 @@ class TurnExecutor:
                 assistant_events,
                 pending_done_event,
             )
+            failure_code, retryable = _resolve_turn_failure_metadata(assistant_events)
             if pending_done_event is None:
                 pending_done_event = StreamEvent(
                     type=StreamEventType.DONE,
@@ -1021,6 +1055,10 @@ class TurnExecutor:
                     **pending_done_event.metadata,
                     "status": turn_status,
                 }
+            if failure_code:
+                pending_done_event.metadata["error_code"] = failure_code
+            if retryable:
+                pending_done_event.metadata["retryable"] = True
             if callable(getattr(self.store, "finalize_turn", None)):
                 # PG 运行时要求 assistant row、终态行和 DONE 事件通过
                 # finalize_turn 同事务提交；不能先 add_message/transition，
@@ -1047,6 +1085,8 @@ class TurnExecutor:
                     metadata=assistant_provider_metadata,
                     error=turn_error,
                     done_event=pending_done_event,
+                    failure_code=failure_code,
+                    retryable=retryable,
                 )
                 stream_done_sent = True
             else:
@@ -1106,7 +1146,13 @@ class TurnExecutor:
                 # synchronously flushed, so a reconnect can never observe a
                 # terminal row with a missing durable event prefix.
                 await self._flush_buffered_events(execution)
-                transitioned = await self._transition_execution(execution, turn_status, turn_error)
+                transitioned = await self._transition_execution(
+                    execution,
+                    turn_status,
+                    turn_error,
+                    failure_code=failure_code,
+                    retryable=retryable,
+                )
                 if not transitioned:
                     execution.lease_lost = True
                     raise asyncio.CancelledError
@@ -1256,6 +1302,11 @@ class TurnExecutor:
                         await self._flush_buffered_events(execution)
             raise
         except Exception as exc:
+            failure_code = str(getattr(exc, "error_code", "") or "")
+            retryable_attr = getattr(exc, "retryable", None)
+            retryable = retryable_attr if isinstance(retryable_attr, bool) else False
+            resolved_failure_code = failure_code or "internal_error"
+            resolved_retryable = retryable if failure_code else True
             if stream_done_sent:
                 logger.error(
                     "Post-stream persistence for turn %s failed: %s",
@@ -1273,8 +1324,8 @@ class TurnExecutor:
                         execution,
                         "failed",
                         str(exc),
-                        failure_code="internal_error",
-                        retryable=True,
+                        failure_code=resolved_failure_code,
+                        retryable=resolved_retryable,
                     )
             else:
                 logger.error("Turn %s failed: %s", turn_id, exc, exc_info=True)
@@ -1284,7 +1335,12 @@ class TurnExecutor:
                         type=StreamEventType.ERROR,
                         source=capability_name,
                         content=str(exc),
-                        metadata={"turn_terminal": True, "status": "failed"},
+                        metadata={
+                            "turn_terminal": True,
+                            "status": "failed",
+                            "error_code": resolved_failure_code,
+                            "retryable": resolved_retryable,
+                        },
                     ),
                 )
                 provider_metadata = (
@@ -1300,10 +1356,14 @@ class TurnExecutor:
                     done_event=StreamEvent(
                         type=StreamEventType.DONE,
                         source=capability_name,
-                        metadata={"status": "failed"},
+                        metadata={
+                            "status": "failed",
+                            "error_code": resolved_failure_code,
+                            "retryable": resolved_retryable,
+                        },
                     ),
-                    failure_code="internal_error",
-                    retryable=True,
+                    failure_code=resolved_failure_code,
+                    retryable=resolved_retryable,
                 ):
                     stream_done_sent = True
                 else:
@@ -1312,7 +1372,11 @@ class TurnExecutor:
                         StreamEvent(
                             type=StreamEventType.DONE,
                             source=capability_name,
-                            metadata={"status": "failed"},
+                            metadata={
+                                "status": "failed",
+                                "error_code": resolved_failure_code,
+                                "retryable": resolved_retryable,
+                            },
                         ),
                     )
                     with contextlib.suppress(Exception):
@@ -1321,8 +1385,8 @@ class TurnExecutor:
                         execution,
                         "failed",
                         str(exc),
-                        failure_code="internal_error",
-                        retryable=True,
+                        failure_code=resolved_failure_code,
+                        retryable=resolved_retryable,
                     )
         finally:
             if llm_scope_token is not None and reset_active_llm_selection is not None:
