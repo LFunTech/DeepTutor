@@ -158,6 +158,20 @@ class PingCommand(WireModel):
     protocol_version: Literal["2.0"]
 
 
+class AuthRefreshCommand(WireModel):
+    type: Literal["auth_refresh"] = "auth_refresh"
+    command_id: str = Field(min_length=1)
+    dt_token: str | None = Field(default=None, min_length=1)
+    external_token: str | None = Field(default=None, min_length=1)
+    protocol_version: Literal["2.0"]
+
+    @model_validator(mode="after")
+    def _has_refresh_proof(self) -> "AuthRefreshCommand":
+        if not self.dt_token and not self.external_token:
+            raise ValueError("auth_refresh requires dt_token or external_token")
+        return self
+
+
 ClientCommand = Annotated[
     StartTurnCommand
     | SubscribeTurnCommand
@@ -169,6 +183,7 @@ ClientCommand = Annotated[
     | SubmitUserReplyCommand
     | UserInputCommand
     | CheckActiveTurnCommand
+    | AuthRefreshCommand
     | PingCommand,
     Field(discriminator="type"),
 ]
@@ -221,7 +236,39 @@ class ProtocolErrorEvent(WireModel):
     protocol_version: Literal["2.0"] = PROTOCOL_VERSION
 
 
-ServerEvent = StreamEvent | ActiveTurnInfo | PongEvent | CommandAckEvent | ProtocolErrorEvent
+class AuthExpiringEvent(WireModel):
+    type: Literal["auth_expiring"] = "auth_expiring"
+    expires_at: int
+    refresh_deadline: int
+    request_id: str = ""
+    protocol_version: Literal["2.0"] = PROTOCOL_VERSION
+
+
+class AuthAckEvent(WireModel):
+    type: Literal["auth_ack"] = "auth_ack"
+    command_id: str = Field(min_length=1)
+    accepted: bool
+    expires_at: int
+    refresh_deadline: int
+    protocol_version: Literal["2.0"] = PROTOCOL_VERSION
+
+
+class AuthRevokedEvent(WireModel):
+    type: Literal["auth_revoked"] = "auth_revoked"
+    reason: str = ""
+    protocol_version: Literal["2.0"] = PROTOCOL_VERSION
+
+
+ServerEvent = (
+    StreamEvent
+    | ActiveTurnInfo
+    | PongEvent
+    | CommandAckEvent
+    | ProtocolErrorEvent
+    | AuthExpiringEvent
+    | AuthAckEvent
+    | AuthRevokedEvent
+)
 
 
 class TurnSummary(WireModel):

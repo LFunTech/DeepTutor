@@ -4,15 +4,16 @@
 
 ## 方案状态与最新决策
 
-- **修订日期**：2026-09-13；整体路线仍为待交付方案，不是已部署声明；首个身份/PG 会话子切片的实现与验证见下方独立记录。
+- **修订日期**：2026-09-16；整体路线仍为待交付方案，不是已部署声明；首个身份/PG 会话子切片的实现与验证见下方独立记录。
 - **最新数据库范围**：用户已明确取消独立 local/SQLite 模式，默认 Web、CLI、SDK 与后台全部使用 PostgreSQL；本机部署仍可用，但也必须连接 PG。完整迁移规划见 [`migrate-all-sqlite-state-to-postgresql`](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/proposal.md)，已获批准并在当前工作区逐项实施，实际状态见该 change 的 tasks/执行证据，不把首切片验收当作全仓已经切换。
 - **唯一主线**：阶段一单租户 Kubernetes 上线 → 阶段二 EduPlus2 多租户及每租户自己的管理界面 → 阶段三统一运营管理后台。
 - **直接替换**：第一阶段就使用 PostgreSQL + S3-compatible；不开发 POC、租户独立部署、文件型多租户或双写过渡版本。
 - **界面边界**：TMS（Tenant Management System，租户管理系统）采用 `/tms`；OMS（Operations Management System，平台运营管理系统，非订单管理）采用 `/oms`。租户页面复用现有组件，两级管理并存。
-- **管理 API**：专属接口分别采用 `/api/v1/tms/*`、`/api/v1/oms/*`；角色与 `tenant.*` / `ops.*` 能力 key 不改名，通用业务 API、WS 和 EduPlus2 接入路径不变。M1 `/tms` 仅管理固定租户，B2 完成多租户适配并先交付 OMS 治理 API，C1/C2 再交付 `/oms` UI。详见 [11](11-api-and-entrypoints.md)。
+- **管理 API**：专属接口分别采用 `/api/v1/tms/*`、`/api/v1/oms/*`；角色与 `tenant.*` / `ops.*` 能力 key 不改名，通用业务 API、WS、`/api/v1/auth/eduplus2/exchange` 和 EduPlus2 接入路径各自保持契约。M1 `/tms` 仅管理固定租户，B1/B2 的 TMS 先锁定单租户 client/app 管理，普通第三方调用运行时仍按 EduPlus2 JWT `tid` 支持多租户；OMS 注册 client 后自动归口到对应 TMS。详见 [11](11-api-and-entrypoints.md)。
 - **多租户从首发设计**：A1 固定内部 tenant/user、KB/index-version 和授权边界，A2/G1 验证双租户及同租户私有 KB 负例；B1/B2/G2 才开放真实多租户。应用 binding、内部 ID 与 LightRAG 内部存储映射不因外部身份绑定而搬迁。
 - **执行粒度**：M1=A1/A2/A3，M2=B1/B2，M3=C1/C2；工作包不等于单独生产版本。
 - **并行准备**：K8s 集成环境、Woodpecker 流水线开发与 EduPlus2 注册/契约准备从 A1 起并行，不阻塞为单独过渡阶段。
+- **EduPlus2 身份边界**：DeepTutor 不提供普通用户注册；只有 TMS/OMS 需要 DeepTutor 交互式登录。第三方应用已完成登录时，将 EduPlus2 user JWT 传给 DeepTutor 换取短期 `dt_token`，由 active client/app 注册、租户/app 状态、owner/grant 和能力策略共同授权。
 - **自动交付必需**：Woodpecker 是 M1/A3 必交付子环节；构建、镜像推送、迁移、K8s 部署、业务 smoke 与受控回退实跑后才通过 G1，后续阶段复用。
 - **K12 容量基线（2026-09-14）**：用户委托评估，首期目标为 3,000 学生/约 8,000 三方账号、600 同时在线与一学年存量，另规划 30,000 学生扩容档；详见 [容量假设、数据量和验收目标](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/capacity-assessment.md)。P1 隔离容量与重度尾部验收已按该 change 的 1.47 记录；这仍不代表 P2、正式 HA 或真实供应商并发已经通过。
 - **可用性独立**：H 工作线按容量/可用性目标触发 G-H，不因第二个租户强制第二个 Pod；未通过协调验收不得启用多执行者。
@@ -76,12 +77,13 @@ OpenSpec 是需求、验收与任务状态主记录：[proposal](../../openspec/
 | [05-woodpecker-kubernetes-pipeline.md](05-woodpecker-kubernetes-pipeline.md) | M1 / A3：自动交付 | 从 A1 并行开发 CI、镜像、迁移/部署/smoke；G1 前验收 |
 | [06-postgresql-native-store-plan.md](06-postgresql-native-store-plan.md) | M1 / A1–A2：存储替换 | 企业 Store、LightRAG 接入与上线门禁、原文/派生副本责任 |
 | [07-resource-isolation.md](07-resource-isolation.md) | M1 / A2 → M2 / B2：资源链路 | S3/PG/Secret/scratch 内容清单；首发资源闭环及多租户隔离 |
-| [08-auth-and-identity.md](08-auth-and-identity.md) | M2 / B1：外部身份 | EduPlus2 登录、身份绑定与撤权；注册/契约准备在 A1 并行 |
-| [09-authorization-and-grants.md](09-authorization-and-grants.md) | M2 / B1–B2：业务权限 | 外部权限、grants、平台/租户能力边界；M1 本地防护仍先做 |
-| [10-user-data-sync-and-webhooks.md](10-user-data-sync-and-webhooks.md) | M2 / B1–B2：数据与事件 | 首租户必要事件、权限失效，随后多租户同步/对账 |
-| [11-api-and-entrypoints.md](11-api-and-entrypoints.md) | M2 / B1–B2：入口联调 | HTTP/WS/SDK/后台上下文贯通与双租户验收，M1 基础入口随存储先接通 |
-| [12-platform-operations-admin.md](12-platform-operations-admin.md) | M2 / B2 → M3 / C1–C2：管理界面 | B2 先交付租户界面；C1/C2 再交付统一运营后台 |
+| [08-auth-and-identity.md](08-auth-and-identity.md) | M2 / B1：外部身份 | EduPlus2 登录、无注册边界、第三方 JWT 静默换票、`dt_token` 与 WS 刷新 |
+| [09-authorization-and-grants.md](09-authorization-and-grants.md) | M2 / B1–B2：业务权限 | 外部权限、grants、client/app 注册唯一性、token exchange 授权与审计 |
+| [10-user-data-sync-and-webhooks.md](10-user-data-sync-and-webhooks.md) | M2 / B1–B2：数据与事件 | 首租户可先不依赖 Webhook；随后多租户同步、Webhook 与周期对账 |
+| [11-api-and-entrypoints.md](11-api-and-entrypoints.md) | M2 / B1–B2：入口联调 | HTTP/WS/SDK、token exchange、TMS/OMS client API 与外部能力入口契约 |
+| [12-platform-operations-admin.md](12-platform-operations-admin.md) | M2 / B2 → M3 / C1–C2：管理界面 | TMS 单租户 client/app 管理、OMS 归口、权限矩阵、迁移判断与验收 |
 | [13-deployment-and-upstream-sync.md](13-deployment-and-upstream-sync.md) | 贯穿全程：扩展与持续维护 | 配置/插件/外壳可行性、企业包与通用补丁边界、组合制品及 upstream 回归 |
+| [eduplus2-oauth-client-resolve-api-proposal.md](eduplus2-oauth-client-resolve-api-proposal.md) | 可转发给 EduPlus2 团队的接口需求 | 通用 `POST /api/v1/open/oauth-clients/resolve` 设计；按 `client_id` 解析 app/tenant/status/policy，不含 DeepTutor 定制语义 |
 
 跨系统职责统一见 [06 责任矩阵](06-postgresql-native-store-plan.md#跨系统责任矩阵)：任务/取消、模型/预算、解析/S3 派生物、KB/实例开通、外部资格/本地启停、成员身份/私有资源授权。执行细节分别见 [07 模型](07-resource-isolation.md#聊天模型与检索模型分离)、[03 状态来源](03-tenant-scope-schema.md#租户状态的独立来源)和 [09 权限](09-authorization-and-grants.md#权限检查策略)。
 
@@ -91,10 +93,10 @@ OpenSpec 是需求、验收与任务状态主记录：[proposal](../../openspec/
 2. **第二阶段交付可用的多租户产品**：EduPlus2 身份/权限、所有资源与任务隔离、每租户管理 UI 同时完成。
 3. **第三阶段单独建设统一运营后台**：管理所有租户生命周期、策略、配额、用量和审计；不取消租户管理界面。
 4. **不维护过渡存储**：默认入口与企业入口均不双写、不静默回退；SQLite 只允许独立离线源读取/旧格式测试 fixture，不保留 local profile 或运行态临时 SQLite cache。
-5. **安全控制不能后补**：M1 交付本地身份/owner/grant、PG/图/S3 隔离与基础限流；M2 补齐外部撤权、多租户策略及治理 API，不等运营 UI。
+5. **安全控制不能后补**：M1 交付本地身份/owner/grant、PG/图/S3 隔离与基础限流；M2 补齐外部撤权、多租户策略、client/app 注册、token exchange 及治理 API，不等运营 UI。
 6. **无状态持久化不代表自动可多副本**：首发可单执行副本并明确非 HA，多执行者/HA 目标触发时先通过 G-H 再扩容，触发时点不与租户数量绑定。
 7. **首发交付流水线，不只交付部署清单**：Woodpecker 从 A1 并行建设，A3/G1 验证实际构建、部署、业务 smoke 与安全回退。
-8. **保留上游可更新性，不保留旧数据库运行路径**：核心承载通用 PG 与必要扩展点/调用收敛，企业专属实现放包外；升级验证 core、企业包及已选 RAG 服务/存储的兼容组合，不能重新带入 local SQLite。
+8. **保留上游可更新性，不保留旧数据库运行路径**：核心承载通用 PG 与必要扩展点/调用收敛，EduPlus2、TMS/OMS、client registry、token exchange 等企业专属实现放包外；升级验证 core、企业包及已选 RAG 服务/存储的兼容组合，不能重新带入 local SQLite。
 9. **已选 LightRAG Server，不等于已可投产**：首发按用户 `LFunTech/LightRAG` fork + HugeGraphStorage 推进；PG 存 KV/vector/doc_status，HugeGraph 存图。现有 client 只负责检索，企业文档管理、权限、质量及恢复验收不能省略。
 10. **零 diff 不是验收目标**：禁止用大规模 monkey patch、请求内切换进程环境、JSON/PG 异步双写或隐藏菜单代替可靠扩展和隔离。
 

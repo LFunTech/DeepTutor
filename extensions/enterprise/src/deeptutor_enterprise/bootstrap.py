@@ -3,7 +3,9 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from importlib.metadata import version
+import os
 
+from jose import JWTError, jwt
 from packaging.specifiers import SpecifierSet
 
 from deeptutor.persistence.postgres.executor import ExecutorLease
@@ -75,6 +77,152 @@ class Enterprise:
         )
         self.container = None
         self._monitor = None
+        self.eduplus2_resolver = None
+        self.eduplus2_verifier = None
+        self.eduplus2_profile_client = None
+        self.eduplus2_permission_client = None
+        self.eduplus2_allowed_clients = ()
+        self.eduplus2_dt_token_seconds = min(1800, self.identity.token_seconds)
+        self.eduplus2_refresh_deadline_leeway_seconds = 30
+        self.eduplus2_revocation_cache_ttl_seconds = 30
+        self.eduplus2_audit_export_storage_ref = "db://eduplus2/audit-export"
+        self.eduplus2_revocation_webhook_secret = ""
+        self.eduplus2_signing_key = ""
+        self.eduplus2_issuer = ""
+        self._configure_eduplus2_from_env()
+
+    def _configure_eduplus2_from_env(self):
+        """从运行时环境装配 B1-lite provider；缺项时保持未配置并 fail closed。"""
+
+        from .eduplus2.client import (
+            EduPlus2OidcJwtVerifier,
+            EduPlus2PermissionClient,
+            EduPlus2ProfileClient,
+            EduPlus2ResolveClient,
+            parse_allowed_clients,
+        )
+
+        base_url = os.environ.get("DT_EDUPLUS2_BASE_URL", "").rstrip("/")
+        discovery_url = os.environ.get("DT_EDUPLUS2_DISCOVERY_URL", "").strip()
+        issuer = os.environ.get("DT_EDUPLUS2_OIDC_ISSUER", "").strip()
+        jwks_uri = os.environ.get("DT_EDUPLUS2_JWKS_URI", "").strip()
+        token_url = os.environ.get("DT_EDUPLUS2_TOKEN_ENDPOINT", "").strip()
+        resolve_url = os.environ.get("DT_EDUPLUS2_RESOLVE_URL", "").strip()
+        profile_url = os.environ.get("DT_EDUPLUS2_PROFILE_URL", "").strip()
+        permission_url = os.environ.get("DT_EDUPLUS2_PERMISSION_URL", "").strip()
+        if not resolve_url and base_url:
+            resolve_url = base_url + "/api/v1/open/oauth-clients/resolve"
+        if not profile_url and base_url:
+            profile_url = base_url + "/api/v1/open/profile"
+        if not permission_url and base_url:
+            permission_url = base_url + "/api/v1/open/permissions/check"
+        client_id = os.environ.get("DT_EDUPLUS2_CLIENT_ID", "").strip()
+        secret_ref = os.environ.get("DT_EDUPLUS2_CLIENT_SECRET_REF", "").strip()
+        if not secret_ref and os.environ.get("DT_EDUPLUS2_CLIENT_SECRET"):
+            secret_ref = "env:DT_EDUPLUS2_CLIENT_SECRET"
+        revocation_secret_ref = os.environ.get(
+            "DT_EDUPLUS2_REVOCATION_WEBHOOK_SECRET_REF", ""
+        ).strip()
+        if not revocation_secret_ref and os.environ.get("DT_EDUPLUS2_REVOCATION_WEBHOOK_SECRET"):
+            revocation_secret_ref = "env:DT_EDUPLUS2_REVOCATION_WEBHOOK_SECRET"
+        if revocation_secret_ref:
+            self.eduplus2_revocation_webhook_secret = resolve_secret(revocation_secret_ref)
+        try:
+            ttl = int(
+                os.environ.get(
+                    "DT_EDUPLUS2_DT_TOKEN_TTL_SECONDS", str(self.eduplus2_dt_token_seconds)
+                )
+            )
+        except ValueError:
+            ttl = self.eduplus2_dt_token_seconds
+        self.eduplus2_dt_token_seconds = max(60, min(ttl, self.identity.token_seconds))
+        try:
+            refresh_deadline = int(
+                os.environ.get(
+                    "DT_EDUPLUS2_REFRESH_DEADLINE_LEEWAY_SECONDS",
+                    str(self.eduplus2_refresh_deadline_leeway_seconds),
+                )
+            )
+        except ValueError:
+            refresh_deadline = self.eduplus2_refresh_deadline_leeway_seconds
+        self.eduplus2_refresh_deadline_leeway_seconds = max(0, min(refresh_deadline, 3600))
+        try:
+            revocation_ttl = int(
+                os.environ.get(
+                    "DT_EDUPLUS2_REVOCATION_CACHE_TTL_SECONDS",
+                    str(self.eduplus2_revocation_cache_ttl_seconds),
+                )
+            )
+        except ValueError:
+            revocation_ttl = self.eduplus2_revocation_cache_ttl_seconds
+        self.eduplus2_revocation_cache_ttl_seconds = max(0, min(revocation_ttl, 3600))
+        self.eduplus2_audit_export_storage_ref = (
+            os.environ.get(
+                "DT_EDUPLUS2_AUDIT_EXPORT_STORAGE_REF",
+                self.eduplus2_audit_export_storage_ref,
+            )
+            .strip()
+            .rstrip("/")
+            or "db://eduplus2/audit-export"
+        )
+        self.eduplus2_allowed_clients = parse_allowed_clients(
+            os.environ.get("DT_EDUPLUS2_ALLOWED_CLIENTS"),
+            default_internal_tenant_id=str(self.deployment.tenant_id),
+        )
+        if discovery_url:
+            self.eduplus2_verifier = EduPlus2OidcJwtVerifier(
+                discovery_url=discovery_url,
+                issuer=issuer or None,
+                jwks_uri=jwks_uri or None,
+            )
+        if token_url and resolve_url and client_id and secret_ref:
+            self.eduplus2_resolver = EduPlus2ResolveClient(
+                token_url=token_url,
+                resolve_url=resolve_url,
+                client_id=client_id,
+                client_secret=resolve_secret(secret_ref),
+            )
+        if token_url and profile_url and client_id and secret_ref:
+            self.eduplus2_profile_client = EduPlus2ProfileClient(
+                token_url=token_url,
+                profile_url=profile_url,
+                client_id=client_id,
+                client_secret=resolve_secret(secret_ref),
+            )
+        if token_url and permission_url and client_id and secret_ref:
+            self.eduplus2_permission_client = EduPlus2PermissionClient(
+                token_url=token_url,
+                permission_url=permission_url,
+                client_id=client_id,
+                client_secret=resolve_secret(secret_ref),
+            )
+
+    @property
+    def eduplus2(self):
+        from .eduplus2.service import EduPlus2AccessService
+
+        resolver = getattr(self, "eduplus2_resolver", None)
+        verifier = getattr(self, "eduplus2_verifier", None)
+        signing_key = getattr(self, "eduplus2_signing_key", "")
+        issuer = getattr(self, "eduplus2_issuer", "")
+        if signing_key and issuer:
+            from .eduplus2.client import HmacEduPlus2JwtVerifier
+
+            verifier = HmacEduPlus2JwtVerifier(signing_key=signing_key, issuer=issuer)
+        if resolver is None or verifier is None:
+            raise RuntimeError("EduPlus2 provider is not configured")
+        return EduPlus2AccessService(
+            self.db,
+            identity=self.identity,
+            resolver=resolver,
+            jwt_verifier=verifier,
+            dt_token_seconds=self.eduplus2_dt_token_seconds,
+            allowed_clients=self.eduplus2_allowed_clients,
+            profile_client=getattr(self, "eduplus2_profile_client", None),
+            permission_client=getattr(self, "eduplus2_permission_client", None),
+            audit_export_storage_ref=self.eduplus2_audit_export_storage_ref,
+            revocation_cache_seconds=self.eduplus2_revocation_cache_ttl_seconds,
+        )
 
     async def start(self):
         from deeptutor.app.container import ApplicationContainer
@@ -161,7 +309,15 @@ class Enterprise:
 
     async def authorize(self):
         await self.lease.check()
-        return await self.identity.authenticate(current_token())
+        token = current_token()
+        identity = await self.identity.authenticate(token)
+        try:
+            claims = jwt.get_unverified_claims(token)
+        except JWTError:
+            claims = {}
+        if isinstance(claims.get("eduplus2"), dict):
+            await self.eduplus2.ensure_token_allowed(token)
+        return identity
 
     async def recover(self):
         # 仅在已取得锁且旧进程确认停止后清理；不派发任何模型/工具。
@@ -204,6 +360,12 @@ class Enterprise:
         from deeptutor.core.providers import provider_context
 
         identity = await self.identity.authenticate(token)
+        try:
+            claims = jwt.get_unverified_claims(token)
+        except JWTError:
+            claims = {}
+        if isinstance(claims.get("eduplus2"), dict):
+            await self.eduplus2.ensure_token_allowed(token)
         with provider_context(self.providers), identity_context(identity, token):
             yield DeepTutorApp(container=self.container)
 

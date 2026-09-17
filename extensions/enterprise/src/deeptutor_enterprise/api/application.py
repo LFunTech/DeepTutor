@@ -1,12 +1,18 @@
 """原通用会话路由 + 企业认证：无旧 admin/plugin/文件管理入口。"""
 
 from contextlib import asynccontextmanager, nullcontext
+import hashlib
 import hmac
+import json
 import secrets
+import time
+import uuid
 
 from fastapi import APIRouter, Request, Response
 from fastapi.exceptions import RequestValidationError
+from jose import JWTError, jwt
 import psycopg
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import Headers
 from starlette.middleware import Middleware
@@ -18,6 +24,7 @@ from deeptutor.core.providers import provider_context
 
 from ..context import current_token, identity_context
 from ..identity.service import LoginRateLimited
+from ..scope import TenantScope
 
 
 class AuthenticationMiddleware:
@@ -36,7 +43,12 @@ class AuthenticationMiddleware:
         bearer = headers.get("authorization", "")
         uses_bearer = bearer.lower().startswith("bearer ")
         token = bearer[7:] if uses_bearer else connection.cookies.get("dt_token")
-        anonymous = scope["type"] == "http" and path in ("/api/auth/login", "/api/auth/status")
+        anonymous = scope["type"] == "http" and path in (
+            "/api/auth/login",
+            "/api/auth/status",
+            "/api/v1/auth/eduplus2/exchange",
+            "/api/v1/auth/eduplus2/revocations",
+        )
         status = None
         identity = None
 
@@ -46,10 +58,57 @@ class AuthenticationMiddleware:
                 identity.user_id if identity is not None else "anonymous",
             )
 
+        async def record_eduplus2_authz_denied(code):
+            if identity is None or not token or scope["type"] != "http":
+                return
+            try:
+                claims = jwt.get_unverified_claims(token)
+            except JWTError:
+                return
+            eduplus2 = claims.get("eduplus2")
+            if not isinstance(eduplus2, dict):
+                return
+            async with enterprise.db.transaction(
+                TenantScope(identity.tenant_id, identity.user_id)
+            ) as c:
+                await c.execute(
+                    """
+                    INSERT INTO eduplus2.audit_events(
+                      tenant_id,id,request_id,event_kind,client_id,external_tenant_id,
+                      external_app_id,external_user_id,internal_user_id,session_id,
+                      result,reason,policy_version,summary
+                    ) VALUES(%s,%s,%s,'authz.denied',%s,%s,%s,%s,%s,%s,'denied',%s,'',%s)
+                    """,
+                    (
+                        identity.tenant_id,
+                        str(uuid.uuid4()),
+                        headers.get("x-request-id", ""),
+                        str(eduplus2.get("azp") or ""),
+                        str(eduplus2.get("external_tenant_id") or ""),
+                        str(eduplus2.get("external_app_id") or ""),
+                        str(eduplus2.get("external_user_id") or ""),
+                        identity.user_id,
+                        str(claims.get("sid") or ""),
+                        f"http.{code}",
+                        Jsonb({"path": path, "status": int(code)}),
+                    ),
+                )
+
         async def audited_send(message):
             if message["type"] == "http.response.start" and message["status"] >= 400:
                 await record_denial(message["status"])
+                await record_eduplus2_authz_denied(message["status"])
             await send(message)
+
+        async def enforce_eduplus2_token_allowed():
+            if identity is None or not token:
+                return
+            try:
+                claims = jwt.get_unverified_claims(token)
+            except JWTError:
+                return
+            if isinstance(claims.get("eduplus2"), dict):
+                await enterprise.eduplus2.ensure_token_allowed(token)
 
         try:
             if any(
@@ -80,6 +139,7 @@ class AuthenticationMiddleware:
                             raise PermissionError
             identity = None if anonymous else await enterprise.identity.authenticate(token or "")
             if not anonymous:
+                await enforce_eduplus2_token_allowed()
                 await enterprise.lease.check()
             with provider_context(enterprise.providers):
                 with identity_context(identity, token) if identity is not None else nullcontext():
@@ -129,17 +189,123 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class AuditExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    format: str = Field(default="jsonl", pattern="^(jsonl|csv)$")
+    event_kind: str = Field(default="", max_length=128)
+    client_id: str = Field(default="", max_length=256)
+    external_tenant_id: str = Field(default="", max_length=256)
+    external_app_id: str = Field(default="", max_length=256)
+    external_user_id: str = Field(default="", max_length=256)
+    internal_user_id: str = Field(default="", max_length=256)
+    result: str = Field(default="", max_length=32)
+    request_id: str = Field(default="", max_length=256)
+    limit: int = Field(default=1000, ge=1, le=5000)
+
+    def filters(self) -> dict:
+        return {
+            "event_kind": self.event_kind,
+            "client_id": self.client_id,
+            "external_tenant_id": self.external_tenant_id,
+            "external_app_id": self.external_app_id,
+            "external_user_id": self.external_user_id,
+            "internal_user_id": self.internal_user_id,
+            "result": self.result,
+            "request_id": self.request_id,
+            "limit": self.limit,
+        }
+
+
 class SocketAuthentication:
     def __init__(self, enterprise):
         self.enterprise = enterprise
 
+    async def _ensure_eduplus2_token_allowed(self, token: str) -> None:
+        try:
+            claims = jwt.get_unverified_claims(token)
+        except JWTError:
+            return
+        if isinstance(claims.get("eduplus2"), dict):
+            await self.enterprise.eduplus2.ensure_token_allowed(token)
+
     async def authenticate(self, ws):
-        # ASGI 中间件已绑定/清理 ContextVar，此处不再次覆盖用户。
-        await self.enterprise.authorize()
+        # ASGI 中间件已绑定/清理 ContextVar；WS 自身保存可 refresh 的当前 token。
+        identity = await self.enterprise.authorize()
+        claims = jwt.get_unverified_claims(current_token())
+        ws.state.enterprise_token = current_token()
+        ws.state.enterprise_identity = identity
+        ws.state.enterprise_expires_at = int(claims.get("exp") or 0)
         return None
 
     async def revalidate(self, ws):
-        await self.enterprise.authorize()
+        token = str(getattr(ws.state, "enterprise_token", "") or "")
+        if not token:
+            await self.enterprise.authorize()
+            return
+        identity = await self.enterprise.identity.authenticate(token)
+        await self._ensure_eduplus2_token_allowed(token)
+        await self.enterprise.lease.check()
+        ws.state.enterprise_identity = identity
+
+    async def refresh(self, ws, payload):
+        old_token = str(getattr(ws.state, "enterprise_token", "") or "")
+        old_identity = getattr(ws.state, "enterprise_identity", None)
+        if not old_token or old_identity is None:
+            old_token = current_token()
+            old_identity = await self.enterprise.identity.authenticate(old_token)
+        new_token = str(payload.get("dt_token") or "").strip()
+        proof_kind = "dt_token"
+        if not new_token and payload.get("external_token"):
+            proof_kind = "external_token"
+            exchanged = await self.enterprise.eduplus2.exchange_user_jwt(
+                str(payload["external_token"]), request_id=str(payload.get("command_id") or "")
+            )
+            new_token = str(exchanged["dt_token"])
+        if not new_token:
+            raise PermissionError("refresh proof required")
+        new_identity = await self.enterprise.identity.authenticate(new_token)
+        await self._ensure_eduplus2_token_allowed(new_token)
+        if (
+            new_identity.tenant_id != old_identity.tenant_id
+            or new_identity.user_id != old_identity.user_id
+            or new_identity.role != old_identity.role
+        ):
+            raise PermissionError("identity mismatch")
+        old_claims = jwt.get_unverified_claims(old_token)
+        new_claims = jwt.get_unverified_claims(new_token)
+        old_eduplus2 = old_claims.get("eduplus2")
+        new_eduplus2 = new_claims.get("eduplus2")
+        if isinstance(old_eduplus2, dict):
+            if not isinstance(new_eduplus2, dict):
+                raise PermissionError("identity mismatch")
+            for key in (
+                "client_registration_id",
+                "external_tenant_id",
+                "external_app_id",
+                "external_user_id",
+                "azp",
+            ):
+                if str(old_eduplus2.get(key) or "") != str(new_eduplus2.get(key) or ""):
+                    raise PermissionError("identity mismatch")
+        await self.enterprise.lease.check()
+        await self.enterprise.eduplus2.record_refresh_audit(
+            new_token,
+            request_id=str(payload.get("command_id") or ""),
+            reason=proof_kind,
+        )
+        expires_at = int(new_claims.get("exp") or 0)
+        ws.state.enterprise_token = new_token
+        ws.state.enterprise_identity = new_identity
+        ws.state.enterprise_expires_at = expires_at
+        return {
+            "expires_at": expires_at,
+            "refresh_deadline": max(
+                0,
+                expires_at
+                - int(getattr(self.enterprise, "eduplus2_refresh_deadline_leeway_seconds", 30)),
+            ),
+            "session_id": str(new_claims.get("sid") or ""),
+        }
 
     @staticmethod
     def error_message(error):
@@ -160,6 +326,122 @@ def create_application(enterprise):
 
     auth = APIRouter()
     attrs = {"httponly": True, "secure": True, "samesite": "lax", "path": "/"}
+
+    eduplus2_auth = APIRouter()
+    eduplus2_audit = APIRouter()
+
+    async def require_audit_admin():
+        identity = await enterprise.identity.authenticate(current_token())
+        if identity.role != "tenant_admin":
+            raise PermissionError("tenant administrator required")
+        return identity
+
+    @eduplus2_auth.post("/auth/eduplus2/exchange")
+    async def eduplus2_exchange(request: Request):
+        bearer = request.headers.get("authorization", "")
+        if not bearer.lower().startswith("bearer "):
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        try:
+            result = await enterprise.eduplus2.exchange_user_jwt(
+                bearer[7:], request_id=request.headers.get("x-request-id", "")
+            )
+            return result
+        except PermissionError as exc:
+            reason = str(exc)
+            if "rate limited" in reason:
+                return JSONResponse({"detail": "Authentication temporarily limited"}, status_code=429)
+            if "tenant mismatch" in reason:
+                return JSONResponse({"detail": "Operation conflict"}, status_code=409)
+            if "azp is not registered" in reason or "inactive" in reason:
+                return JSONResponse({"detail": "Forbidden"}, status_code=403)
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        except ValueError:
+            return JSONResponse({"detail": "Operation conflict"}, status_code=409)
+        except RuntimeError:
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+
+    @eduplus2_auth.post("/auth/eduplus2/revocations")
+    async def eduplus2_revocations(request: Request):
+        secret = str(getattr(enterprise, "eduplus2_revocation_webhook_secret", "") or "")
+        if not secret:
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+        raw = await request.body()
+        timestamp = request.headers.get("x-eduplus2-timestamp", "")
+        signature = request.headers.get("x-eduplus2-signature", "")
+        try:
+            ts = int(timestamp)
+        except ValueError:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        if abs(int(time.time()) - ts) > 300:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        expected = hmac.new(
+            secret.encode(),
+            timestamp.encode() + b"." + raw,
+            hashlib.sha256,
+        ).hexdigest()
+        provided = signature.removeprefix("sha256=")
+        if not hmac.compare_digest(expected, provided):
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        try:
+            payload = json.loads(raw.decode("utf8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        if not isinstance(payload, dict):
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        try:
+            return await enterprise.eduplus2.apply_revocation_event(
+                payload,
+                request_id=request.headers.get("x-request-id", ""),
+            )
+        except ValueError:
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        except RuntimeError:
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+
+    @eduplus2_audit.get("/events")
+    async def eduplus2_audit_events(request: Request):
+        try:
+            await require_audit_admin()
+        except PermissionError:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+        filters = {
+            key: request.query_params.get(key, "")
+            for key in (
+                "event_kind",
+                "client_id",
+                "external_tenant_id",
+                "external_app_id",
+                "external_user_id",
+                "internal_user_id",
+                "result",
+                "request_id",
+            )
+        }
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+        except ValueError:
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        try:
+            return await enterprise.eduplus2.query_audit_events(filters, limit=limit)
+        except RuntimeError:
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+
+    @eduplus2_audit.post("/exports")
+    async def eduplus2_audit_exports(payload: AuditExportRequest):
+        try:
+            identity = await require_audit_admin()
+        except PermissionError:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+        try:
+            return await enterprise.eduplus2.create_audit_export(
+                payload.filters(),
+                export_format=payload.format,
+                actor_id=identity.user_id,
+            )
+        except ValueError:
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        except RuntimeError:
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503)
 
     @auth.post("/login")
     async def login(payload: LoginRequest, request: Request, response: Response):
@@ -241,6 +523,8 @@ def create_application(enterprise):
     app = create_api_application(
         routers=(
             (auth, "/api/auth"),
+            (eduplus2_auth, "/api/v1"),
+            (eduplus2_audit, "/api/v1/enterprise/audit/eduplus2"),
             (session_routes, "/api/sessions"),
             (unified_ws.router, "/api/v1"),
         ),

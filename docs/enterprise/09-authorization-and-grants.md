@@ -14,6 +14,16 @@ EduPlus2 提供 ReBAC 权限模型，DeepTutor 需要把它用于租户级能力
 
 参考：<https://eduplus-test.f123.pub/docs/permission/>
 
+## 注册、登录与被调用方授权边界
+
+DeepTutor 不维护用户注册能力，也不把“第三方系统已经登录”直接等同于可调用 DeepTutor：
+
+- 普通用户、学校、组织、身份和账号生命周期由 EduPlus2 负责；DeepTutor 只保存经验证的内部映射、会话、资源授权和审计。
+- 只有 `/tms`、`/oms` 需要 DeepTutor 交互式登录；登录后仍按 `tenant.*` / `ops.*` 具体能力鉴权。
+- 第三方应用调用 DeepTutor 时必须先完成 EduPlus2 JWT exchange，DeepTutor 依据已注册 active client/app、JWT `tid/eui/azp`、租户状态和能力策略判断是否放行；`aud` 只做兼容或附加校验，不作为主依赖。
+- `client_id` 是授权和审计维度；不能只凭用户 JWT 中的租户成员关系直接调用能力。
+- DeepTutor 可做 JIT binding，但 JIT binding 只创建内部映射，不授予超出外部身份、注册 app 策略和本地 grants 的权限。
+
 ## DeepTutor role 模型建议
 
 当前只有：
@@ -88,7 +98,6 @@ data/system/grants/{user_id}.json
 
 阶段一即写入 PostgreSQL grants 表，以内部 `(tenant_id, user_id)` 为主键。阶段二增加外部权限映射，不建设租户 grants JSON fallback。
 
-
 grant 内容保持逻辑资源，不写 secret/path：
 
 ```json
@@ -133,6 +142,42 @@ DeepTutor 内部资源授权使用内部 tenant/user/resource ID；调用 EduPlu
 
 relation/对象名称按目标 API 契约确认；具体拟新增应用能力与默认角色在 [12 权限矩阵](12-platform-operations-admin.md) 统一登记。外部规则决定业务权限，应用内 grants 不能绕过外部停用/撤权。
 
+## EduPlus2 client/app 注册授权
+
+外部 client/app 注册是第三方调用 DeepTutor 的前置授权，不是用户注册。DeepTutor 侧依赖 EduPlus2 提供通用 `POST /api/v1/open/oauth-clients/resolve` 能力按 `client_id` 解析权威 app/tenant/status 元数据；该接口需求草案见 [EduPlus2 通用 OAuth Client Resolve API 需求建议](eduplus2-oauth-client-resolve-api-proposal.md)。
+
+| 场景 | 规则 |
+| --- | --- |
+| TMS 注册 client | 当前 TMS 租户锁定为登录用户所在内部 tenant；管理员输入 `client_id` 后，DeepTutor 调 EduPlus2 通用 resolve API 并取得权威 `external_tenant_id/external_app_id/app_name/tenant_name/status`；`external_tenant_id` 必须与当前租户绑定完全一致，否则拒绝。 |
+| OMS 注册 client | 平台人员输入 `client_id` 后，DeepTutor 调 EduPlus2 通用 resolve API；按返回的 `external_tenant_id` 查找内部 tenant 并自动归口到对应 TMS；外部租户未绑定时先做 tenant provisioning，不允许注册无归属 client。 |
+| 普通第三方调用 | 不访问 TMS/OMS；只通过 `POST /api/v1/auth/eduplus2/exchange` 静默换票，再按 client/app 策略、用户 owner/grant 和能力 allowlist 使用 DeepTutor。 |
+
+同一个 EduPlus2 租户下同一个应用只能有一个 active client 注册。应用唯一性必须使用 EduPlus2 返回的权威应用 ID（如 `external_app_id` / `app_code` / `canonical_app_id`），不能只靠可变 `app_name`。
+
+推荐约束：
+
+```sql
+UNIQUE (provider, client_id) WHERE status = 'active';
+UNIQUE (provider, external_tenant_id, external_app_id) WHERE status = 'active';
+UNIQUE (provider, internal_tenant_id, external_app_id) WHERE status = 'active';
+```
+
+如果 `(tenant=A, app=alpha, client_id=client-001, status=active)` 已存在，则禁止再注册 `(tenant=A, app=alpha, client_id=client-002, status=active)`；只有先将旧记录 `revoked/retired` 后，才允许注册新 client。
+
+建议表模型：
+
+```text
+external_client_registrations(
+  id, provider, internal_tenant_id, external_tenant_id, external_tenant_name,
+  client_id, external_app_id, external_app_name, external_app_code,
+  status, registered_by_type, registered_by_user_id, registered_at,
+  revoked_at, revoked_by_user_id, revocation_reason,
+  last_verified_at, metadata_snapshot
+)
+external_tenant_bindings(internal_tenant_id, provider, external_tenant_id, external_tenant_name, status, created_at, updated_at)
+external_user_bindings(internal_tenant_id, internal_user_id, provider, external_tenant_id, external_user_id, identity_type, status, created_at, updated_at)
+```
+
 ## 权限检查策略
 
 | 操作 | 校验 |
@@ -144,6 +189,10 @@ relation/对象名称按目标 API 契约确认；具体拟新增应用能力与
 | 配置平台模型凭证 | 平台敏感管理 capability，默认仅 platform_admin；Secret 引用与脱敏 |
 | 查看学生/班级数据 | EduPlus2 当前权限；组织缓存只做业务态，不替代授权 |
 | 开启 exec/MCP/cron | 默认拒绝，需显式租户授权和安全评估 |
+| TMS 注册/注销 EduPlus2 client | 当前 tenant scope + `tenant.clients.manage` + EduPlus2 校验结果 tenant 完全一致 + client/app 唯一约束 |
+| OMS 注册/注销 EduPlus2 client | `ops.clients.manage` + EduPlus2 校验 + external tenant 已绑定并自动归口 + client/app 唯一约束 |
+| 第三方 token exchange | EduPlus2 JWT 验签 + active client registration + tenant/app/client 状态 + 用户映射；失败 fail closed |
+| 外部能力调用/start_turn | `dt_token` + tenant/user/client policy + owner/grant + capability allowlist；不接受请求体覆盖 tenant/user/client |
 
 ## 缓存策略
 
@@ -171,6 +220,16 @@ relation/对象名称按目标 API 契约确认；具体拟新增应用能力与
 ```
 
 生产审计写 PG 并同步日志平台，不新增租户文件审计后端。所有运营动作记录 actor 与 target tenant，角色、授权、Secret 引用等默认数据需版本化迁移。权限 key/前端入口/API 对齐与 DB/OpenFGA/Keycloak 迁移责任见 [12](12-platform-operations-admin.md)。
+
+EduPlus2 对接新增审计事件至少包括：
+
+| action | 必要字段 |
+| --- | --- |
+| `eduplus2.client.register` / `eduplus2.client.revoke` | `source=tms|oms`、`actor_user_id`、`internal_tenant_id`、`external_tenant_id`、`external_tenant_name`、`client_id`、`external_app_id`、`external_app_name`、`result`、`request_id` |
+| `eduplus2.token.exchange` | `client_id`、`external_app_id`、`external_app_name`、`external_tenant_id`、`external_tenant_name`、`internal_tenant_id`、`internal_user_id`、`result`、`request_id` |
+| `turn.start` | `request_id`、`client_id`、`external_app_id`、`internal_tenant_id`、`internal_user_id`、`session_id`、`turn_id`、`capability`、`result` |
+
+日志和审计禁止记录 access token 原文、refresh token、client secret、模型 API key、完整私密聊天正文或可复用签名 URL。
 
 ## 工作包验收归属
 

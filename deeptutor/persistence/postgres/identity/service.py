@@ -211,9 +211,21 @@ class IdentityService(AccountOperations):
             raise PermissionError("invalid credentials")
         return token
 
-    async def _issue_session(self, c, row, *, device_id=None, device_generation=None):
+    async def _issue_session(
+        self,
+        c,
+        row,
+        *,
+        device_id=None,
+        device_generation=None,
+        extra_claims=None,
+        token_seconds=None,
+    ):
         sid = str(uuid.uuid4())
         now = int(time.time())
+        lifetime = self.token_seconds if token_seconds is None else int(token_seconds)
+        if not 60 <= lifetime <= self.token_seconds:
+            raise ValueError("invalid session token lifetime")
         claims = {
             "tid": self.tenant_id,
             "sub": row["id"],
@@ -223,8 +235,12 @@ class IdentityService(AccountOperations):
             "iss": self.issuer,
             "aud": self.audience,
             "iat": now,
-            "exp": now + self.token_seconds,
+            "exp": now + lifetime,
         }
+        if extra_claims:
+            if any(key in claims for key in extra_claims):
+                raise ValueError("extra claims must not override identity claims")
+            claims.update(extra_claims)
         token = jwt.encode(claims, self._key, algorithm="HS256")
         await c.execute(
             "INSERT INTO enterprise.auth_sessions(tenant_id,user_id,id,auth_version,auth_epoch,expires_at,device_credential_id,device_generation) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",

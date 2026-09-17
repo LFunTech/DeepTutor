@@ -4,7 +4,7 @@
 
 ## 目标
 
-DeepTutor 官方更新后，企业版本仍能以可验证的核心补丁和扩展包组合持续升级。采用“配置优先 → 现有注入/插件 → 必要通用 hook/旁路收敛”，不承诺全产品零改源码，也不重写上游教学与检索算法。生产 PG/S3、无状态 backend、完整权限和三阶段门禁不变。
+DeepTutor 官方更新后，企业版本仍能以可验证的核心补丁和扩展包组合持续升级，并且必须保持可以随时合并 `upstream/main` 的能力。采用“配置优先 → 现有注入/插件 → 必要通用 hook/旁路收敛”，不承诺全产品零改源码，也不重写上游教学与检索算法。生产 PG/S3、无状态 backend、完整权限和三阶段门禁不变。
 
 2026-09-13 最新批准范围：取消本仓库所有 local/SQLite 运行模式，默认 Web/CLI/SDK/后台必须使用 PG。通用 PG 下沉 core、企业专属策略保持包外；[完整迁移设计](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/design.md)当前待实施，首切片的 local 兼容仅为历史基线。
 
@@ -88,7 +88,7 @@ extensions/enterprise/
   src/deeptutor_enterprise/
     bootstrap.py                    # 自有启动器/组合根、配置与版本预检
     api/                            # EduPlus2、TMS/OMS 专属路由与企业应用装配
-    integrations/eduplus2/           # Handoff、JWT、profile、权限、sync、webhook
+    integrations/eduplus2/           # Handoff、JWT verifier、token exchange、client registry、profile、权限、sync、webhook
     identity/                       # 可信 tenant/user scope 与授权适配
     stores/                         # 消费 core PG；企业资源/ObjectStore、Secret 适配
     resources/                      # 文件/KB/源文、配额及生命周期
@@ -103,7 +103,7 @@ deploy/images/                      # 独立企业启动入口，不覆盖上游
 
 LightRAG 的检索 PG/HugeGraph 初始化、schema/ACL 迁移及内部恢复脚本归其 fork 或独立部署制品，不放入上述企业 Python 包；DeepTutor 交付流水线只按受控制品调用对应维护 Job。
 
-不再把具体 EduPlus2 集成实现默认放到 `deeptutor/integrations/eduplus2/`。本目录其他文档中的 `deeptutor_enterprise.*` 均指上述包；Python 包位置不决定对外 HTTP/WS 路径；企业专属管理前缀按 [11](11-api-and-entrypoints.md) 统一为 `/api/v1/tms/*`、`/api/v1/oms/*`，通用业务 API、`/api/v1/ws` 与 `/api/v1/eduplus2/*` 保持原契约。企业包“独立”指依赖/构建和职责边界，不强制每个模块部署成独立微服务。
+不再把具体 EduPlus2 集成实现默认放到 `deeptutor/integrations/eduplus2/`。本目录其他文档中的 `deeptutor_enterprise.*` 均指上述包；Python 包位置不决定对外 HTTP/WS 路径；企业专属管理前缀按 [11](11-api-and-entrypoints.md) 统一为 `/api/v1/tms/*`、`/api/v1/oms/*`，通用业务 API、`/api/v1/ws`、`/api/v1/auth/eduplus2/exchange` 与 `/api/v1/eduplus2/*` 保持原契约。企业包“独立”指依赖/构建和职责边界，不强制每个模块部署成独立微服务。
 
 ## 核心通用 seam 与企业责任
 
@@ -126,6 +126,19 @@ LightRAG 的检索 PG/HugeGraph 初始化、schema/ACL 迁移及内部恢复脚�
 只读镜像配置/ConfigMap 可保留；凭证通过 Secret provider 注入内存。若上游库确需非敏感临时配置，只允许由权威 Store 生成的可丢弃只读投影，不从该文件反向同步或接受管理写入。用户可变设置、KB 连接及业务数据不得把文件投影当权威。
 
 企业包与检索 fork 的补丁责任还须遵守 [06 责任矩阵](06-postgresql-native-store-plan.md#跨系统责任矩阵)：KB 索引解析/S3 派生物、文档级取消、检索 profile/内部限额/用量与状态接口由 LightRAG 或其明确装配的组件实现；企业包只实现业务协调、授权、映射和对账，不消费服务内部队列。K8s 实例预开/回收留在独立部署运维流程。联合制品锁定上述契约及配置版本；upstream 更新复验六类边界，不因服务缺 API 把内部能力迁回 DeepTutor。
+
+## EduPlus2 对接的上游可合并约束
+
+EduPlus2、TMS/OMS、第三方 token exchange 与 client/app registry 的实现必须优先位于 `extensions/enterprise/`；核心仓库只增加通用 seam，例如 provider-aware auth、scope、permission、Store/ObjectStore、router/lifespan hook 和 capability policy。任何核心补丁都必须在变更说明中记录：通用目的、受影响入口、upstream merge 风险、回归验证覆盖。
+
+禁止以下做法进入生产路径：
+
+- 在 `deeptutor/` core 中硬编码 EduPlus2 issuer、client、tenant 或外部 API 细节。
+- 通过 monkey patch、`sitecustomize`、`sys.modules` 替换、导入顺序、router 注册顺序覆盖来接管认证或路由。
+- 在业务表或配置文件保存明文 `client_secret`；如需保存 DeepTutor 自身应用 secret，只保存 Secret Provider 的 `secret_ref`。
+- 为了接入第三方调用而恢复全局 admin、本地注册、tenant override 或旧 SQLite/file 权威路径。
+
+每次合并 upstream 后至少执行 enterprise smoke：TMS 固定租户登录/权限、OMS client 注册归口、`/api/v1/auth/eduplus2/exchange`、WS `auth_refresh`、外部 turn start、审计脱敏和未适配原生入口不可访问。
 
 ## 通用扩展点与 upstream 升级
 
@@ -202,7 +215,7 @@ Kubernetes Secret / External Secrets for secrets
 
 ## Upstream 合并门禁
 
-按已交付里程碑运行 G1/G2/G3 及适用的 G-H，检查新 SQL/文件写入旁路、全局 admin 调用、turn runtime 拆分文件及新 tool/capability 持久化。默认发行物 PG-only 同样是合并门禁，不重新引入上游 SQLite profile；企业文件权威继续遵守 PG/S3。通用 PG/Store/身份 hook 可贡献上游，但不以等待官方接受 PR 为上线前置。
+按已交付里程碑运行 G1/G2/G3 及适用的 G-H，检查新 SQL/文件写入旁路、全局 admin 调用、turn runtime 拆分文件及新 tool/capability 持久化。默认发行物 PG-only 同样是合并门禁，不重新引入上游 SQLite profile；企业文件权威继续遵守 PG/S3。EduPlus2 合并门禁还包括：TMS/OMS 登录、client/app 唯一性、token exchange、WS token refresh、第三方多租户调用、审计脱敏和 Secret 引用回归。通用 PG/Store/身份 hook 可贡献上游，但不以等待官方接受 PR 为上线前置。
 
 ## 并行准备与发布证据
 

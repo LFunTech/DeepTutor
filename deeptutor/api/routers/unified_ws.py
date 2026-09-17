@@ -230,8 +230,6 @@ async def unified_websocket(ws: WebSocket) -> None:
     try:
         while not closed:
             raw = await ws.receive_text()
-            if auth_provider is not None:
-                await auth_provider.revalidate(ws)
             try:
                 decoded = json.loads(raw)
             except json.JSONDecodeError:
@@ -262,6 +260,44 @@ async def unified_websocket(ws: WebSocket) -> None:
             msg = command.model_dump(mode="python", exclude_unset=True)
 
             msg_type = msg.get("type")
+
+            if msg_type == "auth_refresh":
+                refresher = getattr(auth_provider, "refresh", None)
+                if refresher is None:
+                    await send_protocol_error(
+                        "Authentication refresh is not supported.",
+                        error_code="auth_refresh_unsupported",
+                    )
+                    continue
+                try:
+                    refreshed = await refresher(ws, msg)
+                except PermissionError:
+                    closed = True
+                    await ws.send_text(
+                        json.dumps(
+                            {
+                                "type": "auth_revoked",
+                                "reason": "refresh_rejected",
+                                "protocol_version": PROTOCOL_VERSION,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    await ws.close(code=1008, reason="Authentication refresh rejected")
+                    continue
+                await safe_send(
+                    {
+                        "type": "auth_ack",
+                        "command_id": str(msg["command_id"]),
+                        "accepted": True,
+                        "expires_at": int(refreshed.get("expires_at") or 0),
+                        "refresh_deadline": int(refreshed.get("refresh_deadline") or 0),
+                    }
+                )
+                continue
+
+            if auth_provider is not None:
+                await auth_provider.revalidate(ws)
 
             if msg_type in {"message", "start_turn"}:
                 try:

@@ -29,14 +29,39 @@ C1/C2 运营模块可以位于独立企业 UI 构建，通过受控路由挂到 
 
 路由、API 和权限 key 是拟定契约，不表示当前已有接口。TMS/OMS 仅统一企业入口命名，原 `tenant.*` / `ops.*` 能力 key 和角色语义不变；通用业务 API 不整体搬入管理前缀。完整命名、M1 固定租户边界与旧路由约束见 [11](11-api-and-entrypoints.md)。
 
+## EduPlus2 client/app 管理与归口
+
+第一阶段 TMS 先做成**单租户管理**：当前 `/tms` 只能管理与自身绑定的一个 `internal_tenant_id` / `external_tenant_id`，包括该租户下允许调用 DeepTutor 的 EduPlus2 client/app、能力策略、配额和审计。普通第三方应用运行时从一开始就按 JWT `tid` 支持多租户：`tid=A` 映射租户 A，`tid=B` 映射租户 B；前提是对应 tenant 与 client/app 已完成有效注册。
+
+### TMS 注册规则
+
+1. TMS 管理员在当前租户上下文输入 `client_id`。
+2. DeepTutor 调 EduPlus2 通用 `POST /api/v1/open/oauth-clients/resolve` 解析 `client_id`，取得权威 `external_tenant_id`、`external_app_id`、`external_app_name`、`external_tenant_name` 和状态信息；接口需求草案见 [EduPlus2 通用 OAuth Client Resolve API 需求建议](eduplus2-oauth-client-resolve-api-proposal.md)。
+3. `external_tenant_id` 必须与当前 TMS 绑定的外部租户 ID 完全一致；不一致返回拒绝，不允许“代管”其他租户 client。
+4. 检查同 provider 下 active `client_id` 是否已存在，以及同租户同 app 是否已有 active client。
+5. 无冲突后注册，写入 client 注册审计；冲突返回 409。
+
+### OMS 注册规则
+
+1. OMS 平台人员输入 `client_id`。
+2. DeepTutor 调 EduPlus2 通用 resolve API 校验并取得外部租户与应用权威信息。
+3. 按 `external_tenant_id` 查找或要求先完成内部 tenant provisioning。
+4. 将 client 自动归口到对应 TMS；对应租户管理员之后只能在自己的 `/tms` 中看到和管理该记录。
+5. OMS 仍受 `ops.clients.manage` 权限和审计约束，不能绕过唯一性或租户状态。
+
+### 唯一性与注销
+
+同一个 EduPlus2 租户下同一个应用只能存在一个 active client 注册。唯一性以 EduPlus2 返回的权威应用 ID 为准，不以可变名称为准。若要把租户 A 的 alpha 应用从 `client-001` 切换到 `client-002`，必须先将 `client-001` 注销/retire/revoke，再注册 `client-002`。注销保留历史审计，不物理删除历史记录。
+
 ## B2：现有租户界面微调清单
 
 1. 导航、工作台跳转与管理页子路由统一指向 `/tms`，专属管理请求使用 `/api/v1/tms/*`；导航/页头展示当前租户，菜单数据、表格请求、资源选择器均只取当前 tenant。首页按已有管理能力展示入口，不把 KB 权限作为所有管理角色的共同前置。KB 页面通过企业文档服务展示已选 RAG 的真实导入/索引失败和重试状态，托管删除与外部连接解绑明确区分；不跳转原始 Server 管理页绕过权限。
 2. 保留现有用户资源授权、共享 KB、配置等交互，移除平台凭证、全部租户列表和全局配置入口。
-3. EduPlus2 用户/组织只展示必要同步字段；DeepTutor 只编辑应用内 grants，不创建第二套用户密码/学校组织管理。自有密码账号仅用于受控固定租户 PG 身份模式，不保留 SQLite/local 认证回退。
+3. EduPlus2 用户/组织只展示必要同步字段；DeepTutor 只编辑应用内 grants，不创建第二套用户密码/学校组织管理。自有密码账号仅用于受控固定租户 PG 身份模式，不保留 SQLite/local 认证回退；TMS 不提供注册用户、重置 EduPlus2 密码或创建学校组织入口。
 4. 已有 API 从 `require_admin` 拆成 scope 与具体 permission 判定；不得仅改前端菜单。
 5. 保存成功后配置与实际 runtime 一致，多副本缓存按版本失效；禁止页面写文件而 worker 仍读旧状态。
 6. 租户管理员默认可管理自己租户；自定义角色按显式能力出现菜单，不以 `eit=adm` 单字段授予平台权限。
+7. EduPlus2 client/app 管理入口使用 `tenant.clients.manage`，只显示当前租户 active/历史注册，注册时必须实时校验 EduPlus2 权威 tenant/app 信息。
 
 ## C1/C2 分批交付边界
 
@@ -58,6 +83,7 @@ B1 先完成首租户最终身份/权限/撤权闭环，B2 完成各租户自己
 | 用量 | 租户/时间维度 token、请求、对象/索引/图容量、导入/查询并发与失败率；远端模型成本单列，费用估算不冒充计费结算系统；不展示私有实体/正文或增加通用 Gremlin 控制台 |
 | 运行治理 | 导入/同步/Webhook/turn 状态，含索引版本、图写不确定/待恢复与成套恢复结果；授权后的重试/取消遵守 06 的停写/对账约束，不以普通按钮清 pending fence 或重启绕过，不重复执行已完成操作 |
 | 审计 | 操作者、平台角色、目标租户、动作、资源、脱敏变更摘要、结果、request ID、时间；只读导出单独授权 |
+| 外部应用 / client | TMS 管理本租户已归口 client/app；OMS 跨租户注册、注销、暂停与查询；唯一性、状态和 EduPlus2 权威校验必须由后端强制 |
 
 ## 权限矩阵：入口到后端必须闭环
 
@@ -67,12 +93,17 @@ B1 先完成首租户最终身份/权限/撤权闭环，B2 完成各租户自己
 | --- | --- | --- | --- | --- |
 | `/tms` 下的 KB 管理入口、`/api/v1/tms/kbs` | 已认证、当前 tenant、`require_tenant_permission`、资源归属 | `tenant.kb.manage` → 租户资源管理权限 | 本租户 `tenant_admin`；显式授权自定义角色 | `tenant.kb.manage` |
 | 本租户授权/模型配置 | 当前 tenant、禁止越过平台分配范围 | `tenant.grants.manage` | 本租户 `tenant_admin`；显式授权自定义角色 | `tenant.grants.manage` |
+| `/api/v1/tms/eduplus2/clients` 注册/列表/注销 | 当前 tenant、`require_tenant_permission`、EduPlus2 client 校验、external tenant 完全一致、唯一约束 | `tenant.clients.manage` → 租户外部应用管理权限 | 本租户 `tenant_admin`；显式授权自定义角色 | `tenant.clients.manage` |
+| `/api/v1/auth/eduplus2/exchange` | EduPlus2 JWT 验签、active client registration、tenant/app/client 状态、用户映射 | `eduplus2.token.exchange` / 已注册 app 策略 | 已注册 app 下的合法 EduPlus2 用户；不提供前端管理入口 | 第三方 SDK/前置应用透明处理 |
+| `/api/v1/ws` / `/api/v1/external/turns` start_turn | `dt_token`、当前 user/tenant/client scope、owner/grant、capability allowlist、quota | `turn.start` / app capability policy | 当前用户及获授权 app | 聊天/外部能力入口 |
 | `/oms` 下的租户目录入口、`GET /api/v1/oms/tenants` | `require_platform_permission` | `ops.tenants.read` → 平台角色/能力 | admin/operator/auditor | `ops.tenants.read` |
 | 租户开通/暂停/恢复 API | 平台权限、目标租户校验、状态机、幂等 | `ops.tenants.manage` | admin/operator | `ops.tenants.manage` |
+| `/api/v1/oms/eduplus2/clients` 注册/列表/注销 | 平台权限、EduPlus2 client 校验、external tenant 归口、唯一约束、审计 | `ops.clients.manage` | admin/operator | `ops.clients.manage` |
 | 租户模型/配额 API | 平台权限、限额、版本校验 | `ops.policy.manage` | admin/operator（仅已授权日常范围） | `ops.policy.manage` |
 | 平台 Secret 引用/轮换 API | 平台敏感操作权限、确认、审计 | `ops.credentials.manage` | admin | `ops.credentials.manage` |
 | 运营账号/角色授权 API | 平台角色管理权限，禁止自助提权 | `ops.roles.manage` | admin | `ops.roles.manage` |
 | 用量/审计 API | 平台只读权限，导出独立授权 | `ops.usage.read` / `ops.audit.read` | admin/operator/auditor | 同后端能力 key |
+| TMS 审计查询 | 当前 tenant scope，审计只读，禁止跨租户 | `tenant.audit.read` | 本租户 tenant_admin/auditor 或显式授权角色 | `tenant.audit.read` |
 | 任务重试/取消 API | 平台操作权限、目标 tenant/job/实际 cancel_scope 绑定；无文档级能力拒绝扩大到 workspace | `ops.jobs.manage` | admin/operator | `ops.jobs.manage` |
 
 “admin/operator/auditor”在本表分别指 `platform_admin/platform_operator/platform_auditor`。平台角色通过可审计的可信授权维护，不能由学校管理员身份、任意客户端 claim 或本地用户名自动推导。M2M 运维调用也受相同 scope/permission 限制。
@@ -111,6 +142,22 @@ OMS 的图容量/待恢复信息来自 LightRAG 受控状态或运维观测结�
 - **后续 EduPlus2**：只有新增 relation/tuple/client/scope/redirect 等才需要对应 OpenFGA/Keycloak provider migration；由 EduPlus2 仓库受控流程负责，不用手工改库或启动脚本替代。
 - **验证闭环**：迁移 dry-run/apply/verify、重复执行幂等和 drift 检查；默认管理员、自定义角色正例及 403 负例；菜单/路由/按钮/API 对齐。
 
+### EduPlus2 client/app 与 token exchange 的迁移判断
+
+本轮仍是文档更新；后续实现需要 DeepTutor DB migration，至少新增或扩展：
+
+1. `external_client_registrations`
+2. `external_tenant_bindings`
+3. `external_user_bindings`
+4. `token_exchange_audit` 或统一 audit event 类型/索引
+5. `client_policy_versions` 与 app capability allowlist
+6. `auth_sessions` 的 `auth_provider/client_registration_id/client_id/external_app_id/external_tenant_id/external_user_id/identity_type` 等字段
+7. client/app 状态、能力策略、quota 与审计索引
+
+阶段一可暂不修改 EduPlus2 OpenFGA/Keycloak，条件是只开放指定管理入口、client/app 策略由 DeepTutor DB 控制、不开放第三方自助注册、不新增 EduPlus2 relation/scope。后续若纳入 EduPlus2/OpenFGA/Keycloak 权限模型，需要受控新增 `tenant.clients.manage`、`ops.clients.manage`、`tenant.audit.read`、`ops.audit.read`、`external.turn.start` 等能力，并通过对应 provider migration 执行。
+
 ## 验收
 
 以 [02 的 G2/G3](02-rollout-testing-and-migration.md) 和 [OpenSpec platform-operations](../../openspec/changes/replace-rollout-with-three-production-stages/specs/platform-operations/spec.md) 为准。至少验证 `/tms`、`/oms` 导航/深链接与各自 API 前缀一致，默认管理员/获授权自定义角色可达、无权限直调返回 403；租户管理员不能访问运营 API、auditor 不能写、operator 不能管理 Secret/角色、admin 正常操作，以及管理变更确实影响运行时。旧前缀和原生未适配路由不得成为鉴权旁路。
+
+EduPlus2 client/app 首批验收还必须覆盖：TMS 注册当前 tenant client 成功、TMS 注册其他 tenant client 被拒绝、OMS 注册合法 tenant client 并自动归口 TMS、同 tenant+same app 第二个 active client 返回 409、revoke 旧 client 后允许新 client、重复 `client_id` 409、未绑定 tenant 要求 provisioning、已注册 client JWT exchange 成功、未注册/撤销/暂停 client 403、JWT `tid` 与 registration tenant 不一致 403、非法/过期 JWT 401、WS `auth_refresh` 透明续期、已接受 turn 不因 token 自然过期中断、新 turn 必须重校验、审计包含 client/app/tenant/user/session/turn 且不包含 token/secret/完整私密正文。

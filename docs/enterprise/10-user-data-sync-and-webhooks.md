@@ -2,7 +2,7 @@
 
 ## 阶段边界
 
-外部契约和注册准备从 A1 并行；B1 完成首租户登录业务态、必要事件与撤权闭环，B2 完成多租户必要关系、Webhook 重试和周期对账，不推迟到运营后台。M1 发布没有 EduPlus2 同步依赖；C1 提供基本操作审计，C2 完善同步状态、授权重试与审计视图。所有缓存/幂等状态使用现有 PG，不开发 SQLite/JSON 同步过渡后端。
+外部契约和注册准备从 A1 并行；B1 完成首租户登录业务态、必要事件与撤权闭环，但首个指定租户对接可先不依赖 Webhook，使用实时校验、手动/受控同步和短期缓存失效完成闭环；B2 完成多租户必要关系、Webhook 重试和周期对账，不推迟到运营后台。M1 发布没有 EduPlus2 同步依赖；C1 提供基本操作审计，C2 完善同步状态、授权重试与审计视图。所有缓存/幂等状态使用现有 PG，不开发 SQLite/JSON 同步过渡后端。
 
 ## 实现归属
 
@@ -117,6 +117,8 @@ extensions/enterprise/src/deeptutor_enterprise/integrations/eduplus2/sync.py
 ```text
 POST /api/v1/eduplus2/webhooks
 ```
+
+Webhook 用于应用安装、租户授权、client 配置变更、secret 轮换、用户/组织/权限变化等状态同步，不是 TMS/OMS 每次登录或第三方 `POST /api/v1/auth/eduplus2/exchange` 的主链路。普通第三方调用仍必须实时验签 EduPlus2 user JWT，并查 active client/app 注册状态；即使暂未接入 Webhook，也不能放松 token 校验或使用未审计的手工配置绕过注册流程。
 
 安全要求：
 

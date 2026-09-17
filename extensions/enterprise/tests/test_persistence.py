@@ -20,6 +20,14 @@ EXPECTED_MIGRATIONS = [
     "0010_matrix_store",
     "0011_marginnote_store",
     "0012_offline_import_stage",
+    "0013_courses",
+    "0014_externalized_runtime",
+]
+EXPECTED_EXTENSION_MIGRATIONS = [
+    "0001_federated_access",
+    "0002_profile_permission_snapshots",
+    "0003_revocation_state",
+    "0004_audit_export_jobs",
 ]
 
 
@@ -33,7 +41,7 @@ def module(name):
 async def migrated(dsn):
     migration = module("migrations.runner")
     runner = migration.MigrationRunner(dsn)
-    assert await runner.plan() == EXPECTED_MIGRATIONS
+    assert await runner.plan() == EXPECTED_MIGRATIONS + EXPECTED_EXTENSION_MIGRATIONS
     await runner.apply()
     await runner.verify()
     return runner
@@ -56,6 +64,16 @@ async def test_migrations_repeat_concurrent_and_runtime_ddl(pg_dsn):
         async with pool.transaction(scope) as c:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 await c.execute("CREATE TABLE enterprise.bad (id int)")
+
+
+async def test_eduplus2_extension_catalog_drift_blocks_verify(pg_dsn):
+    runner = await migrated(pg_dsn)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("ALTER TABLE eduplus2.audit_export_jobs DISABLE ROW LEVEL SECURITY")
+    with pytest.raises(RuntimeError, match="eduplus2 schema drift"):
+        await runner.verify()
+    with pytest.raises(RuntimeError, match="eduplus2 schema drift"):
+        await runner.apply()
 
 
 async def test_drift_blocks_start(pg_dsn):

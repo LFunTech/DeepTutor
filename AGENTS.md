@@ -24,6 +24,37 @@ Entry Points:  CLI (Typer)  |  WebSocket /ws  |  Python SDK
               └──────────────┘  └────────────────────┘
 ```
 
+
+## Mandatory Upstream Mergeability Constraint
+
+All DeepTutor work MUST preserve the ability to merge changes from `upstream/main`
+back into this repository at any time. Treat upstream mergeability as a hard
+architecture and delivery requirement, not as a cleanup task after feature work.
+
+When implementing EduPlus2, enterprise, third-party integration, or other
+product-specific behavior:
+
+- Prefer configuration, existing extension points, and the enterprise extension
+  package under `extensions/enterprise/` over modifying core runtime code.
+- Core changes are allowed only for generic seams such as auth providers, scope
+  propagation, permission providers, Store/ObjectStore abstractions, router/app
+  composition hooks, lifecycle hooks, or other upstream-neutral interfaces.
+- Do not hard-code EduPlus2 or tenant-specific business rules into core runtime
+  paths such as orchestrators, session lifecycle, registries, tool/capability
+  execution, or persistence primitives.
+- Do not rely on monkey patching, `sitecustomize`, import-order side effects,
+  global singleton replacement, or router registration order to override upstream
+  behavior in production.
+- Every required core patch MUST be documented with its generic purpose, affected
+  entry points, upstream merge risk, and verification coverage.
+- Before considering integration work complete, verify that the relevant smoke
+  path still works after a current upstream merge check or an explicitly recorded
+  upstream-compatibility review. At minimum, verify authentication, HTTP/WS turn
+  execution, session ownership, and audit correlation for the affected path.
+
+If a requested change would make future upstream merges fragile, stop and propose
+a seam, extension-package implementation, or narrower core patch instead.
+
 All capabilities emit on a shared `StreamBus`; the orchestrator fans
 events out to consumers. Runtime settings live in
 `data/user/settings/*.json` — project-root `.env` files are intentionally

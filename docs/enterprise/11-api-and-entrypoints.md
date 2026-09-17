@@ -36,6 +36,7 @@ DeepTutor 当前主要入口：
 - `submit_user_reply`
 - `regenerate`
 - `check_active_turn`
+- `auth_refresh`（拟新增，用新 `dt_token` 静默刷新当前 WS 身份）
 - `ping`
 
 多租户适配要求：
@@ -45,6 +46,8 @@ DeepTutor 当前主要入口：
 3. `session_id` 只能在当前 tenant/user scope 内解析。
 4. `knowledge_bases` 引用必须通过租户感知的 `resolve_kb()`。
 5. stream event 持久化到 PG 当前 tenant/turn，按 seq 重放；取消/回复在多副本下必须到达正确执行者，不能只访问本 Pod 内存。
+6. 已接受的单个 turn 不因 `dt_token` 在生成中自然到期而中断；但新 turn、cancel、reply、下载、读历史和敏感工具操作必须重新校验。
+7. token 剩余 3–5 分钟时服务端发送 `auth_expiring`；客户端通过 `POST /api/v1/auth/eduplus2/exchange` 静默换新 `dt_token` 后发送 `auth_refresh`，服务端返回 `auth_ack`。刷新失败时用新 token 重连并通过 `resume_from turn_id + after_seq` 恢复事件流。
 
 ## HTTP API
 
@@ -53,6 +56,7 @@ DeepTutor 当前主要入口：
 - `require_auth()` 解码 DeepTutor `dt_token` 后恢复 `tenant_id/eui/eit`。
 - 管理类 API 不再统一使用旧 `require_admin()`，而是拆成 platform / tenant 管理权限。
 - 数据库调用统一使用 tenant/owner-scoped PG Store，默认入口也不保留 SQLite 模式；`get_current_path_service()` 不得产生数据库权威，企业仅用于受控 scratch/只读资源，其余文件载荷按对应资源契约处理。
+- `POST /api/v1/auth/eduplus2/exchange` 是特殊认证交换入口：它不要求已有 `dt_token`，但必须要求 EduPlus2 user JWT、active client/app registration、租户状态和审计写入；失败必须 fail closed。
 
 ## EduPlus2 新增 API
 
@@ -66,11 +70,66 @@ extensions/enterprise/src/deeptutor_enterprise/api/eduplus2.py
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/v1/eduplus2/handoff/callback` | EduPlus2 工作台回跳，换 token 并设置 `dt_token` |
+| `GET` | `/api/v1/eduplus2/handoff/callback` | EduPlus2 工作台回跳，换 token 并设置 `dt_token`；仅用于 TMS/OMS 直接登录 |
+| `POST` | `/api/v1/auth/eduplus2/exchange` | 第三方应用传入 EduPlus2 user JWT，DeepTutor 静默换发短期 `dt_token` |
 | `POST` | `/api/v1/eduplus2/logout` | 清理 DeepTutor session，可选跳转 EduPlus2 logout |
 | `GET` | `/api/v1/eduplus2/session` | 返回当前 EduPlus2/DeepTutor session 摘要 |
-| `POST` | `/api/v1/eduplus2/webhooks` | EduPlus2 Webhook 接收入口 |
+| `POST` | `/api/v1/eduplus2/webhooks` | EduPlus2 Webhook 接收入口；用于安装/状态/权限变更同步，不是每次登录主链路 |
 | `POST` | `/api/v1/eduplus2/sync/{tenant_id}` | 平台/租户管理员触发同步，需权限保护 |
+
+### Token exchange 契约
+
+```http
+POST /api/v1/auth/eduplus2/exchange
+Authorization: Bearer <eduplus2_user_jwt>
+```
+
+成功响应：
+
+```json
+{
+  "access_token": "<deeptutor-dt-token>",
+  "token_type": "Bearer",
+  "expires_in": 1800,
+  "tenant_id": "<internal-tenant-id>",
+  "user_id": "<internal-user-id>",
+  "client_id": "<eduplus2-client-id>",
+  "app_id": "<external-app-id>",
+  "app_name": "Alpha App",
+  "tenant_name": "A School"
+}
+```
+
+校验流程：验签 EduPlus2 JWT → 校验 `iss/exp/iat` 并提取 `azp` 作为权威 `client_id` → 提取 `tid/eui` → 查 active `external_client_registrations` → 校验 registration 的 `external_tenant_id == JWT.tid` → 必要时调用 EduPlus2 通用 `POST /api/v1/open/oauth-clients/resolve` 刷新 app/tenant/client 状态 → 校验 app/tenant/client 未暂停或撤销 → 映射内部 tenant/user → 签发 `dt_token` → 写 `eduplus2.token.exchange` 审计。请求体、query 或非签名 header 中的 tenant/user/client 信息只能作为显示或幂等辅助，不能作为授权证据；如传入 `client_id`，必须等于 JWT `azp`。通用 resolve API 需求草案见 [EduPlus2 通用 OAuth Client Resolve API 需求建议](eduplus2-oauth-client-resolve-api-proposal.md)。
+
+### TMS/OMS client 注册 API
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/v1/tms/eduplus2/clients` | 当前 TMS 租户注册一个 EduPlus2 `client_id`；必须校验 EduPlus2 返回的外部 tenant 与当前 TMS tenant 完全一致 |
+| `DELETE` | `/api/v1/tms/eduplus2/clients/{id}` | 当前 TMS 租户注销/retire 自己归属的 client 注册 |
+| `GET` | `/api/v1/tms/eduplus2/clients` | 当前 TMS 租户查看归口到本 tenant 的 client/app 注册 |
+| `POST` | `/api/v1/oms/eduplus2/clients` | OMS 校验 `client_id` 后按 EduPlus2 返回的外部 tenant 自动归口到对应 TMS |
+| `DELETE` | `/api/v1/oms/eduplus2/clients/{id}` | OMS 注销/retire 任一已归口 client 注册 |
+| `GET` | `/api/v1/oms/eduplus2/clients` | OMS 跨租户检索 client/app 注册及状态 |
+
+同一 provider 下 active `client_id` 只能注册一次；同一租户同一 EduPlus2 app 只能有一个 active client。注册时应通过 EduPlus2 通用 resolve API 取得权威 `app_id/tenant_id/app_name/tenant_name/status`，不能只信任人工输入。冲突返回 409；tenant 不匹配返回 403 或 409（按 API 规范细分），未绑定 external tenant 时要求先做 tenant provisioning。
+
+## 对外能力调用 API（阶段二后续开放）
+
+完成 EduPlus2 单租户接入、client/app 注册、token exchange、审计和 WS 续期后，再逐步开放外部能力 API。第一批建议仅开放 `chat`、`deep_solve`，可选 `deep_question`；默认关闭 `exec`、`cron`、MCP、任意 KB、任意模型覆盖和未授权工具。
+
+拟定接口：
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/external/capabilities` | 返回当前 client/app/tenant/user 可用能力与配置边界 |
+| `POST` | `/api/v1/external/turns` | 以当前 `dt_token` 创建外部 turn，服务端填充 tenant/user/client metadata |
+| `GET` | `/api/v1/external/turns/{turn_id}/events` | 读取或流式订阅 turn events，按 owner/grant/client policy 校验 |
+| `POST` | `/api/v1/external/turns/{turn_id}/cancel` | 取消当前授权 turn；不得扩大到其他 session/job/workspace |
+| `POST` | `/api/v1/external/turns/{turn_id}/reply` | 响应 `ask_user` 等需要用户补充输入的 turn |
+
+该 API 是 HTTP 形态的能力入口，不替代 `/api/v1/ws`。两者都必须使用同一认证、授权、审计、quota、turn persistence 和 event replay 逻辑。
 
 ## RAG 服务接口适配
 
@@ -97,6 +156,10 @@ metadata={
     "eduplus_user_id": current_user.eduplus_user_id,
     "identity_type": current_user.identity_type,
     "auth_provider": "eduplus2",
+    "client_id": current_user.client_id,
+    "external_app_id": current_user.external_app_id,
+    "external_app_name": current_user.external_app_name,
+    "external_tenant_name": current_user.external_tenant_name,
 }
 ```
 
@@ -107,7 +170,7 @@ metadata={
 Python SDK 主要用于本地或服务端集成。EduPlus2 模式下建议：
 
 1. 保持本地 SDK 行为不变。
-2. 若 SDK 调远端 DeepTutor API，应使用 `Authorization: Bearer <dt_token>`。
+2. 若 SDK 调远端 DeepTutor API，应先用 EduPlus2 user JWT 调 `POST /api/v1/auth/eduplus2/exchange` 换取 `dt_token`，之后使用 `Authorization: Bearer <dt_token>`。
 3. 不建议 SDK 直接传 `tenant_id` 覆盖服务端 auth context。
 4. 服务端-to-服务端场景使用单独 M2M token，并显式限制可访问租户。
 
@@ -135,8 +198,9 @@ deeptutor eduplus2 tenant list
 1. 所有入口都必须先 auth，再解析 path/resource。
 2. 不允许 query/body 中的 `tenant_id` 覆盖 token 中 tenant。
 3. 管理接口区分 `platform_admin` 与 `tenant_admin`。
-4. WebSocket token 过期时要关闭连接或拒绝新 turn。
-5. 错误响应不泄露路径、secret、token、signature。
+4. WebSocket token 过期时不得接受新 turn；应优先走 `auth_expiring` / `auth_refresh` 静默刷新，失败再关闭连接或要求重连恢复。
+5. 第三方传入的 EduPlus2 JWT 只用于换票和校验，不在 DeepTutor 日志、审计、前端存储中保留原文。
+6. 错误响应不泄露路径、secret、token、signature。
 
 ## 两级管理入口
 
@@ -148,9 +212,9 @@ deeptutor eduplus2 tenant list
 | OMS（Operations Management System，平台运营管理系统） | `/oms`、`/oms/*` | `/api/v1/oms/*`，例如 `/api/v1/oms/tenants`、`/api/v1/oms/tenants/{tenant_id}` | 平台获授权范围；B2 先提供治理 API，C1/C2 再交付运营界面 |
 
 1. **术语与权限分离**：本方案 OMS 指平台运营，不指订单管理。URL 改名不修改 `tenant_admin`、`platform_admin/platform_operator/platform_auditor` 或 `tenant.*`、`ops.*` 能力 key；页面与后端继续按同一具体能力鉴权，不根据路径名自动授予角色。
-2. **TMS 锁定当前租户**：租户来自可信身份 scope，不接受 query/body/header 覆盖。M1 仍使用受保护本地身份和固定内部租户，不提前引入 EduPlus2 或平台运营能力；B2 使用 `tenant_admin` 及获具体能力的自定义角色。首页按已有授权显示可用管理模块，不要求所有角色都具备 KB 管理能力。
-3. **OMS 显式目标范围**：租户 ID 出现在运营路由时，必须先校验平台具体能力，再验证并绑定目标租户；列表只返回获授权管理元数据。普通业务 API 不获得任意 tenant override，租户管理员不能因路径改名访问运营 API。
-4. **专属管理前缀，不迁移全部 API**：仅租户/运营专属管理接口采用 TMS/OMS 前缀；聊天、资源等通用业务 API、`/api/v1/ws` 和 `/api/v1/eduplus2/*` 保持各自契约。共用业务服务不等于共用全局放行依赖。
+2. **TMS 锁定当前租户**：租户来自可信身份 scope，不接受 query/body/header 覆盖。M1 仍使用受保护本地身份和固定内部租户，不提前引入 EduPlus2 或平台运营能力；B1/B2 的 TMS 首先做成单租户管理视图，只能管理与当前 TMS 绑定的 `external_tenant_id` 完全一致的 client/app；B2 使用 `tenant_admin` 及获具体能力的自定义角色。首页按已有授权显示可用管理模块，不要求所有角色都具备 KB 管理能力。
+3. **OMS 显式目标范围**：租户 ID 出现在运营路由时，必须先校验平台具体能力，再验证并绑定目标租户；列表只返回获授权管理元数据。OMS 注册 EduPlus2 client 时根据 EduPlus2 返回的外部 tenant 自动归口到对应 TMS。普通业务 API 不获得任意 tenant override，租户管理员不能因路径改名访问运营 API。
+4. **专属管理前缀，不迁移全部 API**：仅租户/运营专属管理接口采用 TMS/OMS 前缀；聊天、资源等通用业务 API、`/api/v1/ws`、`/api/v1/auth/eduplus2/exchange` 和 `/api/v1/eduplus2/*` 保持各自契约。共用业务服务不等于共用全局放行依赖。
 5. **源码基线与目标入口分开**：`web/app/(admin)/admin` 是现有源码位置，复用其页面/组件后由企业前端路由组合接入 `/tms`，不把该源码引用改写为已经存在的 `tms` 目录。企业目标入口不再使用 `/admin`、`/ops` 及旧管理 API 前缀；不默认增加旧 URL 重定向，原生未适配路由不得作为旁路暴露。默认应用也必须使用 PG；本次取消 SQLite 不自动改变非企业管理页面 URL，页面改名仍按各自入口契约实施。
 
 后续实施须同步企业路由注册、菜单/按钮链接、工作台跳转目标、前端 API client、Ingress 路由规则及 smoke/权限负例，不能只改页面标题。完整权限/菜单矩阵见 [12](12-platform-operations-admin.md)。
