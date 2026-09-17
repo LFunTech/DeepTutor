@@ -1,6 +1,6 @@
 ## Purpose
 
-规定 DeepTutor 在不实现 TMS/OMS、暂不要求实时撤权传播的前提下，与 EduPlus2 建立第三方联邦访问闭环：通过 EduPlus2 user JWT 静默换取短期 `dt_token`，并在 exchange、refresh、打开/新命令/周期安全检查点持续依赖 EduPlus2 resolve、profile、permission 和 DeepTutor owner/resource guard 控制访问；同时提供最小审计查询/导出 UI，确保调用可追溯、可按校验窗口撤销、可脱敏导出。
+规定 DeepTutor 在不实现 TMS/OMS、暂不要求实时撤权传播的前提下，与 EduPlus2 建立第三方联邦访问闭环：通过 EduPlus2 user JWT 静默换取短期 `dt_token`，并在 exchange、WS refresh 和当前 repo 接收的新 HTTP/WS/SDK 敏感操作中执行 EduPlus2 resolve、可选 profile/permission 校验以及 DeepTutor owner/resource guard；打开 DeepTutor、refresh 时外部用户合法性校验和周期合法性校验由前置应用负责；同时提供最小审计查询/导出 UI，确保调用可追溯、可脱敏导出。
 
 ## ADDED Requirements
 
@@ -18,7 +18,7 @@
 
 ### Requirement: 本 change 不交付 TMS/OMS 但交付联邦访问闭环
 
-系统 SHALL 不在本 change 范围内开放 `/tms`、`/oms` 页面、Handoff/OIDC callback 或 TMS/OMS client 管理面。系统 SHALL 在无 TMS/OMS 的前提下交付第三方 exchange、profile/permission 复核、WS refresh、前置应用合法性校验和最小审计导出 UI；实时撤权推送与复杂事件对账不作为本 change 门禁。
+系统 SHALL 不在本 change 范围内开放 `/tms`、`/oms` 页面、Handoff/OIDC callback 或 TMS/OMS client 管理面。系统 SHALL 在无 TMS/OMS 的前提下交付第三方 exchange、可选 profile/permission 复核、WS refresh、owner/resource guard 和最小审计导出 UI。前置应用 SHALL 负责打开 DeepTutor、refresh 时外部用户合法性校验和周期合法性校验；实时撤权推送与复杂事件对账不作为本 change 门禁。
 
 #### Scenario: 第三方应用调用换票入口
 - **WHEN** 第三方应用携带 EduPlus2 user JWT 调用 `POST /api/v1/auth/eduplus2/exchange`
@@ -34,7 +34,7 @@
 
 #### Scenario: 配置缺失或 secret 不可读取
 - **WHEN** 必需 endpoint、issuer、allowlist、profile/permission 配置或 Secret Provider 配置缺失
-- **THEN** 相关 exchange/refresh/周期校验/export fail closed，并返回脱敏错误；不得回退到本地注册、本地登录或未校验 token 路径
+- **THEN** 相关 exchange/refresh/export fail closed，并返回脱敏错误；不得回退到本地注册、本地登录或未校验 token 路径
 
 ### Requirement: EduPlus2 user JWT 必须由 OIDC/JWKS 验证
 
@@ -104,17 +104,17 @@
 - **WHEN** 新证明无效、外部状态被撤销、permission denied 或 refresh deadline 已过
 - **THEN** 系统拒绝新 turn/reply/cancel/订阅/下载/敏感工具操作，必要时发送 `auth_revoked` 或断开连接
 
-### Requirement: 前置应用合法性校验必须覆盖新操作、WS 和缓存
+### Requirement: 前置应用合法性校验职责必须明确外置
 
-系统 SHALL 在 exchange、refresh、HTTP/WS/SDK 打开或新敏感操作、以及后台任务安全检查点重验当前 user/client/app/tenant/subscription/permission 是否仍合法。系统 SHALL 使用短 TTL profile/permission/resolve snapshot；当 snapshot 超过配置窗口时 MUST 重新调用 EduPlus2 profile/permission/resolve。实时 webhook/事件传播 MAY 作为增强能力启用，但不作为本 change 的生产门禁。
+系统 SHALL 明确区分前置应用职责与当前 repo 职责。前置应用负责打开 DeepTutor、refresh 时外部用户合法性校验和周期合法性校验。当前 repo SHALL 不实现该周期校验调度，也不得把未实现的前置合法性检查声明为自身门禁；当前 repo 仅在 exchange/resolve、短期 `dt_token`、WS refresh、owner/resource guard、可选 profile/permission/webhook 路径以及新 HTTP/WS/SDK 敏感操作的本地信任边界内 fail closed。
 
-#### Scenario: 打开或周期校验发现权限失效
-- **WHEN** 用户打开 DeepTutor、WS 提交新命令、HTTP/SDK 执行敏感操作、或后台任务到达安全检查点，且 profile/permission/resolve 重验发现用户、client/app/tenant/subscription/permission 不再合法
-- **THEN** 系统拒绝新 exchange/refresh/敏感操作；活跃 WS 在下一次新命令或 refresh 时收到错误或被关闭；后台任务 fail closed
+#### Scenario: 前置应用执行打开或周期校验
+- **WHEN** 用户打开 DeepTutor、前置应用 refresh 外部登录态或到达前置应用定义的周期校验窗口
+- **THEN** 前置应用应向 EduPlus2 获取当前合法用户状态和新的 user JWT；当前 repo 不接受 query/body/header 中未经签名的 tenant/user/client 信息替代该 JWT，也不启动独立周期校验任务
 
-#### Scenario: snapshot 超过周期校验窗口
-- **WHEN** 本地 profile/permission/resolve snapshot 已超过配置的周期校验窗口
-- **THEN** 系统重新调用 EduPlus2 profile/permission/resolve；调用不可用且无仍在 TTL 内的安全缓存时 fail closed
+#### Scenario: 当前 repo 接收新敏感操作
+- **WHEN** 当前 repo 接收 exchange、WS refresh、新 HTTP/WS/SDK 敏感操作或后台安全检查点，且本地 `dt_token` 过期、owner/resource guard 失败、registration/resolve 不合法，或已配置的 profile/permission/webhook 增强发现状态不可用
+- **THEN** 当前 repo 拒绝该操作并记录脱敏 reason；无 webhook 时不承诺实时撤权窗口，外部撤权窗口由前置应用周期校验策略负责
 
 #### Scenario: 可选撤权事件重放或签名错误
 - **WHEN** 部署启用 webhook，且 webhook 签名错误、timestamp 过期、event id 重放或目标环境不匹配
@@ -130,7 +130,7 @@
 
 ### Requirement: 审计记录和导出 UI 必须可追溯且脱敏
 
-系统 SHALL 对 resolve、profile、permission、registration upsert、token exchange、refresh、周期合法性重验、可选 revocation、权限拒绝、敏感能力调用和 audit export 记录持久审计。系统 SHALL 提供不依赖 TMS/OMS 的最小审计查询/导出 UI，并强制租户范围、权限、脱敏和导出审计。
+系统 SHALL 对 resolve、profile、permission、registration upsert、token exchange、refresh、可选 revocation、权限拒绝、敏感能力调用和 audit export 记录持久审计。系统 SHALL 提供不依赖 TMS/OMS 的最小审计查询/导出 UI，并强制租户范围、权限、脱敏和导出审计。
 
 #### Scenario: 查询审计
 - **WHEN** 有权限用户打开最小企业审计页面并按时间/client/user/result 过滤
@@ -142,7 +142,7 @@
 
 ### Requirement: 实现形态保持 upstream 可合并
 
-系统 SHALL 将 EduPlus2 verifier、resolve/profile/permission client、registration、exchange、refresh、周期合法性重验、可选 revocation、audit export 和 allowlist 逻辑放在企业扩展包或明确 provider 实现中；core 只新增最小必要 seam。实现 MUST NOT 复制上游大文件、依赖全局 monkey patch、改变本地默认行为或把 EduPlus2 业务硬编码进教学内核。
+系统 SHALL 将 EduPlus2 verifier、resolve/profile/permission client、registration、exchange、refresh、可选 revocation、audit export 和 allowlist 逻辑放在企业扩展包或明确 provider 实现中；core 只新增最小必要 seam。实现 MUST NOT 复制上游大文件、依赖全局 monkey patch、改变本地默认行为或把 EduPlus2 业务硬编码进教学内核。
 
 #### Scenario: 未启用 EduPlus2 的本地模式运行
 - **WHEN** 未启用企业 EduPlus2 provider 的本地 CLI/SDK/Web 运行

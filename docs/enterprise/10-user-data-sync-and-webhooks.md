@@ -4,6 +4,12 @@
 
 外部契约和注册准备从 A1 并行；B1 完成首租户登录业务态、必要事件与撤权闭环，但首个指定租户对接可先不依赖 Webhook，使用实时校验、手动/受控同步和短期缓存失效完成闭环；B2 完成多租户必要关系、Webhook 重试和周期对账，不推迟到运营后台。M1 发布没有 EduPlus2 同步依赖；C1 提供基本操作审计，C2 完善同步状态、授权重试与审计视图。所有缓存/幂等状态使用现有 PG，不开发 SQLite/JSON 同步过渡后端。
 
+### 当前实现状态（2026-09-17）
+
+当前 repo 的 EduPlus2 切片已提供可选 profile/permission client、snapshot、签名 revocation webhook 基础入口和审计事件，但**实时撤权传播不是当前 gate**。如果没有 webhook 或事件对账 SLA，外部用户合法性窗口由前置应用的打开/refresh/周期校验策略负责；DeepTutor 仅保证自身 exchange/resolve、短期 `dt_token`、owner/resource guard 和可选 profile/permission/webhook 路径 fail closed。
+
+未来若需要“实时撤权传播”或乱序/部分失败恢复/周期对账 SLA，应另立 proposal；不要把当前可选 webhook 基础入口解释为完整 B2 多租户同步闭环。
+
 ## 实现归属
 
 同步、Webhook、权限事件处理和外部 API client 均位于独立企业包，接收路由由企业应用装配，持久化走同一 PG provider；不为放在包外另建临时网关或第二套状态。job/重试必须携带可信内部 scope 并在执行时重验，事件失效需覆盖应用、RAG Gateway 的凭证/缓存和后续派发，详见 [13](13-deployment-and-upstream-sync.md) 与 [06](06-postgresql-native-store-plan.md)。

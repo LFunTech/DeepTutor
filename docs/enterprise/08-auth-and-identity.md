@@ -6,6 +6,12 @@
 
 外部 tid/eui 经 [03 身份映射](03-tenant-scope-schema.md) 转换内部 tenant_id/user_id；原单租户账号只显式绑定，不按同名自动合并。DeepTutor 可在首次合法访问时做 identity binding / JIT provisioning（创建内部映射和会话），但这不是注册入口，也不能让用户自行创建 EduPlus2 账号或租户。
 
+### 当前实现状态（2026-09-17）
+
+已归档的 [`enterprise-eduplus2-federated-access`](../../openspec/specs/enterprise-eduplus2-federated-access/spec.md) 覆盖的是**无 TMS/OMS 的 API-only 联邦访问闭环**：第三方应用持有 EduPlus2 user JWT 后调用 DeepTutor exchange，DeepTutor 验签、resolve、allowlist/registration、JIT binding 并换发短期 `dt_token`，后续 HTTP/WS/SDK 仍走 DeepTutor 自身 token、owner/resource guard 和审计。该切片还提供通用 WS `auth_refresh` seam、可选 profile/permission/webhook 增强以及独立审计导出 UI。
+
+尚未实现的是 `/tms`、`/oms` 的 EduPlus2 交互式登录、Handoff/OIDC callback、在线 client 治理页面和实时撤权 SLA。打开 DeepTutor、refresh 时用户合法性校验以及周期合法性校验由前置应用负责；当前 repo 不把这些周期检查作为自身后台任务实现。
+
 ## 身份与登录边界
 
 DeepTutor 不作为用户身份主系统：

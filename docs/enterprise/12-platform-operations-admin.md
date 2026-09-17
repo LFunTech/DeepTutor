@@ -9,6 +9,12 @@
 
 两者共用资源服务、权限判定及数据底座，但入口、菜单、可操作对象和权限边界分开。不为每租户复制代码或部署，不重建 EduPlus2 用户、学校、组织、身份及授权主数据后台。
 
+### 当前实现状态（2026-09-17）
+
+TMS 与 OMS 仍未实现。当前已交付的是无 TMS/OMS 的 EduPlus2 API-only 联邦访问切片，以及独立的 EduPlus2 审计查询/导出页面 `/enterprise/audit/eduplus2`。该页面只用于查看/导出脱敏 exchange、refresh、resolve、profile/permission、revocation 与 authz denied 等审计证据，不代表 `/tms` 或 `/oms` 已具备导航、角色、菜单、client 注册治理或租户/运营管理能力。
+
+后续 TMS/OMS 仍需分别按 B2、C1/C2 建设；不得把当前审计导出 UI 或 API-only exchange 当作 TMS/OMS 的替代。
+
 ## 外壳与前端交付边界
 
 企业包/外壳不等于 iframe 套上原站就完成租户化。`web/app/(admin)/admin` 是现有源码路径，企业前端复用页面/组件并接入目标 `/tms`，不是声称上游已有同名目录。B2 对 tenant 标识、角色/能力字段、导航与资源请求做必要通用接入；原用户体验与完整后端能力同批验收。不为追求上游前端零 diff 复制整套页面、伪造全局 admin 或只用 CSS 隐藏敏感入口。
@@ -158,6 +164,6 @@ OMS 的图容量/待恢复信息来自 LightRAG 受控状态或运维观测结�
 
 ## 验收
 
-以 [02 的 G2/G3](02-rollout-testing-and-migration.md) 和 [OpenSpec platform-operations](../../openspec/changes/replace-rollout-with-three-production-stages/specs/platform-operations/spec.md) 为准。至少验证 `/tms`、`/oms` 导航/深链接与各自 API 前缀一致，默认管理员/获授权自定义角色可达、无权限直调返回 403；租户管理员不能访问运营 API、auditor 不能写、operator 不能管理 Secret/角色、admin 正常操作，以及管理变更确实影响运行时。旧前缀和原生未适配路由不得成为鉴权旁路。
+以 [02 的 G2/G3](02-rollout-testing-and-migration.md) 及后续 TMS/OMS 专项 OpenSpec proposal 为准。至少验证 `/tms`、`/oms` 导航/深链接与各自 API 前缀一致，默认管理员/获授权自定义角色可达、无权限直调返回 403；租户管理员不能访问运营 API、auditor 不能写、operator 不能管理 Secret/角色、admin 正常操作，以及管理变更确实影响运行时。旧前缀和原生未适配路由不得成为鉴权旁路。
 
 EduPlus2 client/app 首批验收还必须覆盖：TMS 注册当前 tenant client 成功、TMS 注册其他 tenant client 被拒绝、OMS 注册合法 tenant client 并自动归口 TMS、同 tenant+same app 第二个 active client 返回 409、revoke 旧 client 后允许新 client、重复 `client_id` 409、未绑定 tenant 要求 provisioning、已注册 client JWT exchange 成功、未注册/撤销/暂停 client 403、JWT `tid` 与 registration tenant 不一致 403、非法/过期 JWT 401、WS `auth_refresh` 透明续期、已接受 turn 不因 token 自然过期中断、新 turn 必须重校验、审计包含 client/app/tenant/user/session/turn 且不包含 token/secret/完整私密正文。

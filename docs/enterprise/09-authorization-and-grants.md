@@ -4,6 +4,12 @@
 
 阶段一完成本地认证、owner/grant、基础审计、对象额度/必要限流、PG/图/S3 隔离和平台敏感配置防护；阶段二完成外部身份/业务权限与撤权映射、tenant_admin 的多租户授权与配额治理及本租户管理界面；阶段三复用这些服务建设统一运营后台。两类界面与完整权限矩阵见 [12](12-platform-operations-admin.md)。本期只改文档，未改变真实 DB/OpenFGA/Keycloak 状态。
 
+### 当前实现状态（2026-09-17）
+
+`enterprise-eduplus2-federated-access` 已在企业包内完成普通第三方调用所需的 JWT exchange、client/app/tenant resolve、短期 `dt_token`、owner/resource guard、可选 profile/permission snapshot、WS refresh 和审计查询/导出。该切片只计算普通 DeepTutor 能力边界，不授予 TMS、OMS、ops 或平台角色能力；学校管理员也不会因此映射成全局 admin。
+
+前置应用仍负责用户打开、refresh 和周期合法性校验。DeepTutor 当前 repo 负责自身信任边界：签名/claims/registration/resolve、短期 token、HTTP/WS/SDK owner guard、可选 profile/permission/webhook fail closed 和审计证据。
+
 ## 权限实现归属
 
 EduPlus2 权限 client、映射、grants/policy Store 与审计实现位于独立 `deeptutor_enterprise` 包；core 保留通用 permission/scope/provider，并将原管理 API、工具和后台调用接入同一授权服务。外壳登录或前端隐藏入口不足以完成替换，不通过给学校管理员签发旧全局 admin token 兼容界面。包与核心责任见 [13](13-deployment-and-upstream-sync.md)。

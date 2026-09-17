@@ -6,7 +6,9 @@
 
 DeepTutor 官方更新后，企业版本仍能以可验证的核心补丁和扩展包组合持续升级，并且必须保持可以随时合并 `upstream/main` 的能力。采用“配置优先 → 现有注入/插件 → 必要通用 hook/旁路收敛”，不承诺全产品零改源码，也不重写上游教学与检索算法。生产 PG/S3、无状态 backend、完整权限和三阶段门禁不变。
 
-2026-09-13 最新批准范围：取消本仓库所有 local/SQLite 运行模式，默认 Web/CLI/SDK/后台必须使用 PG。通用 PG 下沉 core、企业专属策略保持包外；[完整迁移设计](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/design.md)当前待实施，首切片的 local 兼容仅为历史基线。
+2026-09-13 批准范围：取消本仓库所有 local/SQLite 运行模式，默认 Web/CLI/SDK/后台必须使用 PG。通用 PG 下沉 core、企业专属策略保持包外；[完整迁移设计](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/design.md)已归档，首切片的 local 兼容仅为历史基线。
+
+2026-09-17 已归档 `add-eduplus2-federated-access`：EduPlus2 业务逻辑位于 `extensions/enterprise/`，core 仅保留 provider-neutral 的 WS `auth_refresh` 协议、auth provider refresh hook 和短期 token/extra claims 签发 seam。不得在 core 中加入 EduPlus2 issuer、client、tenant、profile/permission URL 或外部 API 细节；后续 TMS/OMS、Handoff、实时撤权 SLA 和前置应用周期校验契约仍需独立 proposal。
 
 当前 repo 已有以下 remote，不能重复执行下面的初始化示例：
 

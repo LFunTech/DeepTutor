@@ -4,6 +4,18 @@
 
 A1/A2 保留现有入口/产品协议并替换固定 tenant 的 PG/S3/scratch，A3 集成验收；B1 验证首租户 EduPlus2 接入和权限，B2 开放多租户及租户管理；C1/C2 新增运营入口和治理视图。服务端-to-服务端调用同样不能绕过 scope 和权限。
 
+### 当前实现状态（2026-09-17）
+
+已实现并归档的 API-only 联邦访问切片包括：
+
+- `POST /api/v1/auth/eduplus2/exchange`：EduPlus2 user JWT → DeepTutor 短期 `dt_token`。
+- `POST /api/v1/auth/eduplus2/revocations`：可选签名 revocation 事件入口；不是实时撤权 SLA gate。
+- `/api/v1/ws` 的通用 `auth_refresh` / `auth_ack` / `auth_revoked` 协议 seam。
+- `GET /api/v1/enterprise/audit/eduplus2/events` 与 `POST /api/v1/enterprise/audit/eduplus2/exports`。
+- 独立页面 `/enterprise/audit/eduplus2`，不依赖 `/tms` 或 `/oms`。
+
+仍未实现：`/tms`、`/oms`、TMS/OMS Handoff/OIDC callback、在线 client 注册治理页面，以及 `/api/v1/tms/*`、`/api/v1/oms/*` 的完整管理闭环。前置应用负责打开/refresh/周期合法性校验；当前 repo 只处理自身 token/session/owner/resource guard 与审计。
+
 ## 企业应用外壳与核心入口
 
 企业启动器/应用 factory 位于独立 `deeptutor_enterprise` 包，优先复用容器注入、TurnRuntimeManager/SessionStore、Tool/Capability 协议；缺失处通过通用核心 seam 补齐。产品继续使用既有 HTTP 与 `/api/v1/ws` 语义，不把 Plugin API 或直接 `DeepTutorApp()` 默认初始化当作企业入口的等价替代。
@@ -36,7 +48,7 @@ DeepTutor 当前主要入口：
 - `submit_user_reply`
 - `regenerate`
 - `check_active_turn`
-- `auth_refresh`（拟新增，用新 `dt_token` 静默刷新当前 WS 身份）
+- `auth_refresh`（已作为通用协议 seam 实现，用新 `dt_token` 或 provider 解释的 `external_token` 静默刷新当前 WS 身份）
 - `ping`
 
 多租户适配要求：
@@ -47,7 +59,7 @@ DeepTutor 当前主要入口：
 4. `knowledge_bases` 引用必须通过租户感知的 `resolve_kb()`。
 5. stream event 持久化到 PG 当前 tenant/turn，按 seq 重放；取消/回复在多副本下必须到达正确执行者，不能只访问本 Pod 内存。
 6. 已接受的单个 turn 不因 `dt_token` 在生成中自然到期而中断；但新 turn、cancel、reply、下载、读历史和敏感工具操作必须重新校验。
-7. token 剩余 3–5 分钟时服务端发送 `auth_expiring`；客户端通过 `POST /api/v1/auth/eduplus2/exchange` 静默换新 `dt_token` 后发送 `auth_refresh`，服务端返回 `auth_ack`。刷新失败时用新 token 重连并通过 `resume_from turn_id + after_seq` 恢复事件流。
+7. token 剩余 3–5 分钟时服务端可发送 `auth_expiring`；客户端通过 `POST /api/v1/auth/eduplus2/exchange` 静默换新 `dt_token` 后发送 `auth_refresh`，服务端返回 `auth_ack`。刷新失败时用新 token 重连并通过 `resume_from turn_id + after_seq` 恢复事件流。外部用户合法性周期校验由前置应用负责。
 
 ## HTTP API
 

@@ -4,8 +4,8 @@
 
 ## 方案状态与最新决策
 
-- **修订日期**：2026-09-16；整体路线仍为待交付方案，不是已部署声明；首个身份/PG 会话子切片的实现与验证见下方独立记录。
-- **最新数据库范围**：用户已明确取消独立 local/SQLite 模式，默认 Web、CLI、SDK 与后台全部使用 PostgreSQL；本机部署仍可用，但也必须连接 PG。完整迁移规划见 [`migrate-all-sqlite-state-to-postgresql`](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/proposal.md)，已获批准并在当前工作区逐项实施，实际状态见该 change 的 tasks/执行证据，不把首切片验收当作全仓已经切换。
+- **修订日期**：2026-09-17；整体路线仍为待交付方案，不是已部署声明；首个身份/PG 会话子切片、生产 `data/` 外置化切片和 EduPlus2 API-only 联邦访问切片的实现与验证见下方独立记录。
+- **最新数据库范围**：用户已明确取消独立 local/SQLite 模式，默认 Web、CLI、SDK 与后台全部使用 PostgreSQL；本机部署仍可用，但也必须连接 PG。完整迁移规划见 [`migrate-all-sqlite-state-to-postgresql`](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/proposal.md)，已实施并归档，实际状态见该 change 的 tasks/执行证据，不把首切片验收当作全仓已经切换。
 - **唯一主线**：阶段一单租户 Kubernetes 上线 → 阶段二 EduPlus2 多租户及每租户自己的管理界面 → 阶段三统一运营管理后台。
 - **直接替换**：第一阶段就使用 PostgreSQL + S3-compatible；不开发 POC、租户独立部署、文件型多租户或双写过渡版本。
 - **界面边界**：TMS（Tenant Management System，租户管理系统）采用 `/tms`；OMS（Operations Management System，平台运营管理系统，非订单管理）采用 `/oms`。租户页面复用现有组件，两级管理并存。
@@ -14,8 +14,9 @@
 - **执行粒度**：M1=A1/A2/A3，M2=B1/B2，M3=C1/C2；工作包不等于单独生产版本。
 - **并行准备**：K8s 集成环境、Woodpecker 流水线开发与 EduPlus2 注册/契约准备从 A1 起并行，不阻塞为单独过渡阶段。
 - **EduPlus2 身份边界**：DeepTutor 不提供普通用户注册；只有 TMS/OMS 需要 DeepTutor 交互式登录。第三方应用已完成登录时，将 EduPlus2 user JWT 传给 DeepTutor 换取短期 `dt_token`，由 active client/app 注册、租户/app 状态、owner/grant 和能力策略共同授权。
+- **EduPlus2 当前实现状态**：[`enterprise-eduplus2-federated-access`](../../openspec/specs/enterprise-eduplus2-federated-access/spec.md) 已归档为正式 OpenSpec spec；当前 repo 已实现 API-only exchange、OIDC/JWKS、resolve/allowlist、短期 `dt_token`、WS `auth_refresh` 通用 seam、owner/resource guard、可选 profile/permission/webhook 增强和独立审计查询/导出 UI。TMS/OMS、Handoff/OIDC callback、在线 client 治理和实时撤权 SLA 仍不在该切片内；打开/refresh/周期合法性校验由前置应用负责。
 - **自动交付必需**：Woodpecker 是 M1/A3 必交付子环节；构建、镜像推送、迁移、K8s 部署、业务 smoke 与受控回退实跑后才通过 G1，后续阶段复用。
-- **K12 容量基线（2026-09-14）**：用户委托评估，首期目标为 3,000 学生/约 8,000 三方账号、600 同时在线与一学年存量，另规划 30,000 学生扩容档；详见 [容量假设、数据量和验收目标](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/capacity-assessment.md)。P1 隔离容量与重度尾部验收已按该 change 的 1.47 记录；这仍不代表 P2、正式 HA 或真实供应商并发已经通过。
+- **K12 容量基线（2026-09-14）**：用户委托评估，首期目标为 3,000 学生/约 8,000 三方账号、600 同时在线与一学年存量，另规划 30,000 学生扩容档；详见 [容量假设、数据量和验收目标](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/capacity-assessment.md)。P1 隔离容量与重度尾部验收已按该 change 的 1.47 记录；这仍不代表 P2、正式 HA 或真实供应商并发已经通过。
 - **可用性独立**：H 工作线按容量/可用性目标触发 G-H，不因第二个租户强制第二个 Pod；未通过协调验收不得启用多执行者。
 - **维护策略**：配置与现有扩展点优先；必要通用核心 hook/旁路收敛 + 独立企业扩展包/应用外壳，不承诺完整产品仅靠配置或源码零 diff。
 - **PG 实现归属调整**：通用 PG 连接/迁移/身份/业务 Store 从首切片下沉 core，默认发行物包含 PG 支持；企业特有集成、资源和治理仍在独立包，core 不反向依赖企业包，不复制第二套 schema/数据。
@@ -55,17 +56,23 @@ H 为贯穿工作的可用性/容量工作线，不是第八个业务工作包�
 
 编号表示主阅读/实施路径，不把并行工作变成串行：A1/A2 依赖稳定契约协作；A3 环境与流水线、B1 外部注册/契约准备从 A1 启动；H 的目标评估从 A1 执行，实际多执行者/HA 前先过 G-H。
 
-OpenSpec 是需求、验收与任务状态主记录：[proposal](../../openspec/changes/replace-rollout-with-three-production-stages/proposal.md)、[按工作包及包内执行顺序排列的 tasks](../../openspec/changes/replace-rollout-with-three-production-stages/tasks.md)。本次同步用户 LightRAG fork + HugeGraph 路线、多租户首发设计/验收和 PG/图/S3 职责，同步领域文档、规范及任务；保留企业包/外壳、TMS/OMS、三个里程碑、七个工作包及全部业务范围，不勾选实施任务。
+OpenSpec 正式 specs 与 [02 执行总纲](02-rollout-testing-and-migration.md) 是需求、验收与任务状态主记录。当前 active changes 为空；已归档 changes 的证据见下方收口记录和 `openspec/changes/archive/`。企业包/外壳、TMS/OMS、三个里程碑、七个工作包及全部业务范围仍保留；不因单个切片完成而勾选未完成的里程碑门禁。
 
 ## 首个实施 proposal：A1 子切片
 
-2026-09-13，用户确认首个变更采用较小纵向切片，规划为 [`add-enterprise-pg-identity-session-slice`](../../openspec/changes/add-enterprise-pg-identity-session-slice/proposal.md)：企业装配、可信固定租户本地身份与 PG 文本会话闭环；其余 A1 另立后续 proposal，不一次实施完整 A1。详见 [design](../../openspec/changes/add-enterprise-pg-identity-session-slice/design.md)、[子切片 tasks](../../openspec/changes/add-enterprise-pg-identity-session-slice/tasks.md)。用户随后批准执行；当前 34 项子任务已实现并完成隔离 PG/真实模型/入口及回归验证，见 [执行证据](../../openspec/changes/add-enterprise-pg-identity-session-slice/execution-evidence.md) 与 [运行说明](../../extensions/enterprise/README.md)。未合并或上线，完整 A1/G1 未通过。
+2026-09-13，用户确认首个变更采用较小纵向切片，规划为 [`add-enterprise-pg-identity-session-slice`](../../openspec/changes/archive/2026-09-16-add-enterprise-pg-identity-session-slice/proposal.md)：企业装配、可信固定租户本地身份与 PG 文本会话闭环；其余 A1 另立后续 proposal，不一次实施完整 A1。详见 [design](../../openspec/changes/archive/2026-09-16-add-enterprise-pg-identity-session-slice/design.md)、[子切片 tasks](../../openspec/changes/archive/2026-09-16-add-enterprise-pg-identity-session-slice/tasks.md)。用户随后批准执行；当前 34 项子任务已实现并完成隔离 PG/真实模型/入口及回归验证，见 [执行证据](../../openspec/changes/archive/2026-09-16-add-enterprise-pg-identity-session-slice/execution-evidence.md) 与 [运行说明](../../extensions/enterprise/README.md)。未合并或上线，完整 A1/G1 未通过。
 
 总纲原 90 项保留为工作包汇总门禁，子切片 tasks 记录细项证据；只有原项的全部范围完成才更新总纲 checkbox，不因子切片完成标记 A1/M1/G1。A3 环境/CI、B1 外部契约及 H 目标准备继续按总纲并行；不新增过渡生产版本。
 
+## 2026-09-17 OpenSpec 收口记录
+
+- `add-eduplus2-federated-access` 已归档到 `openspec/changes/archive/2026-09-17-add-eduplus2-federated-access/`，正式 spec 为 [`enterprise-eduplus2-federated-access`](../../openspec/specs/enterprise-eduplus2-federated-access/spec.md)。实现已合并到 `master`，提交为 `2e9bdffd feat(enterprise): add EduPlus2 federated access`。
+- `externalize-data-directory-for-kubernetes-runtime` 已收敛为归档目录 `openspec/changes/archive/2026-09-16-externalize-data-directory-for-kubernetes-runtime/` 和正式 specs：[`externalized-resource-store`](../../openspec/specs/externalized-resource-store/spec.md)、[`externalized-runtime-configuration`](../../openspec/specs/externalized-runtime-configuration/spec.md)、[`kubernetes-stateless-runtime`](../../openspec/specs/kubernetes-stateless-runtime/spec.md)；当前 OpenSpec 已无 active changes。
+- 以上收口不表示完整 M1/G1、B2/G2、TMS 或 OMS 已交付。下一步建议先做前置应用联调契约与 M1/G1 生产基线，而不是直接把 TMS/OMS 壳层视为已完成。
+
 ## 文档地图（与文件编号一致）
 
-当前实施 change 为 [全量 PostgreSQL-only 迁移](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/proposal.md)：[调用清单](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/inventory.md)、[design](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/design.md)、[55 项任务](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/tasks.md)与[执行证据](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/execution-evidence.md)。覆盖所有剩余 SQLite 领域、Matrix 间接存储、旧数据只读导入与默认入口；不是完整 A1/A2/G1 的替代，未勾选项仍按该 change 保持未完成。
+已归档的全量 PostgreSQL-only 迁移 change 为 [全量 PostgreSQL-only 迁移](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/proposal.md)：[调用清单](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/inventory.md)、[design](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/design.md)、[55 项任务](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/tasks.md)与[执行证据](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/execution-evidence.md)。覆盖所有剩余 SQLite 领域、Matrix 间接存储、旧数据只读导入与默认入口；不是完整 A1/A2/G1 的替代，未勾选项仍按该 change 保持未完成。
 
 | 文档 | 执行位置 | 阅读/实施重点 |
 | --- | --- | --- |
