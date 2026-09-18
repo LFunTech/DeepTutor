@@ -44,6 +44,13 @@ function localNetworkHosts() {
   return hosts;
 }
 
+function extraDevOrigins() {
+  return firstNonEmpty(process.env.DEEPTUTOR_ALLOWED_DEV_ORIGINS)
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
 const SETTINGS_DIR = path.resolve(__dirname, "..", "data", "user", "settings");
 const SYSTEM_SETTINGS = readJsonFile(path.join(SETTINGS_DIR, "system.json"));
 const AUTH_SETTINGS = readJsonFile(path.join(SETTINGS_DIR, "auth.json"));
@@ -170,7 +177,11 @@ const nextConfig = {
   // follows whatever network this machine is on. Dev-only: `allowedDevOrigins`
   // has no effect on `next build`/`next start`, and anyone who can reach the
   // dev server on these addresses is already inside the LAN.
-  allowedDevOrigins: ["127.0.0.1", ...localNetworkHosts()],
+  allowedDevOrigins: [
+    "127.0.0.1",
+    ...localNetworkHosts(),
+    ...extraDevOrigins(),
+  ],
 
   // Turbopack configuration (used when running `npm run dev:turbo`)
   turbopack: {

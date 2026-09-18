@@ -14,7 +14,7 @@ A1/A2 保留现有入口/产品协议并替换固定 tenant 的 PG/S3/scratch，
 - `GET /api/v1/enterprise/audit/eduplus2/events` 与 `POST /api/v1/enterprise/audit/eduplus2/exports`。
 - 独立页面 `/enterprise/audit/eduplus2`，不依赖 `/tms` 或 `/oms`。
 
-仍未实现：`/tms`、`/oms`、TMS/OMS Handoff/OIDC callback、在线 client 注册治理页面，以及 `/api/v1/tms/*`、`/api/v1/oms/*` 的完整管理闭环。前置应用负责打开/refresh/周期合法性校验；当前 repo 只处理自身 token/session/owner/resource guard 与审计。
+P1 前置应用联调 contract、错误矩阵、配置矩阵和 smoke 命令见 [EduPlus2 前置应用接入联调契约](eduplus2-fronting-app-integration-contract.md)。仍未实现：`/tms`、`/oms`、TMS/OMS Handoff/OIDC callback、在线 client 注册治理页面，以及 `/api/v1/tms/*`、`/api/v1/oms/*` 的完整管理闭环。前置应用负责打开/refresh/周期合法性校验；当前 repo 只处理自身 token/session/owner/resource guard 与审计。
 
 ## 企业应用外壳与核心入口
 
@@ -70,24 +70,21 @@ DeepTutor 当前主要入口：
 - 数据库调用统一使用 tenant/owner-scoped PG Store，默认入口也不保留 SQLite 模式；`get_current_path_service()` 不得产生数据库权威，企业仅用于受控 scratch/只读资源，其余文件载荷按对应资源契约处理。
 - `POST /api/v1/auth/eduplus2/exchange` 是特殊认证交换入口：它不要求已有 `dt_token`，但必须要求 EduPlus2 user JWT、active client/app registration、租户状态和审计写入；失败必须 fail closed。
 
-## EduPlus2 新增 API
+## EduPlus2 API 状态
 
-建议新增 router：
-
-```text
-extensions/enterprise/src/deeptutor_enterprise/api/eduplus2.py
-```
-
-接口草案：
+当前已实现的外部联调 API 由企业应用外壳注册；完整前置应用契约以 [P1 接入契约](eduplus2-fronting-app-integration-contract.md) 为准。本节只保留入口地图，避免复制两份易漂移的 payload 细节。
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/v1/eduplus2/handoff/callback` | EduPlus2 工作台回跳，换 token 并设置 `dt_token`；仅用于 TMS/OMS 直接登录 |
-| `POST` | `/api/v1/auth/eduplus2/exchange` | 第三方应用传入 EduPlus2 user JWT，DeepTutor 静默换发短期 `dt_token` |
-| `POST` | `/api/v1/eduplus2/logout` | 清理 DeepTutor session，可选跳转 EduPlus2 logout |
-| `GET` | `/api/v1/eduplus2/session` | 返回当前 EduPlus2/DeepTutor session 摘要 |
-| `POST` | `/api/v1/eduplus2/webhooks` | EduPlus2 Webhook 接收入口；用于安装/状态/权限变更同步，不是每次登录主链路 |
-| `POST` | `/api/v1/eduplus2/sync/{tenant_id}` | 平台/租户管理员触发同步，需权限保护 |
+| `POST` | `/api/v1/auth/eduplus2/exchange` | 已实现。第三方应用传入 EduPlus2 user JWT，DeepTutor 静默换发短期 `dt_token`。 |
+| `POST` | `/api/v1/auth/eduplus2/revocations` | 已实现可选增强。签名 revocation 事件入口；不是实时撤权 SLA gate。 |
+| `GET` | `/api/v1/enterprise/audit/eduplus2/events` | 已实现。tenant_admin 查询脱敏审计事件。 |
+| `POST` | `/api/v1/enterprise/audit/eduplus2/exports` | 已实现。tenant_admin 创建 JSONL/CSV 脱敏导出。 |
+| `GET` | `/api/v1/eduplus2/handoff/callback` | 未实现。后续 TMS/OMS 或 Handoff proposal 再定义。 |
+| `POST` | `/api/v1/eduplus2/logout` | 未实现。后续 session/handoff proposal 再定义。 |
+| `GET` | `/api/v1/eduplus2/session` | 未实现。后续 session/handoff proposal 再定义。 |
+| `POST` | `/api/v1/eduplus2/webhooks` | 未实现为该路径；当前可选 revocation 入口为 `/api/v1/auth/eduplus2/revocations`。 |
+| `POST` | `/api/v1/eduplus2/sync/{tenant_id}` | 未实现。后续同步 proposal 再定义。 |
 
 ### Token exchange 契约
 
@@ -96,23 +93,21 @@ POST /api/v1/auth/eduplus2/exchange
 Authorization: Bearer <eduplus2_user_jwt>
 ```
 
-成功响应：
+当前成功响应：
 
 ```json
 {
-  "access_token": "<deeptutor-dt-token>",
+  "dt_token": "<deeptutor-dt-token>",
   "token_type": "Bearer",
-  "expires_in": 1800,
+  "expires_in": 900,
+  "expires_at": 1790000000,
   "tenant_id": "<internal-tenant-id>",
   "user_id": "<internal-user-id>",
-  "client_id": "<eduplus2-client-id>",
-  "app_id": "<external-app-id>",
-  "app_name": "Alpha App",
-  "tenant_name": "A School"
+  "client_registration_id": "<internal-registration-id>"
 }
 ```
 
-校验流程：验签 EduPlus2 JWT → 校验 `iss/exp/iat` 并提取 `azp` 作为权威 `client_id` → 提取 `tid/eui` → 查 active `external_client_registrations` → 校验 registration 的 `external_tenant_id == JWT.tid` → 必要时调用 EduPlus2 通用 `POST /api/v1/open/oauth-clients/resolve` 刷新 app/tenant/client 状态 → 校验 app/tenant/client 未暂停或撤销 → 映射内部 tenant/user → 签发 `dt_token` → 写 `eduplus2.token.exchange` 审计。请求体、query 或非签名 header 中的 tenant/user/client 信息只能作为显示或幂等辅助，不能作为授权证据；如传入 `client_id`，必须等于 JWT `azp`。通用 resolve API 需求草案见 [EduPlus2 通用 OAuth Client Resolve API 需求建议](eduplus2-oauth-client-resolve-api-proposal.md)。
+校验流程：验签 EduPlus2 JWT → 校验 `iss/exp/iat/nbf` 并提取 `azp` 作为权威 `client_id` → 提取 `tid/eui/sub` → 校验 allowlist/registration → 调用 EduPlus2 通用 `POST /api/v1/open/oauth-clients/resolve` 刷新 app/tenant/client 状态 → 可选 profile/permission 复核 → 映射内部 tenant/user → 签发短期 `dt_token` → 写 `token.exchange` 审计。请求体、query 或非签名 header 中的 tenant/user/client 信息不能作为授权证据，也不能用来覆盖 JWT claims。错误码、WS refresh、审计排障和 smoke 入口见 [P1 接入契约](eduplus2-fronting-app-integration-contract.md)。通用 resolve API 需求草案见 [EduPlus2 通用 OAuth Client Resolve API 需求建议](eduplus2-oauth-client-resolve-api-proposal.md)。
 
 ### TMS/OMS client 注册 API
 

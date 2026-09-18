@@ -25,6 +25,15 @@ from deeptutor.persistence.postgres.connection import CommitCompletedAfterCancel
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _CLIENT_COMMAND_ADAPTER = TypeAdapter(ClientCommand)
+TOKEN_CARRIER_SUBPROTOCOL = "deeptutor-token"
+
+
+def _accepted_subprotocol(ws: WebSocket) -> str | None:
+    raw_protocols = str(ws.headers.get("sec-websocket-protocol", "") or "")
+    protocols = [item.strip() for item in raw_protocols.split(",") if item.strip()]
+    if TOKEN_CARRIER_SUBPROTOCOL in protocols:
+        return TOKEN_CARRIER_SUBPROTOCOL
+    return None
 
 
 def _clean_answers(value: Any) -> list[dict[str, Any]] | None:
@@ -55,7 +64,7 @@ async def unified_websocket(ws: WebSocket) -> None:
     else:
         user_token = await auth_provider.authenticate(ws)
 
-    await ws.accept()
+    await ws.accept(subprotocol=_accepted_subprotocol(ws))
     closed = False
     subscription_tasks: dict[str, asyncio.Task[None]] = {}
     retiring_tasks: set[asyncio.Task[None]] = set()

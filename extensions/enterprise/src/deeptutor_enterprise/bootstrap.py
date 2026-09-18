@@ -24,6 +24,14 @@ from .migrations.runner import MigrationRunner
 from .scope import TenantScope
 from .stores.postgres.connection import Database
 
+_DISABLED_OPTIONAL_URL_VALUES = {"0", "false", "off", "no", "none", "disabled"}
+
+
+def _optional_url_env(name: str) -> tuple[str, bool]:
+    value = os.environ.get(name, "").strip()
+    disabled = value.lower() in _DISABLED_OPTIONAL_URL_VALUES
+    return ("" if disabled else value), disabled
+
 
 class _ControlledBootstrapIdentity(IdentityService):
     """日常实例不持有 bootstrap 明文；显式调用时使用短期 core service。"""
@@ -108,13 +116,13 @@ class Enterprise:
         jwks_uri = os.environ.get("DT_EDUPLUS2_JWKS_URI", "").strip()
         token_url = os.environ.get("DT_EDUPLUS2_TOKEN_ENDPOINT", "").strip()
         resolve_url = os.environ.get("DT_EDUPLUS2_RESOLVE_URL", "").strip()
-        profile_url = os.environ.get("DT_EDUPLUS2_PROFILE_URL", "").strip()
-        permission_url = os.environ.get("DT_EDUPLUS2_PERMISSION_URL", "").strip()
+        profile_url, profile_disabled = _optional_url_env("DT_EDUPLUS2_PROFILE_URL")
+        permission_url, permission_disabled = _optional_url_env("DT_EDUPLUS2_PERMISSION_URL")
         if not resolve_url and base_url:
             resolve_url = base_url + "/api/v1/open/oauth-clients/resolve"
-        if not profile_url and base_url:
+        if not profile_url and base_url and not profile_disabled:
             profile_url = base_url + "/api/v1/open/profile"
-        if not permission_url and base_url:
+        if not permission_url and base_url and not permission_disabled:
             permission_url = base_url + "/api/v1/open/permissions/check"
         client_id = os.environ.get("DT_EDUPLUS2_CLIENT_ID", "").strip()
         secret_ref = os.environ.get("DT_EDUPLUS2_CLIENT_SECRET_REF", "").strip()

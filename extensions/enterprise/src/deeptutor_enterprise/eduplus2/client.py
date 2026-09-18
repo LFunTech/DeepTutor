@@ -40,6 +40,21 @@ def _require_claims(claims: dict[str, Any]) -> None:
         raise PermissionError("EduPlus2 JWT iat is in the future")
 
 
+def _jwt_error_permission(error: JWTError) -> PermissionError:
+    message = str(error).lower()
+    if "expired" in message:
+        return PermissionError("EduPlus2 JWT expired")
+    if "not yet valid" in message or "nbf" in message:
+        return PermissionError("EduPlus2 JWT not yet valid")
+    if "signature verification failed" in message or "signature" in message:
+        return PermissionError("EduPlus2 JWT signature verification failed")
+    if "audience" in message:
+        return PermissionError("EduPlus2 JWT audience rejected")
+    if "issuer" in message:
+        return PermissionError("EduPlus2 token issuer mismatch")
+    return PermissionError("EduPlus2 JWT verification failed")
+
+
 class HmacEduPlus2JwtVerifier:
     """本地测试/受控环境用的对称 key verifier；生产默认使用 OIDC/JWKS。"""
 
@@ -61,13 +76,14 @@ class HmacEduPlus2JwtVerifier:
                 issuer=self.issuer,
                 options={
                     "verify_aud": False,
+                    "verify_at_hash": False,
                     "require_exp": True,
                     "require_iat": True,
                     "require_iss": True,
                 },
             )
-        except JWTError:
-            raise PermissionError("EduPlus2 JWT verification failed") from None
+        except JWTError as error:
+            raise _jwt_error_permission(error) from None
         _require_claims(claims)
         return VerifiedEduPlus2Jwt(claims=claims, header=header, token_hash=_token_hash(token))
 
@@ -180,6 +196,13 @@ class EduPlus2OidcJwtVerifier:
         discovery = await self._load_discovery()
         if not kid or alg not in discovery["algorithms"]:
             raise PermissionError("EduPlus2 JWT algorithm is not allowed")
+        try:
+            unverified_claims = jwt.get_unverified_claims(token)
+        except JWTError:
+            raise PermissionError("EduPlus2 JWT verification failed") from None
+        token_issuer = str(unverified_claims.get("iss") or "").rstrip("/")
+        if token_issuer and token_issuer != discovery["issuer"]:
+            raise PermissionError("EduPlus2 token issuer mismatch")
         key = await self._key_for(kid)
         try:
             claims = jwt.decode(
@@ -189,12 +212,13 @@ class EduPlus2OidcJwtVerifier:
                 issuer=discovery["issuer"],
                 options={
                     "verify_aud": False,
+                    "verify_at_hash": False,
                     "require_exp": True,
                     "require_iat": True,
                     "require_iss": True,
                 },
             )
-        except JWTError:
+        except JWTError as error:
             # kid 轮换期间刷新一次 JWKS；仍失败则 fail closed。
             key = (await self._load_jwks(force=True)).get(kid) or key
             try:
@@ -203,15 +227,16 @@ class EduPlus2OidcJwtVerifier:
                     key,
                     algorithms=[alg],
                     issuer=discovery["issuer"],
-                    options={
-                        "verify_aud": False,
-                        "require_exp": True,
-                        "require_iat": True,
-                        "require_iss": True,
-                    },
+                        options={
+                            "verify_aud": False,
+                            "verify_at_hash": False,
+                            "require_exp": True,
+                            "require_iat": True,
+                            "require_iss": True,
+                        },
                 )
-            except JWTError:
-                raise PermissionError("EduPlus2 JWT verification failed") from None
+            except JWTError as retry_error:
+                raise _jwt_error_permission(retry_error) from None
         _require_claims(claims)
         return VerifiedEduPlus2Jwt(claims=claims, header=header, token_hash=_token_hash(token))
 

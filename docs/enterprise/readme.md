@@ -14,7 +14,7 @@
 - **执行粒度**：M1=A1/A2/A3，M2=B1/B2，M3=C1/C2；工作包不等于单独生产版本。
 - **并行准备**：K8s 集成环境、Woodpecker 流水线开发与 EduPlus2 注册/契约准备从 A1 起并行，不阻塞为单独过渡阶段。
 - **EduPlus2 身份边界**：DeepTutor 不提供普通用户注册；只有 TMS/OMS 需要 DeepTutor 交互式登录。第三方应用已完成登录时，将 EduPlus2 user JWT 传给 DeepTutor 换取短期 `dt_token`，由 active client/app 注册、租户/app 状态、owner/grant 和能力策略共同授权。
-- **EduPlus2 当前实现状态**：[`enterprise-eduplus2-federated-access`](../../openspec/specs/enterprise-eduplus2-federated-access/spec.md) 已归档为正式 OpenSpec spec；当前 repo 已实现 API-only exchange、OIDC/JWKS、resolve/allowlist、短期 `dt_token`、WS `auth_refresh` 通用 seam、owner/resource guard、可选 profile/permission/webhook 增强和独立审计查询/导出 UI。TMS/OMS、Handoff/OIDC callback、在线 client 治理和实时撤权 SLA 仍不在该切片内；打开/refresh/周期合法性校验由前置应用负责。
+- **EduPlus2 当前实现状态**：[`enterprise-eduplus2-federated-access`](../../openspec/specs/enterprise-eduplus2-federated-access/spec.md) 已归档为正式 OpenSpec spec；当前 repo 已实现 API-only exchange、OIDC/JWKS、resolve/allowlist、短期 `dt_token`、WS `auth_refresh` 通用 seam、owner/resource guard、可选 profile/permission/webhook 增强和独立审计查询/导出 UI。P1 前置应用联调契约见 [EduPlus2 前置应用接入联调契约](eduplus2-fronting-app-integration-contract.md)。TMS/OMS、Handoff/OIDC callback、在线 client 治理和实时撤权 SLA 仍不在该切片内；打开/refresh/周期合法性校验由前置应用负责。
 - **自动交付必需**：Woodpecker 是 M1/A3 必交付子环节；构建、镜像推送、迁移、K8s 部署、业务 smoke 与受控回退实跑后才通过 G1，后续阶段复用。
 - **K12 容量基线（2026-09-14）**：用户委托评估，首期目标为 3,000 学生/约 8,000 三方账号、600 同时在线与一学年存量，另规划 30,000 学生扩容档；详见 [容量假设、数据量和验收目标](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/capacity-assessment.md)。P1 隔离容量与重度尾部验收已按该 change 的 1.47 记录；这仍不代表 P2、正式 HA 或真实供应商并发已经通过。
 - **可用性独立**：H 工作线按容量/可用性目标触发 G-H，不因第二个租户强制第二个 Pod；未通过协调验收不得启用多执行者。
@@ -90,6 +90,7 @@ OpenSpec 正式 specs 与 [02 执行总纲](02-rollout-testing-and-migration.md)
 | [11-api-and-entrypoints.md](11-api-and-entrypoints.md) | M2 / B1–B2：入口联调 | HTTP/WS/SDK、token exchange、TMS/OMS client API 与外部能力入口契约 |
 | [12-platform-operations-admin.md](12-platform-operations-admin.md) | M2 / B2 → M3 / C1–C2：管理界面 | TMS 单租户 client/app 管理、OMS 归口、权限矩阵、迁移判断与验收 |
 | [13-deployment-and-upstream-sync.md](13-deployment-and-upstream-sync.md) | 贯穿全程：扩展与持续维护 | 配置/插件/外壳可行性、企业包与通用补丁边界、组合制品及 upstream 回归 |
+| [eduplus2-fronting-app-integration-contract.md](eduplus2-fronting-app-integration-contract.md) | P1：前置应用接入联调 | exchange、HTTP/SDK、WS refresh、错误矩阵、配置矩阵、审计排障与 smoke 命令；不代表 TMS/OMS 或生产上线完成 |
 | [eduplus2-oauth-client-resolve-api-proposal.md](eduplus2-oauth-client-resolve-api-proposal.md) | 可转发给 EduPlus2 团队的接口需求 | 通用 `POST /api/v1/open/oauth-clients/resolve` 设计；按 `client_id` 解析 app/tenant/status/policy，不含 DeepTutor 定制语义 |
 
 跨系统职责统一见 [06 责任矩阵](06-postgresql-native-store-plan.md#跨系统责任矩阵)：任务/取消、模型/预算、解析/S3 派生物、KB/实例开通、外部资格/本地启停、成员身份/私有资源授权。执行细节分别见 [07 模型](07-resource-isolation.md#聊天模型与检索模型分离)、[03 状态来源](03-tenant-scope-schema.md#租户状态的独立来源)和 [09 权限](09-authorization-and-grants.md#权限检查策略)。

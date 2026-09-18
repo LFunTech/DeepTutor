@@ -271,9 +271,7 @@ async def test_exchange_uses_authorization_bearer_azp_and_issues_short_dt_token(
     assert "Bearer" not in rendered
 
 
-async def test_exchange_rejects_invalid_jwt_and_inactive_registration(
-    enterprise_db, identity
-):
+async def test_exchange_rejects_invalid_jwt_and_inactive_registration(enterprise_db, identity):
     from deeptutor_enterprise.eduplus2.service import EduPlus2AccessService
     from deeptutor_enterprise.eduplus2.testing import StaticEduPlus2Resolver
 
@@ -749,6 +747,26 @@ async def test_oidc_jwks_verifier_accepts_rs256_and_rejects_missing_azp():
         assert verified.header["kid"] == "rs-kid-1"
         assert verified.token_hash and token not in verified.token_hash
 
+        id_token_with_at_hash = jwt.encode(
+            {
+                "iss": ISSUER,
+                "tid": "tenant-a",
+                "eui": "u-rsa",
+                "sub": "sub-rsa",
+                "azp": "client-a",
+                "aud": "client-a",
+                "iat": now,
+                "nbf": now - 1,
+                "exp": now + 600,
+                "at_hash": "provider-access-token-hash",
+            },
+            private_pem,
+            algorithm="RS256",
+            headers={"kid": "rs-kid-1"},
+        )
+        verified_id_token = await verifier.verify(id_token_with_at_hash)
+        assert verified_id_token.claims["at_hash"] == "provider-access-token-hash"
+
         missing_azp = jwt.encode(
             {
                 "iss": ISSUER,
@@ -764,6 +782,40 @@ async def test_oidc_jwks_verifier_accepts_rs256_and_rejects_missing_azp():
         )
         with pytest.raises(PermissionError, match="required"):
             await verifier.verify(missing_azp)
+
+        wrong_issuer = jwt.encode(
+            {
+                "iss": ISSUER + "/other",
+                "tid": "tenant-a",
+                "eui": "u-rsa",
+                "sub": "sub-rsa",
+                "azp": "client-a",
+                "iat": now,
+                "exp": now + 600,
+            },
+            private_pem,
+            algorithm="RS256",
+            headers={"kid": "rs-kid-1"},
+        )
+        with pytest.raises(PermissionError, match="token issuer mismatch"):
+            await verifier.verify(wrong_issuer)
+
+        expired = jwt.encode(
+            {
+                "iss": ISSUER,
+                "tid": "tenant-a",
+                "eui": "u-rsa",
+                "sub": "sub-rsa",
+                "azp": "client-a",
+                "iat": now - 1200,
+                "exp": now - 600,
+            },
+            private_pem,
+            algorithm="RS256",
+            headers={"kid": "rs-kid-1"},
+        )
+        with pytest.raises(PermissionError, match="expired"):
+            await verifier.verify(expired)
 
 
 async def test_resolve_client_uses_m2m_token_and_normalizes_nested_response():
@@ -1008,9 +1060,7 @@ async def test_permission_client_uses_m2m_token_and_normalizes_allowed_usages():
     assert permission["expires_at"] == "2026-09-17T12:00:00Z"
 
 
-async def test_exchange_auto_upserts_allowlisted_client_and_caches_resolve(
-    enterprise_db, identity
-):
+async def test_exchange_auto_upserts_allowlisted_client_and_caches_resolve(enterprise_db, identity):
     """防止 B1-lite 在没有 TMS/OMS 预注册页面时无法完成首次合法换票。"""
 
     from deeptutor_enterprise.eduplus2.service import EduPlus2AccessService
@@ -2134,3 +2184,59 @@ async def test_enterprise_wires_eduplus2_provider_from_env(monkeypatch):
     assert enterprise.eduplus2_revocation_cache_ttl_seconds == 20
     assert enterprise.eduplus2_audit_export_storage_ref == "s3://audit-bucket/eduplus2"
     assert enterprise.eduplus2_revocation_webhook_secret == "webhook-secret"
+
+
+async def test_enterprise_env_can_disable_optional_eduplus2_profile_permission_clients(
+    monkeypatch,
+):
+    """local/demo 环境可在保留 base URL 派生 resolve 的同时关闭可选复核客户端。"""
+
+    from deeptutor_enterprise.bootstrap import Enterprise
+    from deeptutor_enterprise.configuration import DeploymentConfig
+    from deeptutor_enterprise.eduplus2.client import (
+        EduPlus2OidcJwtVerifier,
+        EduPlus2ResolveClient,
+    )
+
+    for name, value in {
+        "DT_TEST_DB": "postgresql://dt_enterprise_app:pass@127.0.0.1:5432/deeptutor",
+        "DT_TEST_SIGN": "s" * 48,
+        "DT_TEST_EPOCH": "epoch-env",
+        "DT_TEST_MODEL": "model-secret",
+        "DT_EDUPLUS2_BASE_URL": "https://eduplus2.test",
+        "DT_EDUPLUS2_DISCOVERY_URL": ISSUER + "/.well-known/openid-configuration",
+        "DT_EDUPLUS2_TOKEN_ENDPOINT": ISSUER + "/protocol/openid-connect/token",
+        "DT_EDUPLUS2_CLIENT_ID": "m2m-client",
+        "DT_EDUPLUS2_CLIENT_SECRET_REF": "env:DT_EDUPLUS2_CLIENT_SECRET",
+        "DT_EDUPLUS2_CLIENT_SECRET": "m2m-secret",
+        "DT_EDUPLUS2_PROFILE_URL": "off",
+        "DT_EDUPLUS2_PERMISSION_URL": "off",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    deployment = DeploymentConfig(
+        version=1,
+        tenant_id=uuid.uuid4(),
+        resource="env-disable-optional-test",
+        database_secret="env:DT_TEST_DB",
+        signing_secret="env:DT_TEST_SIGN",
+        auth_epoch_secret="env:DT_TEST_EPOCH",
+        origins=("https://school.example",),
+        models=(
+            {
+                "profile_id": "chat",
+                "model_id": "primary",
+                "model": "some-model",
+                "base_url": "https://model.example/v1",
+                "secret": "env:DT_TEST_MODEL",
+                "allowed_roles": ("user", "tenant_admin"),
+            },
+        ),
+    )
+
+    enterprise = Enterprise(deployment)
+
+    assert isinstance(enterprise.eduplus2_resolver, EduPlus2ResolveClient)
+    assert isinstance(enterprise.eduplus2_verifier, EduPlus2OidcJwtVerifier)
+    assert enterprise.eduplus2_profile_client is None
+    assert enterprise.eduplus2_permission_client is None

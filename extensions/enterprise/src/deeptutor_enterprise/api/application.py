@@ -27,6 +27,32 @@ from ..identity.service import LoginRateLimited
 from ..scope import TenantScope
 
 
+def bearer_from_headers_or_cookie(
+    headers,
+    *,
+    cookies,
+    scope_type: str,
+    query=None,
+) -> tuple[str, bool]:
+    """从安全载体提取 bearer token；禁止 query token。
+
+    浏览器 WebSocket 不能设置 Authorization header。demo 页面使用
+    ``Sec-WebSocket-Protocol: deeptutor-token, <jwt>`` 传入内存态 token；
+    token 不进入 URL/query/hash，也不写 cookie/localStorage。
+    """
+
+    bearer = headers.get("authorization", "")
+    if bearer.lower().startswith("bearer "):
+        return bearer[7:], True
+    if scope_type == "websocket":
+        raw_protocols = str(headers.get("sec-websocket-protocol", "") or "")
+        protocols = [item.strip() for item in raw_protocols.split(",") if item.strip()]
+        for index, item in enumerate(protocols[:-1]):
+            if item == "deeptutor-token":
+                return protocols[index + 1], True
+    return cookies.get("dt_token", ""), False
+
+
 class AuthenticationMiddleware:
     def __init__(self, app, *, enterprise):
         self.app = app
@@ -40,14 +66,21 @@ class AuthenticationMiddleware:
         headers = Headers(scope=scope)
         path = scope.get("path", "")
         origin = headers.get("origin")
-        bearer = headers.get("authorization", "")
-        uses_bearer = bearer.lower().startswith("bearer ")
-        token = bearer[7:] if uses_bearer else connection.cookies.get("dt_token")
+        token, uses_bearer = bearer_from_headers_or_cookie(
+            headers,
+            cookies=connection.cookies,
+            scope_type=scope["type"],
+            query=connection.query_params,
+        )
         anonymous = scope["type"] == "http" and path in (
             "/api/auth/login",
             "/api/auth/status",
             "/api/v1/auth/eduplus2/exchange",
             "/api/v1/auth/eduplus2/revocations",
+            "/api/v1/auth/eduplus2/demo/start",
+            "/api/v1/auth/eduplus2/demo/callback",
+            "/api/v1/auth/eduplus2/demo/result",
+            "/api/v1/auth/eduplus2/demo/refresh",
         )
         status = None
         identity = None
@@ -324,6 +357,8 @@ def create_application(enterprise):
     from deeptutor.api.application import create_api_application
     from deeptutor.api.routers import sessions, unified_ws
 
+    from ..eduplus2 import fronting_demo
+
     auth = APIRouter()
     attrs = {"httponly": True, "secure": True, "samesite": "lax", "path": "/"}
 
@@ -397,6 +432,27 @@ def create_application(enterprise):
             return JSONResponse({"detail": "Invalid request"}, status_code=422)
         except RuntimeError:
             return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+
+    @eduplus2_auth.get("/auth/eduplus2/demo/start", name="eduplus2_demo_start")
+    async def eduplus2_demo_start(request: Request):
+        try:
+            return fronting_demo.create_authorization_redirect(request)
+        except fronting_demo.FrontingDemoConfigurationError as exc:
+            return fronting_demo.configuration_error_response(exc)
+        except RuntimeError:
+            return JSONResponse({"detail": "EduPlus2 demo is not configured"}, status_code=503)
+
+    @eduplus2_auth.get("/auth/eduplus2/demo/callback", name="eduplus2_demo_callback")
+    async def eduplus2_demo_callback(request: Request):
+        return await fronting_demo.handle_callback(request, enterprise)
+
+    @eduplus2_auth.get("/auth/eduplus2/demo/result")
+    async def eduplus2_demo_result(request: Request):
+        return fronting_demo.result_response(request)
+
+    @eduplus2_auth.post("/auth/eduplus2/demo/refresh")
+    async def eduplus2_demo_refresh(request: Request):
+        return await fronting_demo.refresh_response(request, enterprise)
 
     @eduplus2_audit.get("/events")
     async def eduplus2_audit_events(request: Request):

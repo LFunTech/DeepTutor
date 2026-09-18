@@ -1,0 +1,4 @@
+# DeepTutor local HTTPS routes.
+# domain	path	proto	upstream
+deeptutor.lfun.pub	/	http	127.0.0.1:3782
+deeptutor.lfun.pub	/ws	ws	127.0.0.1:8001

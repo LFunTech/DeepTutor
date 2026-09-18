@@ -103,6 +103,19 @@ def test_ws_versions_heartbeats_active_state_and_command_ack(protocol_client) ->
     assert turns.cancelled == [("turn-1", "cancel-1")]
 
 
+def test_ws_echoes_token_carrier_subprotocol_for_browser_handshake(protocol_client) -> None:
+    """浏览器提供子协议时，服务端必须回选一个子协议，否则 Chrome 会判定握手失败。"""
+
+    client, _turns = protocol_client
+    with client.websocket_connect(
+        "/ws",
+        subprotocols=["deeptutor-token", "header.payload.signature"],
+    ) as socket:
+        assert socket.accepted_subprotocol == "deeptutor-token"
+        socket.send_json({"type": "ping", "protocol_version": "2.0"})
+        assert socket.receive_json() == {"type": "pong", "protocol_version": "2.0"}
+
+
 def test_ws_requires_command_ids_for_retryable_mutations(protocol_client) -> None:
     client, turns = protocol_client
     with client.websocket_connect("/ws") as socket:
