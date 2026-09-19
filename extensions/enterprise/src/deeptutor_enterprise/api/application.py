@@ -340,6 +340,30 @@ class SocketAuthentication:
             "session_id": str(new_claims.get("sid") or ""),
         }
 
+    async def validate_start_turn(self, ws, payload):
+        if self.enterprise.deployment.production is None:
+            return
+        if payload.get("attachments"):
+            raise ValueError(
+                "production websocket input accepts DeepTutor resource references only"
+            )
+        resource_ids = [str(item or "").strip() for item in payload.get("resource_ids") or []]
+        if not resource_ids:
+            return
+        from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+        store = self.enterprise.store_provider.get()
+        resources = PostgresObjectResourceStore(store, self.enterprise.object_store)
+        for resource_id in resource_ids:
+            try:
+                await resources.verify_ready_reference(
+                    resource_id=resource_id,
+                    session_id=str(payload.get("session_id") or ""),
+                    purpose="chat_turn",
+                )
+            except (FileNotFoundError, PermissionError, RuntimeError, ValueError, OSError) as exc:
+                raise ValueError("invalid resource reference") from exc
+
     @staticmethod
     def error_message(error):
         if isinstance(error, LookupError):
@@ -355,7 +379,7 @@ class SocketAuthentication:
 
 def create_application(enterprise):
     from deeptutor.api.application import create_api_application
-    from deeptutor.api.routers import sessions, unified_ws
+    from deeptutor.api.routers import resources, sessions, unified_ws
 
     from ..eduplus2 import fronting_demo
 
@@ -582,6 +606,8 @@ def create_application(enterprise):
             (eduplus2_auth, "/api/v1"),
             (eduplus2_audit, "/api/v1/enterprise/audit/eduplus2"),
             (session_routes, "/api/sessions"),
+            (resources.api_router, "/api/v1/resources"),
+            (resources.router, "/files/resources"),
             (unified_ws.router, "/api/v1"),
         ),
         lifespan=lifespan,

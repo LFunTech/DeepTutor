@@ -132,6 +132,9 @@ class TurnRequest(BaseModel):
     reading_references: list[ReadingReference] = Field(default_factory=list)
     memory_references: list[MemoryReference] = Field(default_factory=list)
     attachments: list[OutgoingAttachment] = Field(default_factory=list)
+    # DeepTutor-issued ObjectStore resource references. Upload bytes travel via
+    # pre-signed HTTP URLs; turn transports only carry these stable references.
+    resource_ids: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
 
     persona: str | None = None

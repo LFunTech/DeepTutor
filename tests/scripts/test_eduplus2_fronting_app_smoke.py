@@ -100,6 +100,23 @@ def test_dry_run_outputs_redacted_summary_without_secret_values(tmp_path: Path):
     assert payload["steps"]["configuration"]["secret_values_printed"] is False
 
 
+
+def test_dry_run_includes_resource_upload_and_ws_reference_contract(tmp_path: Path):
+    """Demo smoke 必须体现 pre-signed upload 与 WS resource_ids 边界。"""
+
+    token = _jwt(exp=int(time.time()) + 600)
+
+    result = _run(tmp_path, token=token)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    resource_step = payload["steps"]["resource_upload_reference"]
+    assert resource_step["status"] == "delegated"
+    assert resource_step["upload_channel"] == "http_presigned_upload"
+    assert resource_step["turn_channel"] == "http_or_ws_start_turn_resource_ids"
+    assert resource_step["websocket_upload_payload_allowed"] is False
+
+
 def test_dry_run_fails_closed_for_missing_token_without_leaking_secret(tmp_path: Path):
     """防止 token-test.secrets 缺 JWT 时 smoke 继续执行或泄漏 secret。"""
 

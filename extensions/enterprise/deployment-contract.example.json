@@ -1,0 +1,45 @@
+{
+  "x_open_spec_note": "example-only-not-a3-evidence",
+  "contract_version": "2026-09-g1",
+  "environment": "test",
+  "tenant_mode": "single-tenant",
+  "topology_source": "target-environment-contract",
+  "target_base_url": "https://deeptutor.example",
+  "woodpecker": {
+    "server_url": "https://woodpecker.example",
+    "server_version": "3.2.1",
+    "agent_version": "3.2.1",
+    "agent_backend": "kubernetes",
+    "protected_refs": [
+      "refs/heads/main",
+      "refs/tags/prod-*"
+    ],
+    "approval_gate": "protected-environment-approval",
+    "secret_boundary": "production-secrets-only-after-approval",
+    "registry": {
+      "repository": "registry.example/deeptutor/backend",
+      "credentials_ref": "woodpecker:registry-prod"
+    }
+  },
+  "kubernetes": {
+    "namespace": "deeptutor-m1-g1",
+    "ingress_host": "deeptutor.example",
+    "tls_secret_ref": "k8s:deeptutor-tls",
+    "secret_store_ref": "external-secret:platform",
+    "service_account": "deeptutor-runtime",
+    "network_policy": "default-deny-with-egress-allowlist",
+    "release_lock_ref": "postgres:enterprise.release_locks/m1-g1",
+    "backend_executor_replicas": 1,
+    "rollout_strategy": "single-executor-drain"
+  },
+  "rollback": {
+    "strategy": "previous-digest-if-compatible",
+    "previous_release_ref": "object-store:release-evidence/latest-successful",
+    "requires_smoke_after_rollback": true
+  },
+  "evidence_store": {
+    "kind": "object-store",
+    "location_ref": "object-store:deeptutor-release-evidence/m1-g1",
+    "retention_days": 180
+  }
+}

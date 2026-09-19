@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildAuthRefreshCommand,
   buildDemoWebSocketUrl,
+  buildDemoStartTurnCommand,
   buildEduPlus2DemoStartUrl,
   buildWebSocketProtocols,
   shouldRefreshToken,
@@ -57,6 +58,22 @@ describe("EduPlus2 fronting auth demo page", () => {
     });
   });
 
+
+  it("builds WebSocket start_turn with resource references instead of upload payload", () => {
+    const command = buildDemoStartTurnCommand(" 请分析附件 ", [" res_img_1 ", "", "res_audio_2"]);
+
+    expect(command).toMatchObject({
+      type: "start_turn",
+      protocol_version: "2.0",
+      content: "请分析附件",
+      capability: "chat",
+      resource_ids: ["res_img_1", "res_audio_2"],
+      attachments: [],
+    });
+    expect(JSON.stringify(command)).not.toContain("base64");
+    expect(JSON.stringify(command)).not.toContain("http://third-party");
+  });
+
   it("refreshes when the token is expired or inside the refresh leeway", () => {
     expect(shouldRefreshToken({ nowSeconds: 100, expiresAt: 100, leewaySeconds: 30 })).toBe(
       true,
@@ -78,6 +95,8 @@ describe("EduPlus2 fronting auth demo page", () => {
       screen.getByRole("heading", { name: /EduPlus2 统一认证前置应用 Demo/ }),
     ).toBeInTheDocument();
     expect(screen.getByText(/仅用于 local\/test 联调/)).toBeInTheDocument();
+    expect(screen.getAllByText(/pre-signed upload/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/prompt \+ resource_ids/).length).toBeGreaterThan(0);
 
     const originalLocation = window.location;
     const assign = vi.fn();

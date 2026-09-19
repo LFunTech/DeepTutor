@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AuthStatusPayload,
   buildAuthRefreshCommand,
+  buildDemoStartTurnCommand,
   buildDemoWebSocketUrl,
   buildEduPlus2DemoStartUrl,
   buildWebSocketProtocols,
@@ -75,6 +76,23 @@ function webSocketUrl(): string {
   return buildDemoWebSocketUrl(window.location);
 }
 
+
+function withResourceUploadStep(steps: DemoStep[]): DemoStep[] {
+  if (steps.some((step) => step.id === "resource_upload")) return steps;
+  const next: DemoStep[] = [];
+  for (const step of steps) {
+    next.push(step);
+    if (step.id === "api_probe") {
+      next.push({
+        id: "resource_upload",
+        label: "Resource Upload Reference",
+        status: "idle",
+      });
+    }
+  }
+  return next;
+}
+
 function formatDemoError(summary: Record<string, unknown>, fallback: string): string {
   const reason = String(summary.reason || fallback || "demo_result_failed");
   const detail = String(summary.detail || "");
@@ -94,6 +112,7 @@ export default function EduPlus2FrontingDemoPage() {
   const [dtToken, setDtToken] = useState("");
   const [refreshMessage, setRefreshMessage] = useState("等待 token 倒计时。");
   const [chatPrompt, setChatPrompt] = useState("请用一句话介绍 DeepTutor。");
+  const [resourceIdsInput, setResourceIdsInput] = useState("");
   const [wsState, setWsState] = useState<"idle" | "connecting" | "open" | "closed" | "failed">("idle");
   const [chatEvents, setChatEvents] = useState<string[]>([]);
   const [assistantText, setAssistantText] = useState("");
@@ -206,6 +225,11 @@ export default function EduPlus2FrontingDemoPage() {
           status: "skipped",
         },
         { id: "api_probe", label: "DeepTutor API Probe", status: "skipped" },
+        {
+          id: "resource_upload",
+          label: "Resource Upload Reference",
+          status: "skipped",
+        },
         { id: "ws_chat", label: "DeepTutor WebSocket Chat", status: "skipped" },
         { id: "token_refresh", label: "Token Refresh", status: "skipped" },
       ]);
@@ -229,6 +253,11 @@ export default function EduPlus2FrontingDemoPage() {
         status: "pending",
       },
       { id: "api_probe", label: "DeepTutor API Probe", status: "idle" },
+      {
+        id: "resource_upload",
+        label: "Resource Upload Reference",
+        status: "idle",
+      },
       { id: "ws_chat", label: "DeepTutor WebSocket Chat", status: "idle" },
       { id: "token_refresh", label: "Token Refresh", status: "idle" },
     ]);
@@ -240,7 +269,9 @@ export default function EduPlus2FrontingDemoPage() {
         );
         const payload = await readJson<DemoResultPayload>(response);
         if (cancelled) return;
-        const nextSteps = payload.steps?.length ? payload.steps : defaultDemoSteps();
+        const nextSteps = withResourceUploadStep(
+          payload.steps?.length ? payload.steps : defaultDemoSteps(),
+        );
         setSteps(nextSteps);
         setRequestId(payload.request_id || "");
         setSummary(payload.summary ?? {});
@@ -314,18 +345,7 @@ export default function EduPlus2FrontingDemoPage() {
       setWsState("open");
       setChatEvents((prev) => [...prev, "ws.open"]);
       socket.send(
-        JSON.stringify({
-          type: "start_turn",
-          protocol_version: "2.0",
-          content: prompt,
-          capability: "chat",
-          session_id: null,
-          tools: null,
-          knowledge_bases: [],
-          config: {},
-          attachments: [],
-          language: "zh",
-        }),
+        JSON.stringify(buildDemoStartTurnCommand(prompt, resourceIdsInput)),
       );
     });
     socket.addEventListener("message", (event) => {
@@ -380,7 +400,8 @@ export default function EduPlus2FrontingDemoPage() {
             <p className="mt-5 max-w-3xl text-sm leading-7 text-slate-600 dark:text-slate-300">
               点击后会跳转到 EduPlus2 authorization endpoint。回跳时由 DeepTutor demo
               后端换取 EduPlus2 user JWT，复用现有 exchange，再用 dt_token 调用
-              DeepTutor API 做真实探针，并通过 /api/v1/ws 发起一轮可视化对话。
+              DeepTutor API 做真实探针，并通过 /api/v1/ws 发起一轮可视化对话；资源类输入先走
+              pre-signed upload，WebSocket 只提交 prompt + resource_ids。
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-3">
               <button
@@ -436,7 +457,7 @@ export default function EduPlus2FrontingDemoPage() {
           </div>
         ) : null}
 
-        <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-7">
           {steps.map((step, index) => (
             <article
               key={step.id}
@@ -519,6 +540,36 @@ export default function EduPlus2FrontingDemoPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section className="rounded-[2rem] border border-cyan-200 bg-cyan-50/85 p-6 shadow-sm backdrop-blur dark:border-cyan-900/60 dark:bg-cyan-950/30">
+          <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.24em] text-cyan-700 dark:text-cyan-200">
+                Resource pre-upload contract
+              </p>
+              <h2 className="mt-3 text-2xl font-black text-slate-950 dark:text-white">
+                pre-signed upload → prompt + resource_ids
+              </h2>
+              <p className="mt-3 text-sm leading-7 text-slate-700 dark:text-cyan-50/85">
+                Demo 不通过 WebSocket 传文件。第三方应用先向 DeepTutor 申请 pre-signed upload URL，
+                直传 S3-compatible ObjectStore；上传完成后，HTTP 或 WebSocket turn 只携带
+                prompt + resource_ids。DeepTutor 后端再按 owner / tenant / session / checksum 校验资源。
+              </p>
+            </div>
+            <label className="block text-xs font-black uppercase tracking-[0.18em] text-cyan-800 dark:text-cyan-100">
+              已完成上传的 resource_ids（可选，逗号或换行分隔）
+              <textarea
+                className="mt-2 min-h-24 w-full rounded-3xl border border-cyan-200 bg-white p-4 font-mono text-xs normal-case tracking-normal text-slate-950 outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100 dark:border-cyan-900 dark:bg-slate-950 dark:text-cyan-50 dark:focus:ring-cyan-950"
+                placeholder="res_img_001, res_audio_002"
+                value={resourceIdsInput}
+                onChange={(event) => setResourceIdsInput(event.target.value)}
+              />
+              <span className="mt-2 block text-[11px] leading-5 text-cyan-800/80 dark:text-cyan-100/80">
+                当前 demo 只提交 DeepTutor 已发行的资源引用；不要粘贴 URL、base64、signed upload URL 或 S3 key。
+              </span>
+            </label>
           </div>
         </section>
 

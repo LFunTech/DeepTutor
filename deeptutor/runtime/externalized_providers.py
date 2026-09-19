@@ -17,7 +17,7 @@ from pathlib import Path
 import re
 import time
 from typing import Any, Mapping, Protocol
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -93,6 +93,13 @@ class ObjectBlobRef:
     size_bytes: int
     sha256: str
     content_type: str = "application/octet-stream"
+
+
+@dataclass(frozen=True)
+class PresignedUpload:
+    url: str
+    headers: dict[str, str]
+    expires_seconds: int
 
 
 @dataclass(frozen=True)
@@ -340,6 +347,48 @@ class S3CompatibleObjectStore:
     def delete(self, ref: ObjectBlobRef) -> None:
         self._request("DELETE", self._safe_key(ref.key), b"")
 
+    def presign_put(
+        self,
+        key: str,
+        *,
+        expires_seconds: int,
+        content_type: str = "application/octet-stream",
+        size_bytes: int | None = None,
+        expected_sha256: str | None = None,
+    ) -> PresignedUpload:
+        safe_key = self._safe_key(key)
+        expires = max(1, min(int(expires_seconds), 3600))
+        headers = {"content-type": str(content_type or "application/octet-stream")}
+        if size_bytes is not None:
+            headers["content-length"] = str(max(0, int(size_bytes)))
+        if expected_sha256:
+            headers["x-amz-meta-sha256"] = str(expected_sha256)
+        if self.config.server_side_encryption:
+            headers["x-amz-server-side-encryption"] = self.config.server_side_encryption
+        url = self._presigned_url(
+            "PUT",
+            safe_key,
+            self._url_for_key(safe_key),
+            self._canonical_uri(safe_key),
+            headers=headers,
+            expires_seconds=expires,
+        )
+        return PresignedUpload(url=url, headers=headers, expires_seconds=expires)
+
+    def head_object(self, key: str) -> ObjectBlobRef:
+        safe_key = self._safe_key(key)
+        response = self._request("HEAD", safe_key, b"")
+        try:
+            size = int(response.headers.get("content-length", "-1"))
+        except ValueError:
+            size = -1
+        return ObjectBlobRef(
+            key=safe_key,
+            size_bytes=size,
+            sha256=response.headers.get("x-amz-meta-sha256", ""),
+            content_type=response.headers.get("content-type", "application/octet-stream"),
+        )
+
     def check_bucket(self) -> ObjectStoreStatus:
         try:
             self._request_bucket("HEAD")
@@ -469,6 +518,71 @@ class S3CompatibleObjectStore:
                 raise ObjectStoreError("objectstore_credentials_missing")
             self._credentials = _S3Credentials(access, secret, token)
         return self._credentials
+
+    def _presigned_url(
+        self,
+        method: str,
+        key: str,
+        url_value: str,
+        canonical_uri: str,
+        *,
+        headers: dict[str, str],
+        expires_seconds: int,
+    ) -> str:
+        credentials = self._credentials_for_request()
+        now = datetime.now(UTC)
+        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+        date_stamp = now.strftime("%Y%m%d")
+        url = httpx.URL(url_value)
+        signing_headers = {k.lower(): str(v).strip() for k, v in headers.items()}
+        signing_headers["host"] = (
+            url.netloc.decode() if isinstance(url.netloc, bytes) else url.netloc
+        )
+        signed_headers = ";".join(sorted(signing_headers))
+        scope = f"{date_stamp}/{self.config.region}/s3/aws4_request"
+        query = {
+            "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+            "X-Amz-Credential": f"{credentials.access_key}/{scope}",
+            "X-Amz-Date": amz_date,
+            "X-Amz-Expires": str(expires_seconds),
+            "X-Amz-SignedHeaders": signed_headers,
+        }
+        if credentials.session_token:
+            query["X-Amz-Security-Token"] = credentials.session_token
+        canonical_query = urlencode(sorted(query.items()), quote_via=quote, safe="")
+        canonical_headers = "".join(
+            f"{name}:{signing_headers[name]}\n" for name in sorted(signing_headers)
+        )
+        canonical_request = "\n".join(
+            [
+                method,
+                canonical_uri,
+                canonical_query,
+                canonical_headers,
+                signed_headers,
+                "UNSIGNED-PAYLOAD",
+            ]
+        )
+        string_to_sign = "\n".join(
+            [
+                "AWS4-HMAC-SHA256",
+                amz_date,
+                scope,
+                hashlib.sha256(canonical_request.encode()).hexdigest(),
+            ]
+        )
+        signature = hmac.new(
+            self._signing_key(credentials.secret_key, date_stamp, self.config.region),
+            string_to_sign.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        final_query = urlencode(
+            sorted({**query, "X-Amz-Signature": signature}.items()),
+            quote_via=quote,
+            safe="",
+        )
+        parts = urlsplit(url_value)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, final_query, ""))
 
     def _signed_headers_for_url(
         self,

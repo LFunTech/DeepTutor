@@ -403,3 +403,117 @@ async def test_object_resource_bulk_and_large_payload_lifecycle(
     assert (await resources.cleanup_pending(resource_kind="generated_artifact"))["pending"] == 0
     with pytest.raises(FileNotFoundError):
         await resources.read(batch[0], filename="artifact-0.txt")
+
+
+async def test_local_minio_presigned_upload_complete_read_and_delete(
+    pg_session_store_factory, business_actors, monkeypatch
+):
+    """本地 MinIO 可用时，验证真实 pre-signed PUT → complete → read → delete 链路。"""
+
+    import hashlib
+    import os
+    from pathlib import Path
+
+    import httpx
+
+    if os.environ.get("DEEPTUTOR_RUN_LOCAL_MINIO_TESTS") != "1":
+        pytest.skip("set DEEPTUTOR_RUN_LOCAL_MINIO_TESTS=1 to run local MinIO integration")
+
+    env_path = Path("/opt/data/minio/config/minio.env")
+    if not env_path.exists():
+        pytest.skip("local MinIO env file is unavailable")
+
+    local_env: dict[str, str] = {}
+    for raw in env_path.read_text(encoding="utf8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        local_env[name.strip()] = value.strip().strip('"').strip("'")
+    access = local_env.get("MINIO_ROOT_USER", "")
+    secret = local_env.get("MINIO_ROOT_PASSWORD", "")
+    region = local_env.get("MINIO_REGION_NAME", "us-east-1")
+    if not access or not secret:
+        pytest.skip("local MinIO credentials are unavailable")
+
+    monkeypatch.setenv("DEEPLT_LOCAL_MINIO_ACCESS", access)
+    monkeypatch.setenv("DEEPLT_LOCAL_MINIO_SECRET", secret)
+
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+    from deeptutor.runtime.externalized_providers import (
+        EnvSecretResolver,
+        ObjectStoreError,
+        S3CompatibleObjectStore,
+        S3ObjectStoreConfig,
+        SecretRef,
+    )
+
+    object_store = S3CompatibleObjectStore(
+        S3ObjectStoreConfig(
+            endpoint="http://127.0.0.1:9000",
+            region=region,
+            bucket="local-debug",
+            access_key_ref=SecretRef.parse("env:DEEPLT_LOCAL_MINIO_ACCESS"),
+            secret_key_ref=SecretRef.parse("env:DEEPLT_LOCAL_MINIO_SECRET"),
+            path_style=True,
+            verify_tls=False,
+        ),
+        secret_resolver=EnvSecretResolver(),
+    )
+    status = object_store.check_bucket()
+    if not status.available:
+        pytest.skip(f"local MinIO bucket local-debug unavailable: {status.code}")
+
+    actor = business_actors.tenants[0].admin
+    store = pg_session_store_factory(actor)
+    resources = PostgresObjectResourceStore(store, object_store)
+    payload = b"local-minio-presigned-upload-smoke"
+    digest = hashlib.sha256(payload).hexdigest()
+    session = await store.create_session(title="local minio resource smoke")
+    intent = await resources.create_upload_intent(
+        modality="image",
+        mime_type="image/png",
+        size_bytes=len(payload),
+        sha256=digest,
+        purpose="chat_turn",
+        session_id=session["id"],
+        filename="diagram.png",
+        resource_kind="turn_input",
+        expires_seconds=300,
+    )
+    assert intent["resource_id"].startswith("res_")
+    assert "object_key" not in intent
+
+    upload = httpx.put(
+        intent["upload_url"],
+        content=payload,
+        headers=intent["headers"],
+        timeout=10,
+    )
+    assert upload.status_code in (200, 204), upload.text
+
+    handle = await resources.complete_upload_intent(resource_id=intent["resource_id"])
+    assert handle.state == "ready"
+    assert handle.sha256 == digest
+    assert await resources.read(handle, filename="diagram.png") == payload
+    await resources.verify_ready_reference(
+        resource_id=intent["resource_id"],
+        session_id=session["id"],
+        purpose="chat_turn",
+    )
+
+    foreign = PostgresObjectResourceStore(
+        pg_session_store_factory(business_actors.tenants[0].owners[1]),
+        object_store,
+    )
+    with pytest.raises(FileNotFoundError):
+        await foreign.verify_ready_reference(
+            resource_id=intent["resource_id"],
+            session_id=session["id"],
+            purpose="chat_turn",
+        )
+
+    cleanup = await resources.delete(handle)
+    assert cleanup["pending"] == 0
+    with pytest.raises((FileNotFoundError, ObjectStoreError)):
+        await resources.read(handle, filename="diagram.png")

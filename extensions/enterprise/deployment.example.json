@@ -6,7 +6,9 @@
   "signing_secret": "env:DT_SIGNING_KEY",
   "auth_epoch_secret": "env:DT_AUTH_EPOCH",
   "bootstrap_secret": "env:DT_BOOTSTRAP_SECRET",
-  "origins": ["https://school.example"],
+  "origins": [
+    "https://school.example"
+  ],
   "models": [
     {
       "profile_id": "chat",
@@ -15,7 +17,10 @@
       "base_url": "https://model.example/v1",
       "secret": "env:DT_MODEL_API_KEY",
       "provider": "openai",
-      "allowed_roles": ["user", "tenant_admin"],
+      "allowed_roles": [
+        "user",
+        "tenant_admin"
+      ],
       "allowed_user_ids": [],
       "max_tokens": 4096,
       "context_window": 32768,
@@ -24,10 +29,55 @@
       "max_retries": 0
     }
   ],
-  "allowed_tools": ["ask_user"],
+  "allowed_tools": [
+    "ask_user"
+  ],
   "token_seconds": 3600,
   "backend_workers": 1,
   "language": "zh",
   "max_rounds": 8,
-  "maintenance": false
+  "maintenance": false,
+  "object_store": {
+    "provider": "s3-compatible",
+    "endpoint": "https://objects.example.internal",
+    "bucket": "deeptutor-runtime",
+    "region": "us-east-1",
+    "access_key_secret": "env:DT_OBJECTSTORE_ACCESS_KEY",
+    "secret_key_secret": "env:DT_OBJECTSTORE_SECRET_KEY",
+    "prefix": "m1-g1",
+    "path_style": true
+  },
+  "settings_provider": {
+    "kind": "postgres"
+  },
+  "secret_provider": {
+    "kind": "external-secret",
+    "name": "platform-secret-store"
+  },
+  "lightrag": {
+    "endpoint": "https://lightrag.example.internal",
+    "api_secret": "env:DT_LIGHTRAG_API_KEY",
+    "workspace_binding": "m1-g1-fixed-workspace",
+    "index_version": "kb-v1",
+    "contract_version": "2026-09-g1"
+  },
+  "eduplus2": {
+    "base_url": "https://eduplus2.example.internal",
+    "client_id": "deeptutor-smoke",
+    "client_secret": "env:DT_EDUPLUS2_CLIENT_SECRET",
+    "allowed_clients_ref": "env:DT_EDUPLUS2_ALLOWED_CLIENTS"
+  },
+  "production": {
+    "runtime_mode": "production",
+    "local_authority_fallback": false,
+    "sqlite_fallback": false,
+    "pocketbase_fallback": false,
+    "required_readiness": [
+      "postgres",
+      "object_store",
+      "secret_provider",
+      "lightrag",
+      "eduplus2"
+    ]
+  }
 }

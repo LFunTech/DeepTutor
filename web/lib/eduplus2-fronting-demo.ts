@@ -17,6 +17,7 @@ export type DemoStep = {
     | "code_exchange"
     | "deeptutor_exchange"
     | "api_probe"
+    | "resource_upload"
     | "ws_chat"
     | "token_refresh";
   label: string;
@@ -51,6 +52,20 @@ export type AuthRefreshCommand = {
   protocol_version: "2.0";
 };
 
+export type DemoStartTurnCommand = {
+  type: "start_turn";
+  protocol_version: "2.0";
+  content: string;
+  capability: "chat";
+  session_id: null;
+  tools: null;
+  knowledge_bases: string[];
+  config: Record<string, never>;
+  attachments: [];
+  resource_ids: string[];
+  language: "zh";
+};
+
 export function buildEduPlus2DemoStartUrl(returnTo: string): string {
   const params = new URLSearchParams({ return_to: returnTo });
   return `${EDUPLUS2_FRONTING_DEMO_START_PATH}?${params.toString()}`;
@@ -79,6 +94,40 @@ export function buildAuthRefreshCommand(
     command_id: commandId,
     dt_token: token,
     protocol_version: "2.0",
+  };
+}
+
+export function normalizeDemoResourceIds(resourceIds: string[] | string): string[] {
+  const rawItems = Array.isArray(resourceIds)
+    ? resourceIds
+    : resourceIds.split(/[\s,]+/g);
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const item of rawItems) {
+    const value = String(item || "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
+export function buildDemoStartTurnCommand(
+  prompt: string,
+  resourceIds: string[] | string = [],
+): DemoStartTurnCommand {
+  return {
+    type: "start_turn",
+    protocol_version: "2.0",
+    content: prompt.trim(),
+    capability: "chat",
+    session_id: null,
+    tools: null,
+    knowledge_bases: [],
+    config: {},
+    attachments: [],
+    resource_ids: normalizeDemoResourceIds(resourceIds),
+    language: "zh",
   };
 }
 
@@ -141,6 +190,11 @@ export function defaultDemoSteps(): DemoStep[] {
       status: "idle",
     },
     { id: "api_probe", label: "DeepTutor API Probe", status: "idle" },
+    {
+      id: "resource_upload",
+      label: "Resource Upload Reference",
+      status: "idle",
+    },
     { id: "ws_chat", label: "DeepTutor WebSocket Chat", status: "idle" },
     { id: "token_refresh", label: "Token Refresh", status: "idle" },
   ];

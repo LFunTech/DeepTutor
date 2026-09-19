@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 from pathlib import Path
 import re
+import time
 from typing import Any
 from urllib.parse import quote
 from uuid import UUID, uuid4
@@ -46,6 +47,13 @@ def _coerce_filename(value: str) -> str:
     if not name or name in {".", ".."} or len(name) > 255:
         raise ValueError("invalid filename")
     return name
+
+
+def _coerce_sha256(value: str) -> str:
+    digest = str(value or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("sha256 is required")
+    return digest
 
 
 class PostgresObjectResourceStore:
@@ -124,6 +132,224 @@ class PostgresObjectResourceStore:
                 filename,
             )
         )
+
+    async def create_upload_intent(
+        self,
+        *,
+        modality: str,
+        mime_type: str,
+        size_bytes: int,
+        sha256: str,
+        purpose: str,
+        session_id: str = "",
+        filename: str = "upload.bin",
+        resource_kind: str = "turn_input",
+        expires_seconds: int = 900,
+    ) -> dict[str, Any]:
+        kind = _coerce_kind(resource_kind)
+        resource_id = "res_" + uuid4().hex
+        name = _coerce_filename(filename)
+        digest = _coerce_sha256(sha256)
+        size = int(size_bytes)
+        if size <= 0 or size > 512 * 1024 * 1024:
+            raise ValueError("invalid resource size")
+        content_type = str(mime_type or "application/octet-stream").strip()
+        if not content_type or len(content_type) > 255:
+            raise ValueError("invalid mime type")
+        object_id = uuid4()
+        object_key = self._object_key(kind, resource_id, object_id)
+        expires = max(60, min(int(expires_seconds), 3600))
+        presign = getattr(self.object_store, "presign_put", None)
+        if not callable(presign):
+            raise RuntimeError("object store does not support pre-signed uploads")
+        async with self.store.db.transaction(self.store.scope) as c:
+            await self._authorized(c)
+        signed = await self._io(
+            presign,
+            object_key,
+            expires_seconds=expires,
+            content_type=content_type,
+            size_bytes=size,
+            expected_sha256=digest,
+        )
+        meta = {
+            "filename": name,
+            "modality": str(modality or "file")[:64],
+            "purpose": str(purpose or "chat_turn")[:128],
+            "session_id": str(session_id or "")[:256],
+            "upload_expires_at": int(time.time()) + expires,
+            "upload_channel": "http_presigned_upload",
+        }
+        async with self.store.db.transaction(self.store.scope) as c:
+            await self._authorized(c)
+            await c.execute(
+                "INSERT INTO enterprise.resource_objects"
+                "(tenant_id,owner_id,id,resource_kind,resource_id,bucket,object_key,"
+                "content_hash,size_bytes,mime_type,state,retention,metadata,created_by) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending','temporary',%s,%s)",
+                (
+                    *self.store._owner,
+                    object_id,
+                    kind,
+                    resource_id,
+                    self.bucket,
+                    object_key,
+                    digest,
+                    size,
+                    content_type,
+                    Jsonb(meta),
+                    self.store._owner[1],
+                ),
+            )
+            await RuntimeGovernanceStore(self.store)._audit(
+                c,
+                "object.upload_intent_created",
+                actor_id=self.store._owner[1],
+                scope_kind="resource",
+                scope_id=str(object_id),
+                resource_kind=kind,
+                resource_id=resource_id,
+                summary={
+                    "object_id": str(object_id),
+                    "resource_kind": kind,
+                    "resource_id": resource_id,
+                    "filename": name,
+                    "size_bytes": size,
+                    "sha256": digest,
+                    "modality": meta["modality"],
+                    "purpose": meta["purpose"],
+                },
+            )
+        return {
+            "resource_id": resource_id,
+            "object_id": str(object_id),
+            "resource_kind": kind,
+            "upload_url": signed.url,
+            "headers": dict(signed.headers),
+            "expires_in": int(signed.expires_seconds),
+            "constraints": {
+                "mime_type": content_type,
+                "size_bytes": size,
+                "sha256": digest,
+                "modality": meta["modality"],
+                "purpose": meta["purpose"],
+            },
+        }
+
+    async def complete_upload_intent(
+        self,
+        *,
+        resource_id: str,
+        resource_kind: str = "turn_input",
+    ) -> ResourceHandle:
+        kind = _coerce_kind(resource_kind)
+        rid = _coerce_resource_id(resource_id)
+        async with self.store.db.transaction(self.store.scope) as c:
+            await self._authorized(c)
+            row = await (
+                await c.execute(
+                    "SELECT * FROM enterprise.resource_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
+                    "AND resource_id=%s AND state='pending' ORDER BY created_at DESC LIMIT 1",
+                    (*self.store._owner, kind, rid),
+                )
+            ).fetchone()
+        if row is None:
+            raise FileNotFoundError("resource upload intent not found")
+        metadata = row["metadata"] if isinstance(row["metadata"], dict) else {}
+        if int(metadata.get("upload_expires_at") or 0) < int(time.time()):
+            raise ValueError("resource upload intent expired")
+        head = getattr(self.object_store, "head_object", None)
+        if not callable(head):
+            raise RuntimeError("object store does not support upload verification")
+        ref = await self._io(head, row["object_key"])
+        expected_size = int(row["size_bytes"])
+        expected_hash = row["content_hash"]
+        if int(ref.size_bytes) != expected_size:
+            raise ValueError("resource size mismatch")
+        if str(ref.sha256 or "") != expected_hash:
+            raise ValueError("resource hash mismatch")
+        async with self.store.db.transaction(self.store.scope) as c:
+            await self._authorized(c)
+            result = await c.execute(
+                "UPDATE enterprise.resource_objects "
+                "SET state='ready',updated_at=now(),cleanup_error='' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s AND state='pending'",
+                (*self.store._owner, row["id"]),
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("resource upload intent was already consumed")
+            updated = await (
+                await c.execute(
+                    "SELECT * FROM enterprise.resource_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                    (*self.store._owner, row["id"]),
+                )
+            ).fetchone()
+            await RuntimeGovernanceStore(self.store)._audit(
+                c,
+                "object.upload_completed",
+                actor_id=self.store._owner[1],
+                scope_kind="resource",
+                scope_id=str(row["id"]),
+                resource_kind=kind,
+                resource_id=rid,
+                summary={
+                    "object_id": str(row["id"]),
+                    "resource_kind": kind,
+                    "resource_id": rid,
+                    "size_bytes": expected_size,
+                    "sha256": expected_hash,
+                },
+            )
+        return self._handle(updated)
+
+    async def verify_ready_reference(
+        self,
+        *,
+        resource_id: str,
+        resource_kind: str = "turn_input",
+        session_id: str = "",
+        purpose: str = "chat_turn",
+    ) -> ResourceHandle:
+        """Validate a caller-provided resource reference before turn execution."""
+
+        kind = _coerce_kind(resource_kind)
+        rid = _coerce_resource_id(resource_id)
+        async with self.store.db.transaction(self.store.scope) as c:
+            await self._authorized(c)
+            row = await (
+                await c.execute(
+                    "SELECT * FROM enterprise.resource_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
+                    "AND resource_id=%s AND state='ready' ORDER BY created_at DESC LIMIT 1",
+                    (*self.store._owner, kind, rid),
+                )
+            ).fetchone()
+        if row is None:
+            raise FileNotFoundError("resource reference not found")
+        metadata = row["metadata"] if isinstance(row["metadata"], dict) else {}
+        bound_session = str(metadata.get("session_id") or "").strip()
+        requested_session = str(session_id or "").strip()
+        if bound_session and bound_session != requested_session:
+            raise PermissionError("resource reference is not bound to this session")
+        bound_purpose = str(metadata.get("purpose") or "").strip()
+        requested_purpose = str(purpose or "").strip()
+        if bound_purpose and requested_purpose and bound_purpose != requested_purpose:
+            raise PermissionError("resource reference is not bound to this purpose")
+        head = getattr(self.object_store, "head_object", None)
+        if not callable(head):
+            raise RuntimeError("object store does not support resource verification")
+        ref = await self._io(head, row["object_key"])
+        if int(ref.size_bytes) != int(row["size_bytes"]):
+            raise ValueError("resource size mismatch")
+        if str(ref.sha256 or "") != str(row["content_hash"] or ""):
+            raise ValueError("resource hash mismatch")
+        stored_type = str(row["mime_type"] or "").strip().lower()
+        observed_type = str(ref.content_type or "").strip().lower()
+        if stored_type and observed_type and stored_type != observed_type:
+            raise ValueError("resource mime type mismatch")
+        return self._handle(row)
 
     async def put(
         self,

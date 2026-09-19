@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -70,6 +71,15 @@ def user_jwt(*, tid: str, eui: str, azp: str, sub: str | None = None, iat: int |
         EDUPLUS2_KEY,
         algorithm="HS256",
         headers={"kid": "test-kid"},
+    )
+
+
+def future_timestamp(days: int = 30) -> str:
+    return (
+        (datetime.now(timezone.utc) + timedelta(days=days))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
 
 
@@ -301,7 +311,7 @@ async def test_exchange_rejects_invalid_jwt_and_inactive_registration(enterprise
     valid = user_jwt(tid="tenant-a", eui="u-invalid", azp="client-a")
     with pytest.raises(PermissionError, match="verification"):
         await service.exchange_user_jwt(valid[:-2] + "xx")
-    with pytest.raises(PermissionError, match="verification"):
+    with pytest.raises(PermissionError, match="verification|issuer mismatch"):
         await service.exchange_user_jwt(
             jwt.encode(
                 {
@@ -317,7 +327,7 @@ async def test_exchange_rejects_invalid_jwt_and_inactive_registration(enterprise
                 algorithm="HS256",
             )
         )
-    with pytest.raises(PermissionError, match="verification"):
+    with pytest.raises(PermissionError, match="expired"):
         await service.exchange_user_jwt(
             user_jwt(tid="tenant-a", eui="u-invalid", azp="client-a", iat=int(time.time()) - 700)
         )
@@ -1002,6 +1012,8 @@ async def test_permission_client_uses_m2m_token_and_normalizes_allowed_usages():
 
     from deeptutor_enterprise.eduplus2.client import EduPlus2PermissionClient
 
+    expires_at = future_timestamp()
+
     async def handler(request: httpx.Request) -> httpx.Response:
         content = await request.aread()
         if request.url.path.endswith("/token"):
@@ -1025,7 +1037,7 @@ async def test_permission_client_uses_m2m_token_and_normalizes_allowed_usages():
                             "version": "perm-v1",
                             "allowed_usages": ["deeptutor.chat", "tms.manage"],
                             "scopes": ["chat", "oms.admin"],
-                            "expires_at": "2026-09-17T12:00:00Z",
+                            "expires_at": expires_at,
                         },
                     },
                 },
@@ -1057,7 +1069,7 @@ async def test_permission_client_uses_m2m_token_and_normalizes_allowed_usages():
     assert permission["version"] == "perm-v1"
     assert permission["allowed_usages"] == ["deeptutor.chat", "tms.manage"]
     assert permission["scopes"] == ["chat", "oms.admin"]
-    assert permission["expires_at"] == "2026-09-17T12:00:00Z"
+    assert permission["expires_at"] == expires_at
 
 
 async def test_exchange_auto_upserts_allowlisted_client_and_caches_resolve(enterprise_db, identity):
@@ -1162,6 +1174,7 @@ async def test_exchange_checks_profile_permission_and_persists_snapshots(enterpr
         StaticEduPlus2Resolver,
     )
 
+    permission_expires_at = future_timestamp()
     resolver = StaticEduPlus2Resolver(
         {
             "client-a": {
@@ -1224,7 +1237,7 @@ async def test_exchange_checks_profile_permission_and_persists_snapshots(enterpr
                     "allowed_usages": ["deeptutor.chat", "tms.manage", "oms.admin"],
                     "scopes": ["chat"],
                     "version": "perm-v1",
-                    "expires_at": "2026-09-17T12:00:00Z",
+                    "expires_at": permission_expires_at,
                 },
                 ("tenant-a", "u-disabled", "client-a", "app-math"): {
                     "allowed": True,

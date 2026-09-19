@@ -309,6 +309,22 @@ async def unified_websocket(ws: WebSocket) -> None:
                 await auth_provider.revalidate(ws)
 
             if msg_type in {"message", "start_turn"}:
+                start_validator = (
+                    getattr(auth_provider, "validate_start_turn", None)
+                    if auth_provider is not None
+                    else None
+                )
+                if start_validator is not None:
+                    try:
+                        await start_validator(ws, msg)
+                    except (PermissionError, RuntimeError, ValueError, LookupError) as exc:
+                        await send_error(
+                            public_error(exc),
+                            error_code="start_turn_rejected",
+                            session_id=str(msg.get("session_id") or ""),
+                            terminal=True,
+                        )
+                        continue
                 try:
                     _, turn = await turns.start_turn(
                         {

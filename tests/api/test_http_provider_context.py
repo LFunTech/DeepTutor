@@ -72,6 +72,7 @@ async def test_unified_ws_binds_application_objectstore_provider_during_start_tu
                     ),
                 )
             )
+            self.headers = {}
             self._messages = [
                 json.dumps(
                     {
@@ -89,7 +90,7 @@ async def test_unified_ws_binds_application_objectstore_provider_during_start_tu
             ]
             self.sent: list[str] = []
 
-        async def accept(self) -> None:
+        async def accept(self, *args, **kwargs) -> None:
             return None
 
         async def receive_text(self) -> str:
@@ -107,3 +108,110 @@ async def test_unified_ws_binds_application_objectstore_provider_during_start_tu
 
     assert seen["object_store"] is object_store
     assert get_providers() is None
+
+
+@pytest.mark.asyncio
+async def test_unified_ws_rejects_start_turn_when_auth_provider_denies_payload() -> None:
+    """删除 start_turn payload policy hook 调用时，本测试应失败。"""
+
+    import json
+
+    from fastapi import WebSocketDisconnect
+
+    from deeptutor.api.routers import unified_ws
+
+    seen: dict[str, object] = {}
+
+    class FakeAuthProvider:
+        async def authenticate(self, _ws):
+            return None
+
+        async def revalidate(self, _ws):
+            return None
+
+        async def validate_start_turn(self, _ws, payload):
+            seen["validated_payload"] = dict(payload)
+            raise ValueError("unsafe websocket resource payload")
+
+        @staticmethod
+        def error_message(error):
+            return "redacted start_turn denial"
+
+        async def record_denial(self):
+            seen["denial_recorded"] = True
+
+    class FakeTurns:
+        async def start_turn(self, _payload):
+            seen["start_turn_called"] = True
+            return {"id": "s"}, {"id": "t"}
+
+        async def subscribe_turn(self, _turn_id, after_seq=0):
+            if False:
+                yield {}
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.app = SimpleNamespace(
+                state=SimpleNamespace(
+                    auth_provider=FakeAuthProvider(),
+                    application_container=SimpleNamespace(
+                        providers=ApplicationProviders(),
+                        turns=FakeTurns(),
+                    ),
+                )
+            )
+            self.headers = {}
+            self._messages = [
+                json.dumps(
+                    {
+                        "protocol_version": unified_ws.PROTOCOL_VERSION,
+                        "type": "start_turn",
+                        "content": "hello",
+                        "capability": "chat",
+                        "tools": [],
+                        "knowledge_bases": [],
+                        "attachments": [
+                            {
+                                "type": "file",
+                                "filename": "raw.txt",
+                                "mime_type": "text/plain",
+                                "base64": "cmF3",
+                            }
+                        ],
+                        "language": "en",
+                        "config": {},
+                    }
+                )
+            ]
+            self.sent: list[str] = []
+
+        async def accept(self, *args, **kwargs) -> None:
+            return None
+
+        async def receive_text(self) -> str:
+            if self._messages:
+                return self._messages.pop(0)
+            raise WebSocketDisconnect()
+
+        async def send_text(self, value: str) -> None:
+            self.sent.append(value)
+
+        async def close(self, *args, **kwargs) -> None:
+            return None
+
+    ws = FakeWebSocket()
+    await unified_ws.unified_websocket(ws)
+
+    assert seen["validated_payload"]["content"] == "hello"
+    assert "start_turn_called" not in seen
+    assert seen["denial_recorded"] is True
+    event = json.loads(ws.sent[0])
+    assert event == {
+        "type": "protocol_error",
+        "error_code": "start_turn_rejected",
+        "message": "redacted start_turn denial",
+        "retryable": True,
+        "session_id": "",
+        "turn_id": "",
+        "protocol_version": unified_ws.PROTOCOL_VERSION,
+    }

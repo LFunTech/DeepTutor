@@ -69,6 +69,7 @@ class Enterprise:
         for model in deployment.models:
             resolve_secret(model.secret)
         self.deployment = deployment
+        self.object_store = self._object_store_from_deployment(deployment)
         self.postgres = postgres_configuration(deployment)
         dsn = self.postgres.resolve_runtime().reveal()
         identity_secrets = self.postgres.resolve_identity()
@@ -98,6 +99,30 @@ class Enterprise:
         self.eduplus2_signing_key = ""
         self.eduplus2_issuer = ""
         self._configure_eduplus2_from_env()
+
+    @staticmethod
+    def _object_store_from_deployment(deployment):
+        binding = getattr(deployment, "object_store", None)
+        if binding is None:
+            return None
+        from deeptutor.runtime.externalized_providers import (
+            EnvSecretResolver,
+            S3CompatibleObjectStore,
+            S3ObjectStoreConfig,
+            SecretRef,
+        )
+
+        return S3CompatibleObjectStore(
+            S3ObjectStoreConfig(
+                endpoint=binding.endpoint,
+                region=binding.region,
+                bucket=binding.bucket,
+                access_key_ref=SecretRef.parse(binding.access_key_secret),
+                secret_key_ref=SecretRef.parse(binding.secret_key_secret),
+                path_style=binding.path_style,
+            ),
+            secret_resolver=EnvSecretResolver(),
+        )
 
     def _configure_eduplus2_from_env(self):
         """从运行时环境装配 B1-lite provider；缺项时保持未配置并 fail closed。"""
@@ -263,7 +288,9 @@ class Enterprise:
             self.db.execution_guard = self.lease.check
             self.store_provider = StoreProvider(self)
             self.providers = ApplicationProviders(
-                store=self.store_provider, configuration=self.configuration
+                store=self.store_provider,
+                configuration=self.configuration,
+                object_store=self.object_store,
             )
             with provider_context(self.providers):
                 registry = CapabilityRegistry(CapabilityCatalog())
@@ -292,11 +319,13 @@ class Enterprise:
                     load_plugins=False,
                     coordinator_factory=MemoryCoordinator,
                     turn_service_factory=lambda *args: GuardedTurns(self, *args),
+                    object_store_provider=self.object_store,
                 )
                 self.providers = ApplicationProviders(
                     store=self.store_provider,
                     container=self.container,
                     configuration=self.configuration,
+                    object_store=self.object_store,
                 )
                 await self.container.start()
                 await self.recover()

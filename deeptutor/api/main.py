@@ -707,6 +707,12 @@ app.include_router(
     tags=["resources"],
     dependencies=_auth,
 )
+app.include_router(
+    resources.api_router,
+    prefix="/api/v1/resources",
+    tags=["resources"],
+    dependencies=_auth,
+)
 
 # MarginNote 4 device bridge — pairing/management routes carry _auth in-router;
 # sync/heartbeat use device-token auth (the Add-on has no session).

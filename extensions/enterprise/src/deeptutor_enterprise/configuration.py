@@ -8,7 +8,14 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from deeptutor.persistence.postgres.configuration import (
     CANONICAL_MIGRATION_DATABASE_SECRET,
@@ -51,6 +58,86 @@ class ModelDeployment(BaseModel):
         return value.rstrip("/")
 
 
+class _HttpsEndpointMixin(BaseModel):
+    @field_validator("endpoint", "base_url", check_fields=False)
+    @classmethod
+    def https_endpoint(cls, value):
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("endpoint must be HTTPS without credentials/query")
+        return value.rstrip("/")
+
+
+class ObjectStoreBinding(_HttpsEndpointMixin):
+    """DeepTutor 业务对象存储绑定；只保存 Secret 引用。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    provider: Literal["s3-compatible"]
+    endpoint: str
+    bucket: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+    region: str = Field(min_length=1)
+    access_key_secret: SecretReference
+    secret_key_secret: SecretReference
+    prefix: str = Field(default="deeptutor", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9/_-]{0,127}$")
+    path_style: bool = True
+
+
+class SettingsProviderBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["postgres"]
+
+
+class SecretProviderBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["external-secret", "kubernetes-secret", "env"]
+    name: str | None = Field(default=None, min_length=1)
+
+
+class LightRAGBinding(_HttpsEndpointMixin):
+    """LightRAG Server API 绑定；DeepTutor 不保存图/检索库凭证。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    endpoint: str
+    api_secret: SecretReference
+    workspace_binding: str = Field(min_length=1)
+    index_version: str = Field(min_length=1)
+    contract_version: str = Field(min_length=1)
+
+
+class EduPlus2Binding(_HttpsEndpointMixin):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    base_url: str
+    client_id: str = Field(min_length=1)
+    client_secret: SecretReference
+    allowed_clients_ref: SecretReference | None = None
+
+
+class ProductionBaselineConfig(BaseModel):
+    """M1/G1 生产门禁；任何 local/SQLite/PocketBase fallback 都拒绝。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    runtime_mode: Literal["production"]
+    local_authority_fallback: Literal[False] = False
+    sqlite_fallback: Literal[False] = False
+    pocketbase_fallback: Literal[False] = False
+    required_readiness: tuple[
+        Literal["postgres", "object_store", "secret_provider", "lightrag", "eduplus2"], ...
+    ] = ("postgres", "object_store", "secret_provider", "lightrag", "eduplus2")
+
+    @model_validator(mode="after")
+    def require_fail_closed_values(self):
+        if self.local_authority_fallback or self.sqlite_fallback or self.pocketbase_fallback:
+            raise ValueError("production fallback must be disabled")
+        return self
+
+
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     version: Literal[1]
@@ -75,6 +162,12 @@ class DeploymentConfig(BaseModel):
     language: Literal["en", "zh"] = "zh"
     max_rounds: int = Field(default=8, ge=1, le=16)
     maintenance: bool = False
+    object_store: ObjectStoreBinding | None = None
+    settings_provider: SettingsProviderBinding | None = None
+    secret_provider: SecretProviderBinding | None = None
+    lightrag: LightRAGBinding | None = None
+    eduplus2: EduPlus2Binding | None = None
+    production: ProductionBaselineConfig | None = None
 
     @field_validator("origins")
     @classmethod
@@ -102,6 +195,25 @@ class DeploymentConfig(BaseModel):
         ):
             raise ValueError("models require unique selections and explicit authorized principals")
         return values
+
+    @model_validator(mode="after")
+    def production_requires_bindings(self):
+        if self.production is None:
+            return self
+        missing = [
+            name
+            for name in (
+                "object_store",
+                "settings_provider",
+                "secret_provider",
+                "lightrag",
+                "eduplus2",
+            )
+            if getattr(self, name) is None
+        ]
+        if missing:
+            raise ValueError("production baseline requires bindings: " + ",".join(missing))
+        return self
 
     @classmethod
     def from_file(cls, path):

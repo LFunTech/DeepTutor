@@ -379,6 +379,17 @@ def run_exchange(
     }
 
 
+def delegated_resource_upload_reference_step() -> dict[str, Any]:
+    return {
+        "status": "delegated",
+        "upload_channel": "http_presigned_upload",
+        "turn_channel": "http_or_ws_start_turn_resource_ids",
+        "websocket_upload_payload_allowed": False,
+        "forbidden_payloads": ["raw_binary", "external_url", "large_base64", "signed_upload_url"],
+        "evidence": "A2.2 target smoke must create upload intent, confirm upload, then submit prompt + resource_ids.",
+    }
+
+
 def delegated_ws_and_audit_steps() -> tuple[dict[str, Any], dict[str, Any]]:
     ws = {
         "status": "delegated",
@@ -440,6 +451,7 @@ def summarize(args: argparse.Namespace) -> dict[str, Any]:
             "network_called": False,
             "dt_token_decode": "requires --real --deeptutor-url",
         }
+    steps["resource_upload_reference"] = delegated_resource_upload_reference_step()
     steps["ws_refresh"], steps["audit_query_export"] = delegated_ws_and_audit_steps()
 
     blockers = []
@@ -462,6 +474,8 @@ def summarize(args: argparse.Namespace) -> dict[str, Any]:
             "missing_token": "return code 2 with user_jwt.status=missing",
             "expired_token": "return code 2 with user_jwt.status=expired",
             "tenant_mismatch_or_rate_limit_or_503": "covered by integration tests or --real endpoint response",
+            "ws_upload_payload": "WebSocket must reject raw binary, external URL, large base64 or signed upload URL",
+            "resource_binding": "A2.2/A2.3 must cover expired upload URL, hash mismatch and cross-owner resource_ids",
         },
         "next_steps": blockers,
     }
