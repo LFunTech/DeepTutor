@@ -41,6 +41,11 @@ class TurnFailureCode(str, Enum):
     PROVIDER_ERROR = "provider_error"
     INTERNAL_ERROR = "internal_error"
     REJECTED = "rejected"
+    REQUIRED_CONTEXT_UNAVAILABLE = "required_context_unavailable"
+    KNOWLEDGE_BASE_UNAVAILABLE = "knowledge_base_unavailable"
+    SKILL_UNAVAILABLE = "skill_unavailable"
+    MCP_TOOL_UNAVAILABLE = "mcp_tool_unavailable"
+    CONTEXT_AUTHORIZATION_FAILED = "context_authorization_failed"
     SERVER_SHUTDOWN = "server_shutdown"
 
 

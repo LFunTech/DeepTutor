@@ -121,6 +121,8 @@ class TurnRequest(BaseModel):
     operation_id: str | None = Field(default=None, min_length=1, max_length=128)
     tools: list[str] | None = None
     knowledge_bases: list[str] = Field(default_factory=list)
+    mcp_tools: list[str] = Field(default_factory=list)
+    context_policy: Literal["auto", "best_effort", "required"] = "auto"
     language: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 

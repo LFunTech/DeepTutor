@@ -262,7 +262,10 @@ class PostgresObjectResourceStore:
         head = getattr(self.object_store, "head_object", None)
         if not callable(head):
             raise RuntimeError("object store does not support upload verification")
-        ref = await self._io(head, row["object_key"])
+        try:
+            ref = await self._io(head, row["object_key"])
+        except FileNotFoundError:
+            raise ValueError("resource object not uploaded") from None
         expected_size = int(row["size_bytes"])
         expected_hash = row["content_hash"]
         if int(ref.size_bytes) != expected_size:

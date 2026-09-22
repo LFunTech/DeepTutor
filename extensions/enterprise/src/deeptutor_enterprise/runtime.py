@@ -1,10 +1,22 @@
 """身份/配置适配器；聊天行为由原 core application/runtime 实现。"""
 
 import asyncio
+import base64
+import mimetypes
 from weakref import WeakValueDictionary
 
 from deeptutor.app.service import TurnApplicationService
+from deeptutor.core.context import Attachment
+from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
 from deeptutor.persistence.postgres.session import PostgresSessionStore
+from deeptutor.services.llm.capabilities import supports_vision
+from deeptutor.services.session.required_context import (
+    ContextResolutionError,
+    initial_context_resolution,
+    mark_unavailable,
+    normalize_context_policy,
+    string_list,
+)
 from deeptutor.services.session.turns.environment import (
     PreparedTurnEnvironment,
     validate_text_request,
@@ -12,6 +24,8 @@ from deeptutor.services.session.turns.environment import (
 
 from .context import current_identity
 from .scope import TenantScope
+
+MAX_INLINE_IMAGE_RESOURCE_BYTES = 20 * 1024 * 1024
 
 
 class StoreProvider:
@@ -41,6 +55,8 @@ class TurnEnvironment:
 
     async def prepare_request(self, payload, *, session=None):
         validate_text_request(payload)
+        context_resolution = initial_context_resolution(payload)
+        policy = normalize_context_policy(payload.get("context_policy"))
         identity = await self.enterprise.authorize()
         config = self.enterprise.configuration
         selection = payload.get("llm_selection") or (session or {}).get("preferences", {}).get(
@@ -51,20 +67,106 @@ class TurnEnvironment:
         allowed = config.deployment.allowed_tools
         if tools is not None and not set(tools) <= set(allowed):
             raise PermissionError("tool is not authorized")
+        requested_mcp_tools = string_list(payload.get("mcp_tools"))
+        if requested_mcp_tools:
+            mark_unavailable(
+                context_resolution,
+                kind="mcp_tool",
+                names=requested_mcp_tools,
+                code="mcp_tool_unavailable",
+            )
+            if policy == "required":
+                raise ContextResolutionError(
+                    "Required MCP tool is unavailable in this turn environment",
+                    error_code="mcp_tool_unavailable",
+                )
+        requested_kbs = string_list(payload.get("knowledge_bases"))
+        if requested_kbs and "rag" not in set(allowed):
+            mark_unavailable(
+                context_resolution,
+                kind="knowledge_base",
+                names=requested_kbs,
+                code="knowledge_base_unavailable",
+            )
+            if policy == "required":
+                raise ContextResolutionError(
+                    "Required knowledge base cannot be mounted in this turn environment",
+                    error_code="knowledge_base_unavailable",
+                )
         payload = {
             **payload,
             "language": payload.get("language") or config.deployment.language,
             "llm_selection": {"profile_id": model.profile_id, "model_id": model.model_id},
             "tools": list(allowed if tools is None else tools),
+            "knowledge_bases": requested_kbs if "rag" in set(allowed) else [],
+            "mcp_tools": [],
+            "context_policy": policy,
         }
+        llm_config = config.resolve_model(
+            payload["llm_selection"], role=identity.role, user_id=identity.user_id
+        )
+        resource_attachments = await self._materialize_resource_attachments(
+            payload,
+            llm_config=llm_config,
+        )
         return PreparedTurnEnvironment(
             payload,
-            config.resolve_model(
-                payload["llm_selection"], role=identity.role, user_id=identity.user_id
-            ),
+            llm_config,
             config.chat_params(),
             tuple(payload["tools"]),
+            resource_attachments=resource_attachments,
+            context_resolution=context_resolution,
         )
+
+    async def _materialize_resource_attachments(self, payload, *, llm_config):
+        resource_ids = [str(value).strip() for value in payload.get("resource_ids") or []]
+        resource_ids = [value for value in resource_ids if value]
+        if not resource_ids:
+            return ()
+        resource_store = PostgresObjectResourceStore(
+            self.enterprise.store_provider.get(), self.enterprise.object_store
+        )
+        verified = []
+        for resource_id in resource_ids:
+            handle = await resource_store.verify_ready_reference(
+                resource_id=resource_id,
+                session_id=str(payload.get("session_id") or ""),
+                purpose="chat_turn",
+            )
+            mime_type = str(handle.mime_type or "application/octet-stream").split(";", 1)[0].lower()
+            if not mime_type.startswith("image/"):
+                raise ValueError("Only image resources are supported for model input")
+            if int(handle.size_bytes) > MAX_INLINE_IMAGE_RESOURCE_BYTES:
+                raise ValueError("Image resource is too large for model input")
+            verified.append((handle, mime_type))
+        if not supports_vision(
+            getattr(llm_config, "binding", "openai"),
+            getattr(llm_config, "model", ""),
+        ):
+            raise ValueError("Configured model does not support image resources")
+        attachments = []
+        for handle, mime_type in verified:
+            data = await resource_store.read(handle)
+            filename = _resource_attachment_filename(handle.resource_id, mime_type)
+            attachments.append(
+                Attachment(
+                    type="image",
+                    base64=base64.b64encode(data).decode("ascii"),
+                    filename=filename,
+                    mime_type=mime_type,
+                    id=handle.resource_id,
+                )
+            )
+        return tuple(attachments)
+
+
+def _resource_attachment_filename(resource_id, mime_type):
+    extension = mimetypes.guess_extension(str(mime_type or "").lower()) or ""
+    if extension == ".jpe":
+        extension = ".jpg"
+    if not extension:
+        extension = ".bin"
+    return f"{resource_id}{extension}"
 
 
 class GuardedTurns:

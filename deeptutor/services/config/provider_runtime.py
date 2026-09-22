@@ -370,7 +370,7 @@ STT_PROVIDERS: dict[str, VoiceProviderSpec] = {
         label="Aliyun DashScope",
         default_api_base="https://dashscope.aliyuncs.com/api/v1",
         adapter="dashscope",
-        default_model="paraformer-v2",
+        default_model="paraformer-realtime-v2",
     ),
     "openai": VoiceProviderSpec(
         label="OpenAI",

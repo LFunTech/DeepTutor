@@ -320,8 +320,11 @@ async def unified_websocket(ws: WebSocket) -> None:
                     except (PermissionError, RuntimeError, ValueError, LookupError) as exc:
                         await send_error(
                             public_error(exc),
-                            error_code="start_turn_rejected",
+                            error_code=str(
+                                getattr(exc, "error_code", "") or "start_turn_rejected"
+                            ),
                             session_id=str(msg.get("session_id") or ""),
+                            retryable=bool(getattr(exc, "retryable", False)),
                             terminal=True,
                         )
                         continue
@@ -336,8 +339,11 @@ async def unified_websocket(ws: WebSocket) -> None:
                 except (RuntimeError, ValueError, LookupError) as exc:
                     await send_error(
                         public_error(exc),
-                        error_code="start_turn_rejected",
+                        error_code=str(
+                            getattr(exc, "error_code", "") or "start_turn_rejected"
+                        ),
                         session_id=str(msg.get("session_id") or ""),
+                        retryable=bool(getattr(exc, "retryable", False)),
                         terminal=True,
                     )
                     continue

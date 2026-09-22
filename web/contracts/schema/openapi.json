@@ -27,6 +27,27 @@
         "title": "ActionPayload",
         "type": "object"
       },
+      "ActivateSettingRequest": {
+        "properties": {
+          "scope_id": {
+            "default": "",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "scope_kind": {
+            "default": "tenant",
+            "enum": [
+              "platform",
+              "tenant",
+              "owner"
+            ],
+            "title": "Scope Kind",
+            "type": "string"
+          }
+        },
+        "title": "ActivateSettingRequest",
+        "type": "object"
+      },
       "ActiveModelUpdate": {
         "description": "Switch the globally-active model for a kind (llm / embedding).",
         "properties": {
@@ -748,6 +769,32 @@
           "file"
         ],
         "title": "Body_import_visualizer_api_visualizers_import_post",
+        "type": "object"
+      },
+      "Body_library_add": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "description": "Raw file bytes",
+            "title": "File",
+            "type": "string"
+          },
+          "filename": {
+            "description": "Original filename",
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_type": {
+            "default": "",
+            "title": "Mime Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "file"
+        ],
+        "title": "Body_library_add",
         "type": "object"
       },
       "Body_reindex_knowledge_base_api_knowledge_bases__kb_name__reindex_post": {
@@ -1597,6 +1644,20 @@
           "page_id"
         ],
         "title": "CompilePageRequest",
+        "type": "object"
+      },
+      "CompleteUploadRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "resource_kind": {
+            "default": "turn_input",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Resource Kind",
+            "type": "string"
+          }
+        },
+        "title": "CompleteUploadRequest",
         "type": "object"
       },
       "ConfirmPartnerDraftRequest": {
@@ -6733,12 +6794,23 @@
       "RuntimeStatus": {
         "additionalProperties": false,
         "properties": {
+          "cleanup_backlog": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Cleanup Backlog",
+            "type": "integer"
+          },
           "coordination_mode": {
             "enum": [
               "memory",
               "redis"
             ],
             "title": "Coordination Mode",
+            "type": "string"
+          },
+          "data_gate": {
+            "default": "",
+            "title": "Data Gate",
             "type": "string"
           },
           "leader_healthy": {
@@ -6770,6 +6842,11 @@
             "title": "Lease Ttl Seconds",
             "type": "integer"
           },
+          "migration_version": {
+            "default": "",
+            "title": "Migration Version",
+            "type": "string"
+          },
           "minimum_web_protocol_version": {
             "const": "2.0",
             "default": "2.0",
@@ -6787,6 +6864,13 @@
             "default": "2.0",
             "title": "Protocol Version",
             "type": "string"
+          },
+          "providers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Providers",
+            "type": "object"
           },
           "recovery_backlog": {
             "default": 0,
@@ -6838,6 +6922,32 @@
           "recovery_interval_seconds"
         ],
         "title": "RuntimeStatus",
+        "type": "object"
+      },
+      "SaveSettingRequest": {
+        "properties": {
+          "desired": {
+            "additionalProperties": true,
+            "title": "Desired",
+            "type": "object"
+          },
+          "scope_id": {
+            "default": "",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "scope_kind": {
+            "default": "tenant",
+            "enum": [
+              "platform",
+              "tenant",
+              "owner"
+            ],
+            "title": "Scope Kind",
+            "type": "string"
+          }
+        },
+        "title": "SaveSettingRequest",
         "type": "object"
       },
       "ServerPayload": {
@@ -8142,6 +8252,11 @@
           "provider_error",
           "internal_error",
           "rejected",
+          "required_context_unavailable",
+          "knowledge_base_unavailable",
+          "skill_unavailable",
+          "mcp_tool_unavailable",
+          "context_authorization_failed",
           "server_shutdown"
         ],
         "title": "TurnFailureCode",
@@ -8210,6 +8325,16 @@
           },
           "content": {
             "title": "Content",
+            "type": "string"
+          },
+          "context_policy": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "best_effort",
+              "required"
+            ],
+            "title": "Context Policy",
             "type": "string"
           },
           "course_id": {
@@ -8325,6 +8450,13 @@
             ],
             "default": null
           },
+          "mcp_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mcp Tools",
+            "type": "array"
+          },
           "memory_references": {
             "items": {
               "enum": [
@@ -8345,6 +8477,20 @@
             },
             "title": "Notebook References",
             "type": "array"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
           },
           "parent_message_id": {
             "anyOf": [
@@ -8461,6 +8607,13 @@
             ],
             "default": null,
             "title": "Regenerated From Message Id"
+          },
+          "resource_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Resource Ids",
+            "type": "array"
           },
           "selection_tutor_context": {
             "anyOf": [
@@ -9533,6 +9686,74 @@
         "title": "UpdateVideoNoteRequest",
         "type": "object"
       },
+      "UploadIntentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_seconds": {
+            "default": 900,
+            "maximum": 3600.0,
+            "minimum": 60.0,
+            "title": "Expires Seconds",
+            "type": "integer"
+          },
+          "filename": {
+            "default": "upload.bin",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_type": {
+            "default": "application/octet-stream",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "modality": {
+            "default": "file",
+            "enum": [
+              "file",
+              "image",
+              "audio",
+              "video",
+              "document"
+            ],
+            "title": "Modality",
+            "type": "string"
+          },
+          "purpose": {
+            "default": "chat_turn",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Purpose",
+            "type": "string"
+          },
+          "session_id": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 536870912.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "UploadIntentRequest",
+        "type": "object"
+      },
       "UpsertEntryRequest": {
         "properties": {
           "correct_answer": {
@@ -9648,6 +9869,51 @@
           "question"
         ],
         "title": "UpsertEntryRequest",
+        "type": "object"
+      },
+      "UpsertSecretReferenceRequest": {
+        "properties": {
+          "provider": {
+            "default": "env",
+            "title": "Provider",
+            "type": "string"
+          },
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          },
+          "scope_id": {
+            "default": "",
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "scope_kind": {
+            "default": "tenant",
+            "enum": [
+              "platform",
+              "tenant",
+              "owner"
+            ],
+            "title": "Scope Kind",
+            "type": "string"
+          },
+          "status": {
+            "default": "saved",
+            "enum": [
+              "saved",
+              "active",
+              "failed",
+              "draining",
+              "missing"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "title": "UpsertSecretReferenceRequest",
         "type": "object"
       },
       "UrlImportRequest": {
@@ -10218,7 +10484,6 @@
     },
     "/api/auth/avatar/{user_id}": {
       "get": {
-        "description": "Serve a stored avatar image. Any authenticated user may view avatars\n(they appear in the admin table and next to the viewer's own profile).",
         "operationId": "get_avatar_image_api_auth_avatar__user_id__get",
         "parameters": [
           {
@@ -10291,7 +10556,6 @@
     },
     "/api/auth/device-login": {
       "post": {
-        "description": "Exchange a device pairing code and PIN for the account's normal cookie.",
         "operationId": "device_login_api_auth_device_login_post",
         "requestBody": {
           "content": {
@@ -10307,11 +10571,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Device Login Api Auth Device Login Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10335,7 +10595,6 @@
     },
     "/api/auth/device/heartbeat": {
       "post": {
-        "description": "Refresh a device lease and account bounded daily usage.",
         "operationId": "device_heartbeat_api_auth_device_heartbeat_post",
         "parameters": [
           {
@@ -10375,11 +10634,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Device Heartbeat Api Auth Device Heartbeat Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10403,7 +10658,6 @@
     },
     "/api/auth/devices": {
       "get": {
-        "description": "List local device credential metadata without credential secrets.",
         "operationId": "list_devices_api_auth_devices_get",
         "parameters": [
           {
@@ -10469,11 +10723,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Devices Api Auth Devices Get",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10495,7 +10745,6 @@
         ]
       },
       "post": {
-        "description": "Issue a revocable device credential for an ordinary local account.",
         "operationId": "issue_device_api_auth_devices_post",
         "parameters": [
           {
@@ -10545,11 +10794,7 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Issue Device Api Auth Devices Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10621,11 +10866,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Revoke Device Api Auth Devices  Device Credential Id  Delete",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10649,17 +10890,12 @@
     },
     "/api/auth/is_first_user": {
       "get": {
-        "description": "Return whether the user store is empty (used by the register UI).",
         "operationId": "check_is_first_user_api_auth_is_first_user_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Check Is First User Api Auth Is First User Get",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10673,7 +10909,6 @@
     },
     "/api/auth/login": {
       "post": {
-        "description": "Validate credentials and set a JWT cookie.",
         "operationId": "login_api_auth_login_post",
         "requestBody": {
           "content": {
@@ -10689,11 +10924,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Login Api Auth Login Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10717,20 +10948,59 @@
     },
     "/api/auth/logout": {
       "post": {
-        "description": "Clear the JWT cookie.\n\nDeletion attributes mirror ``login`` structurally via ``_cookie_attrs()``\n(see the rationale there and #623).",
         "operationId": "logout_api_auth_logout_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Logout Api Auth Logout Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Logout",
@@ -10820,7 +11090,6 @@
     },
     "/api/auth/profile": {
       "get": {
-        "description": "Return the current user's own account info.",
         "operationId": "get_profile_api_auth_profile_get",
         "parameters": [
           {
@@ -10884,7 +11153,6 @@
         ]
       },
       "put": {
-        "description": "Update the current user's own avatar marker (icon choice or reset).\n\nOnly the validated ``icon:<name>:<color>`` form (or empty string) is\naccepted here; ``img:`` markers are owned by the upload endpoint.",
         "operationId": "update_profile_api_auth_profile_put",
         "parameters": [
           {
@@ -10934,11 +11202,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Update Profile Api Auth Profile Put",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -10962,7 +11226,6 @@
     },
     "/api/auth/profile/avatar": {
       "delete": {
-        "description": "Remove the current user's uploaded avatar image and reset the marker.",
         "operationId": "remove_avatar_api_auth_profile_avatar_delete",
         "parameters": [
           {
@@ -11002,11 +11265,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Remove Avatar Api Auth Profile Avatar Delete",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11028,7 +11287,6 @@
         ]
       },
       "put": {
-        "description": "Upload an avatar image for the current user.\n\nThe client is expected to crop/resize before uploading; the server only\nenforces a size cap and validates the format by magic bytes. Not available\nin PocketBase mode (those identities have no local user record).",
         "operationId": "upload_avatar_api_auth_profile_avatar_put",
         "parameters": [
           {
@@ -11078,11 +11336,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Upload Avatar Api Auth Profile Avatar Put",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11106,7 +11360,6 @@
     },
     "/api/auth/profile/learner-profile": {
       "get": {
-        "description": "Return the authenticated learner's own profile.",
         "operationId": "get_current_learner_profile_api_auth_profile_learner_profile_get",
         "parameters": [
           {
@@ -11146,11 +11399,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Current Learner Profile Api Auth Profile Learner Profile Get",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11172,7 +11421,6 @@
         ]
       },
       "put": {
-        "description": "Update only the authenticated learner's own profile.",
         "operationId": "put_current_learner_profile_api_auth_profile_learner_profile_put",
         "parameters": [
           {
@@ -11222,11 +11470,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Put Current Learner Profile Api Auth Profile Learner Profile Put",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11250,7 +11494,6 @@
     },
     "/api/auth/register": {
       "post": {
-        "description": "Bootstrap-only registration.\n\nPublic endpoint that creates the *first* admin account when the user store\nis empty. Once an admin exists, this endpoint is closed; further accounts\nmust be created by an admin via ``POST /api/auth/users``.\n\nOnly available when AUTH_ENABLED=true.",
         "operationId": "register_api_auth_register_post",
         "requestBody": {
           "content": {
@@ -11266,11 +11509,7 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Register Api Auth Register Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11294,7 +11533,6 @@
     },
     "/api/auth/status": {
       "get": {
-        "description": "Return whether auth is enabled and whether the current request is authenticated.",
         "operationId": "auth_status_api_auth_status_get",
         "parameters": [
           {
@@ -11360,7 +11598,6 @@
     },
     "/api/auth/users": {
       "get": {
-        "description": "List all registered users. Requires admin role.",
         "operationId": "get_users_api_auth_users_get",
         "parameters": [
           {
@@ -11428,7 +11665,6 @@
         ]
       },
       "post": {
-        "description": "Admin-only: create a new user account.\n\nReplaces the public ``/register`` flow once the first admin exists. The\nnew account is always created with role=``user``; admins can promote\nlater via ``PUT /users/{username}/role``.",
         "operationId": "admin_create_user_api_auth_users_post",
         "parameters": [
           {
@@ -11478,11 +11714,7 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Admin Create User Api Auth Users Post",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11506,7 +11738,6 @@
     },
     "/api/auth/users/{username}": {
       "delete": {
-        "description": "Delete a user. Admins cannot delete their own account.",
         "operationId": "remove_user_api_auth_users__username__delete",
         "parameters": [
           {
@@ -11555,11 +11786,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Remove User Api Auth Users  Username  Delete",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11583,7 +11810,6 @@
     },
     "/api/auth/users/{username}/learner-profile": {
       "get": {
-        "description": "Return the structured profile managed for an ordinary learner.",
         "operationId": "get_learner_profile_api_auth_users__username__learner_profile_get",
         "parameters": [
           {
@@ -11632,11 +11858,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Learner Profile Api Auth Users  Username  Learner Profile Get",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11716,11 +11938,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Put Learner Profile Api Auth Users  Username  Learner Profile Put",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -11744,7 +11962,6 @@
     },
     "/api/auth/users/{username}/role": {
       "put": {
-        "description": "Change a user's role. Admins cannot change their own role.",
         "operationId": "update_user_role_api_auth_users__username__role_put",
         "parameters": [
           {
@@ -11803,11 +12020,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Update User Role Api Auth Users  Username  Role Put",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -19705,6 +19918,72 @@
         ]
       }
     },
+    "/api/knowledge-bases/upload-policy": {
+      "get": {
+        "description": "Backward-compatible alias for older web bundles.",
+        "operationId": "get_upload_policy_legacy_alias_api_knowledge_bases_upload_policy_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportedFileTypesInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Upload Policy Legacy Alias",
+        "tags": [
+          "knowledge-bases"
+        ]
+      }
+    },
     "/api/knowledge-bases/{kb_name}": {
       "delete": {
         "description": "Delete a knowledge base.",
@@ -21916,7 +22195,7 @@
     },
     "/api/marginnote4/devices": {
       "get": {
-        "description": "List all paired devices.",
+        "description": "List all paired devices for the current owner and KB.",
         "operationId": "list_devices_api_marginnote4_devices_get",
         "parameters": [
           {
@@ -22117,7 +22396,7 @@
     },
     "/api/marginnote4/pair": {
       "post": {
-        "description": "Pair a new MN4 device. Requires a DeepTutor session.\n\nReturns a one-time token the Add-on stores and presents on every sync.",
+        "description": "Pair a new MN4 device for the current authenticated PG owner.",
         "operationId": "pair_device_api_marginnote4_pair_post",
         "parameters": [
           {
@@ -22193,7 +22472,7 @@
     },
     "/api/marginnote4/status": {
       "get": {
-        "description": "Health check and summary stats.",
+        "description": "Health check and summary stats for the selected KB.",
         "operationId": "status_api_marginnote4_status_get",
         "parameters": [
           {
@@ -22323,6 +22602,32 @@
       "get": {
         "operationId": "list_all_progress_api_mastery_paths_progress_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "Authorization",
@@ -22680,7 +22985,7 @@
     },
     "/api/mastery-paths/progress/{book_id}/events": {
       "get": {
-        "description": "Ordered, redacted domain events for reconnect and incremental UI sync.",
+        "description": "同 revision 的每条事件都以二元 cursor 重放。",
         "operationId": "get_progress_events_api_mastery_paths_progress__book_id__events_get",
         "parameters": [
           {
@@ -22699,6 +23004,32 @@
             "schema": {
               "default": 0,
               "title": "After Revision",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "title": "Limit",
               "type": "integer"
             }
           },
@@ -23332,6 +23663,22 @@
             }
           },
           {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
             "in": "header",
             "name": "Authorization",
             "required": false,
@@ -23467,6 +23814,32 @@
       "get": {
         "operationId": "list_topics_api_mastery_paths_topics_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "Authorization",
@@ -23672,9 +24045,34 @@
     },
     "/api/mastery-paths/topics/index": {
       "get": {
-        "description": "Just enough to *name* a topic: id, title, emoji.\n\nThe sidebar groups study conversations under their topic, and it refreshes\non every stream end. ``/topics`` answers with each path's whole knowledge\nmap, review queue and source excerpts — kilobytes per topic, none of which\na group header renders. This is the same walk with the payload cut to what\na label needs.\n\nDeclared above ``/topics/{path_id}``: that route matches any single\nsegment, so a literal path below it would never be reached.",
         "operationId": "list_topic_index_api_mastery_paths_topics_index_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "Authorization",
@@ -24073,6 +24471,22 @@
             "schema": {
               "title": "Path Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -39810,6 +40224,92 @@
         ]
       }
     },
+    "/api/sessions/recycle-bin": {
+      "get": {
+        "operationId": "list_recycle_bin_api_sessions_recycle_bin_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Recycle Bin",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
     "/api/sessions/search": {
       "get": {
         "description": "Search titles and persisted user/assistant messages for a literal term.",
@@ -40556,6 +41056,78 @@
         ]
       }
     },
+    "/api/sessions/{session_id}/purge": {
+      "delete": {
+        "operationId": "purge_session_api_sessions__session_id__purge_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Purge Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
     "/api/sessions/{session_id}/quiz-results": {
       "post": {
         "operationId": "record_quiz_results_api_sessions__session_id__quiz_results_post",
@@ -40633,6 +41205,78 @@
           }
         },
         "summary": "Record Quiz Results",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/restore": {
+      "post": {
+        "operationId": "restore_session_api_sessions__session_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Session",
         "tags": [
           "sessions"
         ]
@@ -49353,6 +49997,582 @@
         ]
       }
     },
+    "/api/v1/oms/audit": {
+      "get": {
+        "description": "Return redacted tenant-scoped governance audit events.",
+        "operationId": "list_audit_events_api_v1_oms_audit_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Audit Events Api V1 Oms Audit Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Audit Events",
+        "tags": [
+          "oms-governance"
+        ]
+      }
+    },
+    "/api/v1/oms/secrets/{name}": {
+      "put": {
+        "description": "Register or rotate a Secret reference; never accepts Secret values.",
+        "operationId": "upsert_secret_reference_api_v1_oms_secrets__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertSecretReferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Upsert Secret Reference Api V1 Oms Secrets  Name  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Secret Reference",
+        "tags": [
+          "oms-governance"
+        ]
+      }
+    },
+    "/api/v1/oms/usage": {
+      "get": {
+        "description": "Return redacted tenant-scoped ObjectStore/cleanup usage metadata.",
+        "operationId": "usage_summary_api_v1_oms_usage_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Usage Summary Api V1 Oms Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Usage Summary",
+        "tags": [
+          "oms-governance"
+        ]
+      }
+    },
+    "/api/v1/resources/upload-intents": {
+      "post": {
+        "operationId": "create_upload_intent_api_v1_resources_upload_intents_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadIntentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Upload Intent",
+        "tags": [
+          "resources"
+        ]
+      }
+    },
+    "/api/v1/resources/upload-intents/{resource_id}/complete": {
+      "post": {
+        "operationId": "complete_upload_intent_api_v1_resources_upload_intents__resource_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "title": "Resource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CompleteUploadRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Complete Upload Intent",
+        "tags": [
+          "resources"
+        ]
+      }
+    },
+    "/api/v1/tms/settings/{key}": {
+      "put": {
+        "description": "Save a tenant-managed runtime setting without persisting Secret plaintext.",
+        "operationId": "save_runtime_setting_api_v1_tms_settings__key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveSettingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Save Runtime Setting Api V1 Tms Settings  Key  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Runtime Setting",
+        "tags": [
+          "tms-governance"
+        ]
+      }
+    },
+    "/api/v1/tms/settings/{key}/activate": {
+      "post": {
+        "description": "Promote a desired setting version to active for the current scope.",
+        "operationId": "activate_runtime_setting_api_v1_tms_settings__key__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ActivateSettingRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Activate Runtime Setting Api V1 Tms Settings  Key  Activate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Runtime Setting",
+        "tags": [
+          "tms-governance"
+        ]
+      }
+    },
     "/api/video-learning/invidious/account/authorize": {
       "post": {
         "operationId": "authorize_invidious_account_api_video_learning_invidious_account_authorize_post",
@@ -51399,6 +52619,300 @@
         ]
       }
     },
+    "/files/attachments/cleanup": {
+      "post": {
+        "operationId": "retry_attachment_cleanup_files_attachments_cleanup_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Attachment Cleanup",
+        "tags": [
+          "attachments"
+        ]
+      }
+    },
+    "/files/attachments/operations": {
+      "get": {
+        "operationId": "list_attachment_operations_files_attachments_operations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Attachment Operations",
+        "tags": [
+          "attachments"
+        ]
+      }
+    },
+    "/files/attachments/operations/{object_id}": {
+      "delete": {
+        "operationId": "withdraw_attachment_operation_files_attachments_operations__object_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "title": "Object Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Attachment Operation",
+        "tags": [
+          "attachments"
+        ]
+      },
+      "get": {
+        "operationId": "get_attachment_operation_files_attachments_operations__object_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "title": "Object Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Attachment Operation",
+        "tags": [
+          "attachments"
+        ]
+      }
+    },
     "/files/attachments/{session_id}/{attachment_id}/{filename}": {
       "get": {
         "description": "Serve a previously uploaded chat attachment.\n\nResponds with ``Content-Disposition: inline`` so browsers preview PDFs\nand images directly in an ``<iframe>`` / ``<img>``. For unknown types\nthe browser still falls back to download, which is fine for the\ndrawer's \"Download\" button path.",
@@ -51487,6 +53001,631 @@
         "summary": "Get Attachment",
         "tags": [
           "attachments"
+        ]
+      }
+    },
+    "/files/library/": {
+      "get": {
+        "description": "List active library entries, newest first.",
+        "operationId": "library_list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Library List",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Library Files",
+        "tags": [
+          "library"
+        ]
+      },
+      "post": {
+        "description": "Add a file to the library.\n\nThe request must be ``multipart/form-data`` with a ``file`` field containing\nthe raw bytes.  If a file with the same SHA-256 content hash already exists\nin the library, returns the existing entry (deduplication).",
+        "operationId": "library_add",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_library_add"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Library Add",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Library File",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/files/library/search": {
+      "get": {
+        "description": "Search library entries by filename (case-insensitive substring).",
+        "operationId": "library_search",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Library Search",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Library Files",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/files/library/{file_id}": {
+      "delete": {
+        "description": "Soft-delete a library file (sets is_deleted=1).",
+        "operationId": "library_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Library Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Library File",
+        "tags": [
+          "library"
+        ]
+      },
+      "get": {
+        "description": "Get a single library entry by id (includes soft-deleted).",
+        "operationId": "library_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Library Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Library File",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/files/library/{file_id}/download": {
+      "get": {
+        "description": "Download a library file by id.",
+        "operationId": "library_download",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Library File",
+        "tags": [
+          "library"
+        ]
+      },
+      "head": {
+        "description": "Check whether a library file exists (HEAD only).",
+        "operationId": "library_download_head",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Library File Head",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/files/library/{file_id}/restore": {
+      "post": {
+        "description": "Restore a soft-deleted library file.",
+        "operationId": "library_restore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "title": "File Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Library Restore",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Library File",
+        "tags": [
+          "library"
         ]
       }
     },
@@ -51631,6 +53770,105 @@
         "summary": "Read Output",
         "tags": [
           "outputs"
+        ]
+      }
+    },
+    "/files/resources/{resource_kind}/{resource_id}/{object_id}/{filename}": {
+      "get": {
+        "operationId": "get_resource_object_files_resources__resource_kind___resource_id___object_id___filename__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_kind",
+            "required": true,
+            "schema": {
+              "title": "Resource Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "title": "Resource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "title": "Object Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "dt_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dt Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Resource Object",
+        "tags": [
+          "resources"
         ]
       }
     },

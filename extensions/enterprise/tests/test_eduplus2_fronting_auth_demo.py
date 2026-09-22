@@ -179,6 +179,38 @@ async def test_demo_start_redirects_to_eduplus2_with_state_and_pkce(
     assert "code_verifier" not in location
 
 
+async def test_demo_callback_preserves_trusted_return_to_when_api_origin_is_internal(
+    app, monkeypatch: pytest.MonkeyPatch
+):
+    """Next rewrite 让 API 看到 localhost 时，也必须回到同一可信站点下的发起页面。"""
+
+    configure_demo_env(monkeypatch)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://localhost:8001",
+        follow_redirects=False,
+    ) as client:
+        start = await client.get(
+            "/api/v1/auth/eduplus2/demo/start",
+            params={
+                "return_to": "https://school.example/enterprise/eduplus2/conversation-test"
+            },
+        )
+        state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+        callback = await client.get(
+            "/api/v1/auth/eduplus2/demo/callback",
+            params={"state": state, "error": "access_denied"},
+        )
+
+    assert callback.status_code in (302, 303, 307), callback.text
+    location = callback.headers["location"]
+    assert urlsplit(location).scheme == "https"
+    assert urlsplit(location).netloc == "school.example"
+    assert urlsplit(location).path == "/enterprise/eduplus2/conversation-test"
+    assert "demo_session=" in location
+    assert "/enterprise/eduplus2/fronting-demo" not in location
+
+
 async def test_demo_callback_exchanges_code_and_result_keeps_tokens_off_url(
     app, monkeypatch: pytest.MonkeyPatch
 ):

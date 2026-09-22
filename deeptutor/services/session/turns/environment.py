@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from deeptutor.core.context import Attachment
     from deeptutor.services.llm.config import LLMConfig
 
 
@@ -17,7 +18,9 @@ class PreparedTurnEnvironment:
     llm_config: LLMConfig
     chat_params: dict[str, Any]
     allowed_tools: tuple[str, ...] = ("ask_user",)
+    resource_attachments: tuple[Attachment, ...] = ()
     summary_agent_params: dict[str, Any] | None = None
+    context_resolution: dict[str, Any] | None = None
 
 
 class TurnEnvironment(Protocol):
@@ -37,12 +40,15 @@ class TurnEnvironment(Protocol):
     ) -> None: ...
 
 
-def validate_text_request(payload: dict[str, Any]) -> None:
+def validate_text_request(
+    payload: dict[str, Any],
+    *,
+    allowed_tools: tuple[str, ...] | None = ("ask_user",),
+) -> None:
     """未装配的资源必须在写 session/turn 或调用模型之前明确拒绝。"""
     if payload.get("capability") not in {None, "chat"}:
         raise ValueError("Requested capability is unavailable in this turn environment")
     resource_fields = (
-        "knowledge_bases",
         "notebook_references",
         "history_references",
         "partner_group_references",
@@ -51,7 +57,6 @@ def validate_text_request(payload: dict[str, Any]) -> None:
         "reading_references",
         "memory_references",
         "attachments",
-        "skills",
         "persona",
         "workspace_mode",
         "mastery_path_id",
@@ -74,7 +79,9 @@ def validate_text_request(payload: dict[str, Any]) -> None:
     for field in resource_fields:
         if payload.get(field) not in (None, "", False, [], {}):
             raise ValueError(f"Requested resource is unavailable: {field}")
-    if any(tool != "ask_user" for tool in payload.get("tools") or []):
+    if allowed_tools is not None and any(
+        tool not in set(allowed_tools) for tool in payload.get("tools") or []
+    ):
         raise ValueError("Requested tool is unavailable in this turn environment")
     if payload.get("config"):
         raise ValueError("Per-turn configuration overrides are unavailable")

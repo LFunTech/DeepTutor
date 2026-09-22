@@ -171,3 +171,32 @@ async def test_snapshot_allowance_does_not_open_other_attachment_or_provider_pat
     with pytest.raises(ValueError):
         await store.add_message("s", "user", "Q", metadata=metadata)
     assert await store.get_messages("s") == []
+
+def test_rag_sources_metadata_kb_name_is_not_treated_as_unscoped_dependency():
+    from deeptutor.persistence.postgres.session_validation import validate_reference_shape
+
+    validate_reference_shape(
+        [
+            {
+                "type": "tool_call",
+                "metadata": {
+                    "args": {"query": "二次函数", "kb_name": "user:kb:test"}
+                },
+            },
+            {
+                "type": "sources",
+                "metadata": {
+                    "sources": [
+                        {
+                            "type": "rag",
+                            "kb_name": "user:kb:test",
+                            "title": "课堂资料",
+                            "metadata": {"kb_name": "user:kb:test"},
+                        }
+                    ]
+                },
+            },
+        ]
+    )
+    with pytest.raises(ValueError):
+        validate_reference_shape({"metadata": {"kb_name": "user:kb:foreign"}})

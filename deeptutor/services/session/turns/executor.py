@@ -17,6 +17,17 @@ from deeptutor.services.session.artifact_attachments import (
 from deeptutor.services.session.provider_response_state import (
     normalize_provider_response_state,
 )
+from deeptutor.services.session.required_context import (
+    ContextResolutionError,
+    finalized_capability_usage,
+    initial_capability_usage,
+    initial_context_resolution,
+    mark_resolved,
+    mark_unavailable,
+    normalize_context_policy,
+    record_capability_usage_event,
+    string_list,
+)
 from deeptutor.services.session.workspace_preferences import (
     WORKSPACE_MODE_MASTERY,
     WORKSPACE_MODE_READING,
@@ -157,6 +168,9 @@ class TurnExecutor:
         assistant_events: list[dict[str, Any]] = []
         assistant_content = ""
         provider_response_state: dict[str, Any] | None = None
+        context_resolution = initial_context_resolution(payload)
+        capability_usage_summary: dict[str, Any] | None = None
+        model_label = ""
         # Per-round content segments + narration call_ids: a chat-loop round's
         # text is captured live but a round that resolves as narration is
         # dropped from the persisted answer (mirrors the frontend bubble).
@@ -486,6 +500,7 @@ class TurnExecutor:
                     )
 
             llm_config, llm_scope_token = activate_llm_selection(payload.get("llm_selection"))
+            model_label = str(getattr(llm_config, "model", "") or "")
             builder = self._create_context_builder()
 
             async def _emit_context_event(event: StreamEvent) -> None:
@@ -558,6 +573,7 @@ class TurnExecutor:
             user_skill_service = get_runtime_skill_service()
             skill_entries = await call_skill_service(user_skill_service, "summary_entries")
             always_blocks = [await call_skill_service(user_skill_service, "load_always_for_context")]
+            assigned_service = None
             if isinstance(user_skill_service, SkillService) and is_grant_restricted_user(current_user):
                 with contextlib.suppress(Exception):
                     assigned_service = SkillService(
@@ -574,8 +590,51 @@ class TurnExecutor:
                             [e.name for e in assigned_entries if e.always and e.available]
                         )
                     )
+            requested_skills = string_list(payload.get("skills"))
+            if requested_skills:
+                entries_by_name = {entry.name: entry for entry in skill_entries}
+                missing_skills = [
+                    name for name in requested_skills if name not in entries_by_name
+                ]
+                unavailable_skills = [
+                    name
+                    for name in requested_skills
+                    if name in entries_by_name and not entries_by_name[name].available
+                ]
+                resolved_skills = [
+                    name
+                    for name in requested_skills
+                    if name in entries_by_name and entries_by_name[name].available
+                ]
+                if resolved_skills:
+                    mark_resolved(context_resolution, "skills", resolved_skills)
+                    user_block = await call_skill_service(
+                        user_skill_service, "load_for_context", resolved_skills
+                    )
+                    if user_block:
+                        always_blocks.append(user_block)
+                    if assigned_service is not None:
+                        assigned_block = assigned_service.load_for_context(resolved_skills)
+                        if assigned_block and assigned_block != user_block:
+                            always_blocks.append(assigned_block)
+                if missing_skills or unavailable_skills:
+                    mark_unavailable(
+                        context_resolution,
+                        kind="skill",
+                        names=[*missing_skills, *unavailable_skills],
+                        code="skill_unavailable",
+                    )
+                    if normalize_context_policy(payload.get("context_policy")) == "required":
+                        raise ContextResolutionError(
+                            "Required skill is unavailable or unauthorized",
+                            error_code="skill_unavailable",
+                        )
             skills_manifest = "\n\n".join(
                 part for part in (*always_blocks, render_skills_manifest(skill_entries)) if part
+            )
+            capability_usage_summary = initial_capability_usage(
+                {**payload, "context_resolution": context_resolution},
+                model_label=model_label,
             )
 
             # Chat capability uses the lightweight manifest + read_source
@@ -845,7 +904,7 @@ class TurnExecutor:
                     capability=capability_name,
                     attachments=persisted_attachment_records,
                     metadata=_request_snapshot_metadata(
-                        payload=payload,
+                        payload={**payload, "context_resolution": context_resolution},
                         content=raw_user_content,
                         capability=capability_name,
                         config=request_config,
@@ -897,6 +956,14 @@ class TurnExecutor:
                     "history_token_count": history_result.token_count,
                     "history_budget": history_result.budget,
                     "turn_id": turn_id,
+                    "context_policy": normalize_context_policy(payload.get("context_policy")),
+                    "knowledge_bases": string_list(payload.get("knowledge_bases")),
+                    "skills": string_list(payload.get("skills")),
+                    "tools": string_list(payload.get("tools")),
+                    "mcp_tools": string_list(payload.get("mcp_tools")),
+                    "resource_ids": string_list(payload.get("resource_ids")),
+                    "context_resolution": context_resolution,
+                    "capability_usage": capability_usage_summary or {},
                     "question_followup_context": followup_question_context or {},
                     "selection_tutor_context": selection_tutor_context or {},
                     "notebook_references": notebook_references,
@@ -976,6 +1043,8 @@ class TurnExecutor:
                             "capability_route": dict(capability_route),
                         }
                     continue
+                if capability_usage_summary is not None:
+                    record_capability_usage_event(capability_usage_summary, event)
                 payload_event = await self._publish_live_event(execution, event)
                 if payload_event.get("type") not in {"done", "session"}:
                     # A card reply lives inside this assistant row. Persist
@@ -1055,6 +1124,16 @@ class TurnExecutor:
                     **pending_done_event.metadata,
                     "status": turn_status,
                 }
+            if capability_usage_summary is not None:
+                usage = finalized_capability_usage(capability_usage_summary, context.metadata)
+                pending_done_event.metadata["capability_usage"] = usage
+                if assistant_provider_metadata is None:
+                    assistant_provider_metadata = {"capability_usage": usage}
+                else:
+                    assistant_provider_metadata = {
+                        **assistant_provider_metadata,
+                        "capability_usage": usage,
+                    }
             if failure_code:
                 pending_done_event.metadata["error_code"] = failure_code
             if retryable:
@@ -1307,6 +1386,11 @@ class TurnExecutor:
             retryable = retryable_attr if isinstance(retryable_attr, bool) else False
             resolved_failure_code = failure_code or "internal_error"
             resolved_retryable = retryable if failure_code else True
+            if capability_usage_summary is None:
+                capability_usage_summary = initial_capability_usage(
+                    {**payload, "context_resolution": context_resolution},
+                    model_label=model_label,
+                )
             if stream_done_sent:
                 logger.error(
                     "Post-stream persistence for turn %s failed: %s",
@@ -1348,6 +1432,14 @@ class TurnExecutor:
                     if provider_response_state is not None
                     else None
                 )
+                if capability_usage_summary is not None:
+                    usage = finalized_capability_usage(
+                        capability_usage_summary,
+                        context.metadata if context is not None else {
+                            "context_resolution": context_resolution
+                        },
+                    )
+                    provider_metadata = {**(provider_metadata or {}), "capability_usage": usage}
                 if await _finalize_with_store(
                     status="failed",
                     content=_persisted_answer(),

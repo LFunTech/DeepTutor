@@ -29,6 +29,15 @@ EXTERNAL_KEYS = frozenset(
 
 
 def validate_reference_shape(value, *, allow_snapshot_attachments=False):
+    def is_source_citation_path(path):
+        return any(
+            item == "sources" and index + 1 < len(path) and isinstance(path[index + 1], int)
+            for index, item in enumerate(path)
+        )
+
+    def is_turn_event_metadata_path(path):
+        return bool(path) and isinstance(path[0], int) and "metadata" in path
+
     def walk(node, path=()):
         if isinstance(node, list):
             for index, item in enumerate(node):
@@ -58,6 +67,8 @@ def validate_reference_shape(value, *, allow_snapshot_attachments=False):
                     key in EXTERNAL_KEYS
                     and item
                     and key not in {"quiz", "quiz_result", "question_bank"}
+                    and not (key == "kb_name" and is_source_citation_path(path))
+                    and not (key == "kb_name" and is_turn_event_metadata_path(path))
                 ):
                     raise ValueError("session dependency lacks an authority provider: " + key)
                 elif isinstance(item, (dict, list)):

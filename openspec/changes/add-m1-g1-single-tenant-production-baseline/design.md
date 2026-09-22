@@ -36,7 +36,7 @@ M1 只开放固定租户生产基线。多租户逻辑从 schema/权限/测试�
 
 ## 决策 1：G1 以发布闭环为交付，不以单个功能 demo 为交付
 
-EduPlus2 前置 demo 用于 local/test 联调，它证明一条认证与 WS 对话路径可以工作，但无法替代 G1。G1 必须由可重复 pipeline 与目标环境 smoke 证明：构建、迁移、部署、运行、回退和证据归档都可执行。
+EduPlus2 前置 demo 用于 local/test 联调，它证明一条认证与 WS 对话路径可以工作，但无法替代 G1。该 demo 的资源链路需要是可操作的 local/test happy path，并且必须贴在真实 `/api/v1/ws` 对话测试里，而不是单独的资源说明板块：用户在 WebSocket 对话区域选择文件后经 HTTP 申请 upload intent、使用 pre-signed URL 直传 ObjectStore、调用 complete 并自动把 `resource_id` 放入 WebSocket `start_turn.resource_ids`；但它仍不是生产资源治理 UI，也不代表多模态模型编排已经完成。G1 必须由可重复 pipeline 与目标环境 smoke 证明：构建、迁移、部署、运行、回退和证据归档都可执行。
 
 因此本 proposal 的主交付是：部署源、流水线、smoke、runbook、evidence 和 fail-closed gate。功能实现只补足这些闭环所暴露的真实缺口，不扩大到 B/C 里程碑。
 

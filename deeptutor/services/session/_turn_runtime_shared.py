@@ -755,8 +755,23 @@ def _request_snapshot_metadata(
         "capability": capability,
         "enabledTools": _string_list(payload.get("tools")),
         "knowledgeBases": _string_list(payload.get("knowledge_bases")),
+        "mcpTools": _string_list(payload.get("mcp_tools")),
+        "skills": _string_list(payload.get("skills")),
+        "resourceIds": _string_list(payload.get("resource_ids")),
+        "contextPolicy": str(payload.get("context_policy") or "auto"),
         "language": str(payload.get("language", "en") or "en"),
     }
+    try:
+        from deeptutor.services.session.required_context import initial_context_resolution
+
+        snapshot["context"] = (
+            payload.get("context_resolution")
+            if isinstance(payload.get("context_resolution"), dict)
+            else initial_context_resolution(payload)
+        )
+    except Exception:
+        # Snapshot metadata is diagnostic only; never make a turn fail here.
+        pass
     workspace_mode = _workspace_mode(payload.get("workspace_mode"), capability=capability)
     if workspace_mode:
         snapshot["workspaceMode"] = workspace_mode

@@ -162,7 +162,12 @@ export async function register(
  */
 export async function checkIsFirstUser(): Promise<boolean> {
   try {
-    const res = await apiFetch(apiUrl("/api/auth/is_first_user"));
+    const res = await apiFetch(apiUrl("/api/auth/is_first_user"), {
+      // 登录/注册页会在未登录状态下探测首用户。企业部署可能把该端点
+      // 作为受保护接口返回 401；这里应当退化为 false，而不是触发
+      // 全局 401 → /login 重定向并把当前登录页继续嵌入 next。
+      skipAuthRedirect: true,
+    });
     if (!res.ok) return false;
     const data = await res.json();
     return Boolean(data.is_first_user);

@@ -11,11 +11,23 @@ from deeptutor.core.context import TurnRuntimeContext, UnifiedContext
 from deeptutor.core.stream import StreamEvent, StreamEventType
 from deeptutor.core.turn_request import TurnRequest
 from deeptutor.services.session.provider_response_state import normalize_provider_response_state
+from deeptutor.services.session.required_context import (
+    ContextResolutionError,
+    finalized_capability_usage,
+    initial_capability_usage,
+    initial_context_resolution,
+    mark_resolved,
+    mark_unavailable,
+    normalize_context_policy,
+    record_capability_usage_event,
+    string_list,
+)
 
 from .._turn_runtime_shared import (
     _assemble_persisted_answer,
     _narration_marker_call_id,
     _repair_chinese_emphasis_for_persistence,
+    _request_snapshot_metadata,
     _resolve_turn_outcome,
     _should_capture_assistant_content,
     _TurnExecution,
@@ -41,7 +53,7 @@ class ConfiguredTurnRuntime:
         payload = TurnRequest.model_validate(
             {key: value for key, value in raw_payload.items() if key != "type"}
         ).to_payload()
-        validate_text_request(payload)
+        validate_text_request(payload, allowed_tools=None)
         request_payload = dict(payload)
         await self._authorize_configured("start", session_id=payload.get("session_id"))
         session = None
@@ -49,13 +61,15 @@ class ConfiguredTurnRuntime:
             session = await self.store.get_session(payload["session_id"])
             # begin_request 负责幂等删除重放；不通过 ensure_session 接管未知 id。
             if session is not None:
-                validate_text_request(session.get("preferences") or {})
+                validate_text_request(session.get("preferences") or {}, allowed_tools=None)
         prepared = await self.turn_environment.prepare_request(payload, session=session)
         if not isinstance(prepared, PreparedTurnEnvironment):
             raise TypeError("Turn environment returned an invalid prepared request")
         payload = TurnRequest.model_validate(prepared.payload).to_payload()
-        validate_text_request(payload)
-        if not set(prepared.allowed_tools).issubset({"ask_user"}):
+        validate_text_request(payload, allowed_tools=prepared.allowed_tools)
+        from deeptutor.tools.builtin_specs import BUILTIN_TOOL_SPEC_BY_NAME
+
+        if not set(prepared.allowed_tools).issubset(BUILTIN_TOOL_SPEC_BY_NAME):
             raise ValueError("Configured tools require unavailable resource providers")
         if not set(payload.get("tools") or []).issubset(prepared.allowed_tools):
             raise PermissionError("Requested tool is not authorized")
@@ -211,6 +225,10 @@ class ConfiguredTurnRuntime:
         user_message_id = None
         parent_message_id = None
         status, error = "completed", ""
+        failure_code = ""
+        retryable = False
+        context_resolution = prepared.context_resolution or initial_context_resolution(payload)
+        capability_usage_summary: dict[str, object] | None = None
         llm_token = None
         authority_revoked = False
 
@@ -276,7 +294,16 @@ class ConfiguredTurnRuntime:
                 execution.session_id,
                 {
                     key: payload[key]
-                    for key in ("capability", "tools", "language", "llm_selection")
+                    for key in (
+                        "capability",
+                        "tools",
+                        "knowledge_bases",
+                        "skills",
+                        "mcp_tools",
+                        "context_policy",
+                        "language",
+                        "llm_selection",
+                    )
                     if key in payload
                 },
             )
@@ -284,6 +311,60 @@ class ConfiguredTurnRuntime:
             registry = ToolRegistry()
             for name in prepared.allowed_tools:
                 registry.register(BUILTIN_TOOL_SPEC_BY_NAME[name].create())
+            skills_manifest = ""
+            requested_skills = string_list(payload.get("skills"))
+            if requested_skills:
+                from deeptutor.services.skill.runtime import (
+                    call_skill_service,
+                    get_runtime_skill_service,
+                )
+                from deeptutor.services.skill.service import render_skills_manifest
+
+                skill_service = get_runtime_skill_service()
+                skill_entries = await call_skill_service(skill_service, "summary_entries")
+                entries_by_name = {entry.name: entry for entry in skill_entries}
+                missing_skills = [
+                    name for name in requested_skills if name not in entries_by_name
+                ]
+                unavailable_skills = [
+                    name
+                    for name in requested_skills
+                    if name in entries_by_name and not entries_by_name[name].available
+                ]
+                resolved_skills = [
+                    name
+                    for name in requested_skills
+                    if name in entries_by_name and entries_by_name[name].available
+                ]
+                skill_blocks: list[str] = []
+                if resolved_skills:
+                    mark_resolved(context_resolution, "skills", resolved_skills)
+                    loaded = await call_skill_service(
+                        skill_service,
+                        "load_for_context",
+                        resolved_skills,
+                    )
+                    if loaded:
+                        skill_blocks.append(loaded)
+                if missing_skills or unavailable_skills:
+                    mark_unavailable(
+                        context_resolution,
+                        kind="skill",
+                        names=[*missing_skills, *unavailable_skills],
+                        code="skill_unavailable",
+                    )
+                    if normalize_context_policy(payload.get("context_policy")) == "required":
+                        raise ContextResolutionError(
+                            "Required skill is unavailable or unauthorized",
+                            error_code="skill_unavailable",
+                        )
+                skills_manifest = "\n\n".join(
+                    part for part in (*skill_blocks, render_skills_manifest(skill_entries)) if part
+                )
+            capability_usage_summary = initial_capability_usage(
+                {**payload, "context_resolution": context_resolution},
+                model_label=str(getattr(prepared.llm_config, "model", "") or ""),
+            )
             session_meta = {"session_id": execution.session_id, "turn_id": execution.turn_id}
             for key in ("regenerate", "regenerated_from_message_id", "superseded_turn_id"):
                 if payload.get(key) is not None:
@@ -343,14 +424,22 @@ class ConfiguredTurnRuntime:
                     "user",
                     payload["content"],
                     capability="chat",
-                    metadata={
-                        "request_snapshot": {
-                            "content": payload["content"],
-                            "capability": "chat",
-                            "llmSelection": payload.get("llm_selection"),
-                            "tools": list(payload.get("tools") or []),
-                        }
-                    },
+                    metadata=_request_snapshot_metadata(
+                        payload={**payload, "context_resolution": context_resolution},
+                        content=payload["content"],
+                        capability="chat",
+                        config={},
+                        attachments=[],
+                        notebook_references=[],
+                        history_references=[],
+                        partner_group_references=[],
+                        question_notebook_references=[],
+                        book_references=[],
+                        reading_references=(),
+                        persona="",
+                        memory_references=(),
+                        llm_selection=payload.get("llm_selection"),
+                    ),
                     parent_message_id=parent_message_id,
                 )
             link_user = getattr(self.store, "link_turn_user_message", None)
@@ -364,7 +453,10 @@ class ConfiguredTurnRuntime:
                 active_capability="chat",
                 enabled_tools=list(payload.get("tools") or []),
                 allowed_builtin_tools=list(prepared.allowed_tools),
+                knowledge_bases=list(payload.get("knowledge_bases") or []),
+                attachments=list(prepared.resource_attachments),
                 language=payload.get("language") or "en",
+                skills_manifest=skills_manifest,
                 runtime=TurnRuntimeContext(
                     turn_id=execution.turn_id,
                     wait_for_user_reply=waiter,
@@ -373,7 +465,17 @@ class ConfiguredTurnRuntime:
                     chat_params=prepared.chat_params,
                     tool_registry=registry,
                 ),
-                metadata={"turn_id": execution.turn_id},
+                metadata={
+                    "turn_id": execution.turn_id,
+                    "context_policy": normalize_context_policy(payload.get("context_policy")),
+                    "knowledge_bases": string_list(payload.get("knowledge_bases")),
+                    "skills": string_list(payload.get("skills")),
+                    "tools": string_list(payload.get("tools")),
+                    "mcp_tools": string_list(payload.get("mcp_tools")),
+                    "resource_ids": string_list(payload.get("resource_ids")),
+                    "context_resolution": context_resolution,
+                    "capability_usage": capability_usage_summary or {},
+                },
             )
             async with contextlib.aclosing(self.turn_engine.execute(context)) as events:
                 async for event in events:
@@ -385,6 +487,8 @@ class ConfiguredTurnRuntime:
                     if event.type == StreamEventType.ERROR:
                         # Provider 错误可能包含 endpoint/credential；不向客户端或持久trace传播。
                         event.content = "Turn execution failed"
+                    if capability_usage_summary is not None:
+                        record_capability_usage_event(capability_usage_summary, event)
                     if event.metadata.get("ask_user_resolved"):
                         event.metadata.setdefault("assistant_content_offset", len(answer()))
                     persisted = await self._configured_event(execution, event)
@@ -410,9 +514,13 @@ class ConfiguredTurnRuntime:
                 )
         except asyncio.CancelledError:
             status, error = "cancelled", "Turn cancelled"
-        except Exception:
+        except Exception as exc:
             status, error = "failed", "Turn execution failed"
-            logger.warning("Configured turn failed: %s", execution.turn_id)
+            raw_failure_code = str(getattr(exc, "error_code", "") or "")
+            failure_code = raw_failure_code or "internal_error"
+            retryable_attr = getattr(exc, "retryable", None)
+            retryable = retryable_attr if isinstance(retryable_attr, bool) else not raw_failure_code
+            logger.warning("Configured turn failed: %s", execution.turn_id, exc_info=True)
         finally:
             self._reply_queues.pop(execution.turn_id, None)
             execution.awaiting_user_reply = False
@@ -439,9 +547,29 @@ class ConfiguredTurnRuntime:
                     )
                     if state is not None:
                         metadata = {"provider_response_state": state}
+                if capability_usage_summary is None:
+                    capability_usage_summary = initial_capability_usage(
+                        {**payload, "context_resolution": context_resolution},
+                        model_label=str(getattr(prepared.llm_config, "model", "") or ""),
+                    )
+                if capability_usage_summary is not None:
+                    usage_metadata_source = context.metadata if context is not None else {
+                        "context_resolution": context_resolution
+                    }
+                    usage = finalized_capability_usage(
+                        capability_usage_summary,
+                        usage_metadata_source,
+                    )
+                    metadata = {**(metadata or {}), "capability_usage": usage}
                 terminal = pending_done or StreamEvent(type=StreamEventType.DONE, source="chat")
                 terminal.session_id, terminal.turn_id = execution.session_id, execution.turn_id
                 terminal.metadata = {**terminal.metadata, "status": status}
+                if failure_code:
+                    terminal.metadata["error_code"] = failure_code
+                if retryable:
+                    terminal.metadata["retryable"] = retryable
+                if metadata and "capability_usage" in metadata:
+                    terminal.metadata["capability_usage"] = metadata["capability_usage"]
                 terminal_events = []
                 if status == "failed" and error:
                     terminal_events.append(
@@ -451,7 +579,12 @@ class ConfiguredTurnRuntime:
                             content=error,
                             session_id=execution.session_id,
                             turn_id=execution.turn_id,
-                            metadata={"turn_terminal": True, "status": "failed"},
+                            metadata={
+                                "turn_terminal": True,
+                                "status": "failed",
+                                "error_code": failure_code,
+                                "retryable": retryable,
+                            },
                         ).to_dict()
                     )
                 terminal_events.append(terminal.to_dict())
@@ -471,6 +604,8 @@ class ConfiguredTurnRuntime:
                         metadata=metadata,
                         error=error,
                         events=terminal_events,
+                        failure_code=failure_code,
+                        retryable=retryable,
                     )
                 )
                 while True:

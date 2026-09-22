@@ -394,6 +394,58 @@ async def test_close_cancels_local_turns_and_wakes_subscribers(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_close_drains_running_turn_before_cancelling(tmp_path) -> None:
+    store = SQLiteSessionStore(tmp_path / "chat_history.db")
+    runtime = TurnRuntimeManager(store)
+    session = await store.ensure_session(None)
+    turn = await store.create_turn(session["id"], capability="chat")
+    release = asyncio.Event()
+
+    async def finish_after_drain_window() -> None:
+        await release.wait()
+
+    execution = _TurnExecution(
+        turn_id=turn["id"],
+        session_id=session["id"],
+        capability="chat",
+        payload={},
+    )
+    execution.task = asyncio.create_task(finish_after_drain_window())
+    runtime._executions[turn["id"]] = execution
+
+    close_task = asyncio.create_task(runtime.close(drain_timeout_seconds=1.0))
+    await asyncio.sleep(0.05)
+    assert execution.task.cancelled() is False
+    release.set()
+    await asyncio.wait_for(close_task, timeout=1)
+
+    assert execution.task.done()
+    assert execution.task.cancelled() is False
+    assert await runtime.has_live_executions() is False
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_turn_after_drain_timeout(tmp_path) -> None:
+    store = SQLiteSessionStore(tmp_path / "chat_history.db")
+    runtime = TurnRuntimeManager(store)
+    session = await store.ensure_session(None)
+    turn = await store.create_turn(session["id"], capability="chat")
+    execution = _TurnExecution(
+        turn_id=turn["id"],
+        session_id=session["id"],
+        capability="chat",
+        payload={},
+    )
+    execution.task = asyncio.create_task(asyncio.Event().wait())
+    runtime._executions[turn["id"]] = execution
+
+    await runtime.close(drain_timeout_seconds=0.01)
+
+    assert execution.task.cancelled()
+    assert await runtime.has_live_executions() is False
+
+
+@pytest.mark.asyncio
 async def test_start_turn_does_not_mutate_apparently_orphaned_turn(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

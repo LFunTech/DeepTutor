@@ -1,5 +1,6 @@
 import type {
   BookReference,
+  ContextPolicy,
   LLMSelection,
   MasteryCardAnswer,
   MasteryCardSkip,
@@ -17,6 +18,8 @@ export interface StartTurnInput {
   sessionId?: string | null;
   tools?: string[] | null;
   knowledgeBases?: string[];
+  mcpTools?: string[];
+  contextPolicy?: ContextPolicy;
   language?: string | null;
   capabilityConfig?: Record<string, unknown>;
   allowedCapabilityConfigKeys?: readonly string[];

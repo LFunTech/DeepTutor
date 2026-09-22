@@ -42,6 +42,161 @@
       "title": "ActiveTurnInfo",
       "type": "object"
     },
+    "AuthAckEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        },
+        "command_id": {
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "integer"
+        },
+        "protocol_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "refresh_deadline": {
+          "title": "Refresh Deadline",
+          "type": "integer"
+        },
+        "type": {
+          "const": "auth_ack",
+          "default": "auth_ack",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "accepted",
+        "expires_at",
+        "refresh_deadline"
+      ],
+      "title": "AuthAckEvent",
+      "type": "object"
+    },
+    "AuthExpiringEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at": {
+          "title": "Expires At",
+          "type": "integer"
+        },
+        "protocol_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "refresh_deadline": {
+          "title": "Refresh Deadline",
+          "type": "integer"
+        },
+        "request_id": {
+          "default": "",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "auth_expiring",
+          "default": "auth_expiring",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expires_at",
+        "refresh_deadline"
+      ],
+      "title": "AuthExpiringEvent",
+      "type": "object"
+    },
+    "AuthRefreshCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "command_id": {
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "dt_token": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dt Token"
+        },
+        "external_token": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Token"
+        },
+        "protocol_version": {
+          "const": "2.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "type": {
+          "const": "auth_refresh",
+          "default": "auth_refresh",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "protocol_version"
+      ],
+      "title": "AuthRefreshCommand",
+      "type": "object"
+    },
+    "AuthRevokedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "type": {
+          "const": "auth_revoked",
+          "default": "auth_revoked",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "AuthRevokedEvent",
+      "type": "object"
+    },
     "BookReference": {
       "additionalProperties": false,
       "properties": {
@@ -570,12 +725,23 @@
     "RuntimeStatus": {
       "additionalProperties": false,
       "properties": {
+        "cleanup_backlog": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cleanup Backlog",
+          "type": "integer"
+        },
         "coordination_mode": {
           "enum": [
             "memory",
             "redis"
           ],
           "title": "Coordination Mode",
+          "type": "string"
+        },
+        "data_gate": {
+          "default": "",
+          "title": "Data Gate",
           "type": "string"
         },
         "leader_healthy": {
@@ -607,6 +773,11 @@
           "title": "Lease Ttl Seconds",
           "type": "integer"
         },
+        "migration_version": {
+          "default": "",
+          "title": "Migration Version",
+          "type": "string"
+        },
         "minimum_web_protocol_version": {
           "const": "2.0",
           "default": "2.0",
@@ -624,6 +795,13 @@
           "default": "2.0",
           "title": "Protocol Version",
           "type": "string"
+        },
+        "providers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Providers",
+          "type": "object"
         },
         "recovery_backlog": {
           "default": 0,
@@ -848,6 +1026,16 @@
           "title": "Content",
           "type": "string"
         },
+        "context_policy": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "best_effort",
+            "required"
+          ],
+          "title": "Context Policy",
+          "type": "string"
+        },
         "course_id": {
           "anyOf": [
             {
@@ -961,6 +1149,13 @@
           ],
           "default": null
         },
+        "mcp_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Mcp Tools",
+          "type": "array"
+        },
         "memory_references": {
           "items": {
             "enum": [
@@ -981,6 +1176,20 @@
           },
           "title": "Notebook References",
           "type": "array"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operation Id"
         },
         "parent_message_id": {
           "anyOf": [
@@ -1102,6 +1311,13 @@
           ],
           "default": null,
           "title": "Regenerated From Message Id"
+        },
+        "resource_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Resource Ids",
+          "type": "array"
         },
         "selection_tutor_context": {
           "anyOf": [
@@ -1457,6 +1673,11 @@
         "provider_error",
         "internal_error",
         "rejected",
+        "required_context_unavailable",
+        "knowledge_base_unavailable",
+        "skill_unavailable",
+        "mcp_tool_unavailable",
+        "context_authorization_failed",
         "server_shutdown"
       ],
       "title": "TurnFailureCode",
@@ -1692,6 +1913,7 @@
     "client_command": {
       "discriminator": {
         "mapping": {
+          "auth_refresh": "#/$defs/AuthRefreshCommand",
           "cancel_turn": "#/$defs/CancelTurnCommand",
           "check_active_turn": "#/$defs/CheckActiveTurnCommand",
           "message": "#/$defs/StartTurnCommand",
@@ -1739,6 +1961,9 @@
           "$ref": "#/$defs/CheckActiveTurnCommand"
         },
         {
+          "$ref": "#/$defs/AuthRefreshCommand"
+        },
+        {
           "$ref": "#/$defs/PingCommand"
         }
       ],
@@ -1778,6 +2003,15 @@
         },
         {
           "$ref": "#/$defs/ProtocolErrorEvent"
+        },
+        {
+          "$ref": "#/$defs/AuthExpiringEvent"
+        },
+        {
+          "$ref": "#/$defs/AuthAckEvent"
+        },
+        {
+          "$ref": "#/$defs/AuthRevokedEvent"
         }
       ],
       "title": "Server Event"

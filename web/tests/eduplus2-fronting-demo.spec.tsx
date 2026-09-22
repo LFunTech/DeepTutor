@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -190,5 +190,387 @@ describe("EduPlus2 fronting auth demo page", () => {
     expect(document.body.textContent).not.toContain(rawToken);
     expect(setLocal).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uploads a selected file through pre-signed HTTP APIs before referencing its resource_id over WebSocket", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/enterprise/eduplus2/fronting-demo?demo_session=session-upload",
+    );
+    const rawToken = "dt.upload.token";
+    const uploadHeaders = {
+      "content-type": "image/png",
+      "content-length": "10",
+      "x-amz-meta-sha256": "server-side-policy-sha",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/auth/eduplus2/demo/result")) {
+        return Response.json({
+          ok: true,
+          request_id: "demo-req-upload",
+          token_type: "Bearer",
+          dt_token: rawToken,
+          summary: { request_id: "demo-req-upload" },
+          steps: [
+            { id: "redirect", label: "EduPlus2 Redirect", status: "done" },
+            { id: "code_exchange", label: "Authorization Code Token Exchange", status: "done" },
+            { id: "deeptutor_exchange", label: "DeepTutor Token Exchange", status: "done" },
+            { id: "api_probe", label: "DeepTutor API Probe", status: "pending" },
+          ],
+        });
+      }
+      if (url === "/api/auth/status") {
+        return Response.json({
+          enabled: true,
+          authenticated: true,
+          user_id: "internal-user-raw",
+          role: "user",
+          is_admin: false,
+        });
+      }
+      if (url === "/api/v1/resources/upload-intents") {
+        expect(init?.method).toBe("POST");
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          `Bearer ${rawToken}`,
+        );
+        const body = JSON.parse(String(init?.body));
+        expect(body).toMatchObject({
+          modality: "image",
+          mime_type: "image/png",
+          size_bytes: 10,
+          purpose: "chat_turn",
+          filename: "diagram.png",
+        });
+        expect(body.sha256).toMatch(/^[0-9a-f]{64}$/);
+        expect(JSON.stringify(body)).not.toContain("base64");
+        expect(JSON.stringify(body)).not.toContain("https://upload.example");
+        return Response.json({
+          resource_id: "res_demo_image",
+          object_id: "obj-demo-image",
+          resource_kind: "turn_input",
+          upload_url: "https://upload.example/presigned-put",
+          headers: uploadHeaders,
+          expires_in: 900,
+          constraints: {
+            mime_type: "image/png",
+            size_bytes: 10,
+            modality: "image",
+            purpose: "chat_turn",
+          },
+        });
+      }
+      if (url === "https://upload.example/presigned-put") {
+        expect(init?.method).toBe("PUT");
+        expect(init?.body).toBeInstanceOf(File);
+        expect(init?.headers).toMatchObject({
+          "content-type": "image/png",
+          "x-amz-meta-sha256": "server-side-policy-sha",
+        });
+        expect(init?.headers).not.toHaveProperty("content-length");
+        return new Response(null, { status: 204 });
+      }
+      if (url === "/api/v1/resources/upload-intents/res_demo_image/complete") {
+        expect(init?.method).toBe("POST");
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          `Bearer ${rawToken}`,
+        );
+        return Response.json({
+          resource_id: "res_demo_image",
+          object_id: "obj-demo-image",
+          resource_kind: "turn_input",
+          state: "ready",
+          size_bytes: 10,
+          sha256: "a".repeat(64),
+          mime_type: "image/png",
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sockets: Array<{
+      listeners: Record<string, Array<(event?: unknown) => void>>;
+      sent: string[];
+      emit: (type: string, event?: unknown) => void;
+    }> = [];
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 0;
+      listeners: Record<string, Array<(event?: unknown) => void>> = {};
+      sent: string[] = [];
+
+      constructor(
+        public url: string,
+        public protocols: string[],
+      ) {
+        sockets.push(this);
+      }
+
+      addEventListener(type: string, listener: (event?: unknown) => void) {
+        this.listeners[type] = [...(this.listeners[type] ?? []), listener];
+      }
+
+      send(payload: string) {
+        this.sent.push(payload);
+      }
+
+      close() {
+        this.readyState = 3;
+      }
+
+      emit(type: string, event?: unknown) {
+        if (type === "open") this.readyState = FakeWebSocket.OPEN;
+        for (const listener of this.listeners[type] ?? []) {
+          listener(event);
+        }
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    render(<Page />);
+    await waitFor(() =>
+      expect(screen.getByText(/DeepTutor API 已接受 dt_token/)).toBeInTheDocument(),
+    );
+
+    expect(screen.queryByText(/Resource pre-upload contract/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /pre-signed upload → prompt \+ resource_ids/ }),
+    ).not.toBeInTheDocument();
+    const wsCard = screen
+      .getByRole("heading", { name: /真实 \/api\/v1\/ws 对话测试/ })
+      .closest("section");
+    expect(wsCard).not.toBeNull();
+    const wsControls = within(wsCard as HTMLElement);
+
+    await user.upload(
+      wsControls.getByLabelText(/选择图片、音频、视频或文档文件/),
+      new File(["demo-image"], "diagram.png", { type: "image/png" }),
+    );
+    await user.click(wsControls.getByRole("button", { name: /上传并登记资源/ }));
+
+    await waitFor(() =>
+      expect(wsControls.getByLabelText(/已完成上传的 resource_ids/)).toHaveValue(
+        "res_demo_image",
+      ),
+    );
+    expect(wsControls.getAllByText(/res_demo_image/).length).toBeGreaterThan(0);
+    await user.clear(wsControls.getByLabelText(/已完成上传的 resource_ids/));
+
+    await user.click(wsControls.getByRole("button", { name: /开始 WebSocket 对话/ }));
+    expect(sockets).toHaveLength(1);
+    await act(async () => {
+      sockets[0].emit("open");
+    });
+    await waitFor(() => expect(sockets[0].sent).toHaveLength(1));
+    const startTurn = JSON.parse(sockets[0].sent[0]);
+    expect(startTurn.resource_ids).toEqual(["res_demo_image"]);
+    expect(startTurn.attachments).toEqual([]);
+    expect(JSON.stringify(startTurn)).not.toContain("https://upload.example");
+    expect(JSON.stringify(startTurn)).not.toContain("base64");
+  });
+
+  it("restores completed demo resource_ids after a page reload before starting WebSocket", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/enterprise/eduplus2/fronting-demo?demo_session=session-persisted-resource",
+    );
+    window.sessionStorage.setItem(
+      "deeptutor.eduplus2.frontingDemo.resourceIds.v1",
+      JSON.stringify(["res_persisted_image"]),
+    );
+    const rawToken = "dt.persisted.token";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/auth/eduplus2/demo/result")) {
+        return Response.json({
+          ok: true,
+          request_id: "demo-req-persisted-resource",
+          token_type: "Bearer",
+          dt_token: rawToken,
+          summary: { request_id: "demo-req-persisted-resource" },
+          steps: [
+            { id: "redirect", label: "EduPlus2 Redirect", status: "done" },
+            { id: "code_exchange", label: "Authorization Code Token Exchange", status: "done" },
+            { id: "deeptutor_exchange", label: "DeepTutor Token Exchange", status: "done" },
+            { id: "api_probe", label: "DeepTutor API Probe", status: "pending" },
+          ],
+        });
+      }
+      if (url === "/api/auth/status") {
+        return Response.json({
+          enabled: true,
+          authenticated: true,
+          user_id: "internal-user-raw",
+          role: "user",
+          is_admin: false,
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sockets: Array<{
+      listeners: Record<string, Array<(event?: unknown) => void>>;
+      sent: string[];
+      emit: (type: string, event?: unknown) => void;
+    }> = [];
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 0;
+      listeners: Record<string, Array<(event?: unknown) => void>> = {};
+      sent: string[] = [];
+
+      constructor() {
+        sockets.push(this);
+      }
+
+      addEventListener(type: string, listener: (event?: unknown) => void) {
+        this.listeners[type] = [...(this.listeners[type] ?? []), listener];
+      }
+
+      send(payload: string) {
+        this.sent.push(payload);
+      }
+
+      close() {
+        this.readyState = 3;
+      }
+
+      emit(type: string, event?: unknown) {
+        if (type === "open") this.readyState = FakeWebSocket.OPEN;
+        for (const listener of this.listeners[type] ?? []) {
+          listener(event);
+        }
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    render(<Page />);
+    await waitFor(() =>
+      expect(screen.getByText(/DeepTutor API 已接受 dt_token/)).toBeInTheDocument(),
+    );
+    const wsCard = screen
+      .getByRole("heading", { name: /真实 \/api\/v1\/ws 对话测试/ })
+      .closest("section");
+    expect(wsCard).not.toBeNull();
+    const wsControls = within(wsCard as HTMLElement);
+    expect(wsControls.getByLabelText(/已完成上传的 resource_ids/)).toHaveValue(
+      "res_persisted_image",
+    );
+
+    await user.click(wsControls.getByRole("button", { name: /开始 WebSocket 对话/ }));
+    expect(sockets).toHaveLength(1);
+    await act(async () => {
+      sockets[0].emit("open");
+    });
+    await waitFor(() => expect(sockets[0].sent).toHaveLength(1));
+    const startTurn = JSON.parse(sockets[0].sent[0]);
+    expect(startTurn.resource_ids).toEqual(["res_persisted_image"]);
+    expect(startTurn.attachments).toEqual([]);
+  });
+
+
+  it("refreshes a rejected demo token before opening WebSocket", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/enterprise/eduplus2/fronting-demo?demo_session=session-refresh-before-ws",
+    );
+    const rawToken = "dt.rejected.token";
+    const refreshedToken = "dt.refreshed.token";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/auth/eduplus2/demo/result")) {
+        return Response.json({
+          ok: true,
+          request_id: "demo-req-refresh-before-ws",
+          token_type: "Bearer",
+          dt_token: rawToken,
+          expires_at: Math.floor(Date.now() / 1000) + 300,
+          summary: { request_id: "demo-req-refresh-before-ws" },
+          steps: [
+            { id: "redirect", label: "EduPlus2 Redirect", status: "done" },
+            { id: "code_exchange", label: "Authorization Code Token Exchange", status: "done" },
+            { id: "deeptutor_exchange", label: "DeepTutor Token Exchange", status: "done" },
+            { id: "api_probe", label: "DeepTutor API Probe", status: "pending" },
+          ],
+        });
+      }
+      if (url === "/api/auth/status") {
+        return Response.json({ enabled: true, authenticated: false });
+      }
+      if (url === "/api/v1/auth/eduplus2/demo/refresh") {
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          demo_session: "session-refresh-before-ws",
+        });
+        return Response.json({
+          ok: true,
+          request_id: "demo-req-refresh-before-ws-2",
+          token_type: "Bearer",
+          dt_token: refreshedToken,
+          expires_at: Math.floor(Date.now() / 1000) + 300,
+          summary: { request_id: "demo-req-refresh-before-ws-2" },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sockets: Array<{ url: string; protocols: string[] }> = [];
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 0;
+      constructor(
+        public url: string,
+        public protocols: string[],
+      ) {
+        sockets.push(this);
+      }
+      addEventListener() {}
+      send() {}
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    render(<Page />);
+    await waitFor(() =>
+      expect(screen.getByText(/DeepTutor API 未接受该 dt_token/)).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: /开始 WebSocket 对话/ }));
+
+    await waitFor(() => expect(sockets).toHaveLength(1));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/auth/eduplus2/demo/refresh",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(sockets[0].protocols).toEqual(["deeptutor-token", refreshedToken]);
+    expect(sockets[0].protocols).not.toContain(rawToken);
+  });
+
+  it("uses a visible native resource file input instead of a JavaScript proxy button", () => {
+    window.history.pushState({}, "", "/enterprise/eduplus2/fronting-demo");
+    render(<Page />);
+
+    const wsCard = screen
+      .getByRole("heading", { name: /真实 \/api\/v1\/ws 对话测试/ })
+      .closest("section");
+    expect(wsCard).not.toBeNull();
+    const wsControls = within(wsCard as HTMLElement);
+    const fileInput = wsControls.getByLabelText(
+      /选择图片、音频、视频或文档文件/,
+    ) as HTMLInputElement;
+
+    expect(wsControls.queryByRole("button", { name: "选择文件" })).not.toBeInTheDocument();
+    expect(fileInput).toHaveAttribute("type", "file");
+    expect(fileInput).not.toHaveClass("sr-only");
+    expect(fileInput).toHaveClass("cursor-pointer");
   });
 });

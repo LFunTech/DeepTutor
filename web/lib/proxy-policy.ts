@@ -11,6 +11,10 @@ export const COOKIE_NAME = "dt_token";
 export const CODEX_CALLBACK_PATH = "/auth/callback";
 export const CODEX_CALLBACK_API_PATH = "/api/auth/openai-codex/callback";
 const RETIRED_PAGE_PATHS = new Set(["/partners/groups"]);
+const SELF_AUTHENTICATING_PAGE_PATHS = new Set([
+  "/enterprise/eduplus2/conversation-test",
+  "/enterprise/eduplus2/fronting-demo",
+]);
 
 export function isCodexCallbackPath(pathname: string): boolean {
   return pathname === CODEX_CALLBACK_PATH;
@@ -46,10 +50,19 @@ const STATIC_ASSET =
 
 // Paths the auth gate must never block: the auth pages themselves, Next.js
 // internals, and public static assets (see STATIC_ASSET above).
+function trimTrailingSlash(pathname: string): string {
+  return pathname.length > 1 ? pathname.replace(/\/+$/g, "") : pathname;
+}
+
+function isSelfAuthenticatingPagePath(pathname: string): boolean {
+  return SELF_AUTHENTICATING_PAGE_PATHS.has(trimTrailingSlash(pathname));
+}
+
 export function isAuthExempt(pathname: string): boolean {
   return (
     pathname.startsWith(LOGIN_PATH) ||
     pathname.startsWith("/register") ||
+    isSelfAuthenticatingPagePath(pathname) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     STATIC_ASSET.test(pathname)

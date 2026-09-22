@@ -24,6 +24,7 @@ from deeptutor.persistence.postgres.configuration import (
 )
 
 SecretReference = Annotated[str, StringConstraints(pattern=r"^env:[A-Za-z_][A-Za-z0-9_]*$")]
+EnterpriseAllowedTool = Literal["ask_user", "rag"]
 
 
 class ModelDeployment(BaseModel):
@@ -150,7 +151,7 @@ class DeploymentConfig(BaseModel):
     bootstrap_secret: SecretReference | None = None
     origins: tuple[str, ...] = Field(min_length=1)
     models: tuple[ModelDeployment, ...] = Field(min_length=1)
-    allowed_tools: tuple[Literal["ask_user"], ...] = ("ask_user",)
+    allowed_tools: tuple[EnterpriseAllowedTool, ...] = ("ask_user",)
     token_seconds: int = Field(default=3600, ge=60, le=86400)
     storage_backend: Literal["postgres"] = "postgres"
     max_size: int = Field(default=8, ge=1)

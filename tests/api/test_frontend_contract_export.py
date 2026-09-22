@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from deeptutor.api.contracts.export import render_contracts, write_contracts
 
 
@@ -41,7 +43,43 @@ def test_turn_schema_contains_the_complete_v2_lifecycle() -> None:
     }
     assert "wait_for_input" in _enum_values(protocol, "StreamEventType")
     assert "worker_lost" in _enum_values(protocol, "TurnFailureCode")
+    assert "required_context_unavailable" in _enum_values(protocol, "TurnFailureCode")
+    assert "mcp_tool_unavailable" in _enum_values(protocol, "TurnFailureCode")
     assert protocol["properties"]["protocol_version"]["default"] == "2.0"
+
+
+def test_start_turn_contract_exposes_context_policy_and_mcp_tools() -> None:
+    from pydantic import TypeAdapter, ValidationError
+
+    from deeptutor.api.contracts.turn_protocol import ClientCommand
+
+    protocol = json.loads(render_contracts()["turn-protocol.json"])
+    start_turn = protocol["$defs"]["StartTurnCommand"]["properties"]
+
+    assert start_turn["context_policy"]["enum"] == ["auto", "best_effort", "required"]
+    assert start_turn["mcp_tools"]["items"]["type"] == "string"
+
+    parsed = TypeAdapter(ClientCommand).validate_python(
+        {
+            "type": "start_turn",
+            "protocol_version": "2.0",
+            "content": "请按知识库讲解",
+            "context_policy": "required",
+            "mcp_tools": ["lightrag.query"],
+        }
+    )
+    assert parsed.to_payload()["context_policy"] == "required"
+    assert parsed.to_payload()["mcp_tools"] == ["lightrag.query"]
+
+    with pytest.raises(ValidationError):
+        TypeAdapter(ClientCommand).validate_python(
+            {
+                "type": "start_turn",
+                "protocol_version": "2.0",
+                "content": "bad",
+                "mcp_server_url": "https://attacker.example/sse",
+            }
+        )
 
 
 def test_openapi_operation_ids_are_unique_for_type_generation() -> None:

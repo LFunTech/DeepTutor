@@ -246,6 +246,18 @@ def _is_loopback_host(hostname: str | None) -> bool:
     return hostname in {"127.0.0.1", "localhost", "::1"}
 
 
+def _url_origin(value: str) -> str:
+    try:
+        parsed = urlsplit(str(value or "").strip())
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    if parsed.username or parsed.password:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def _allowed_return_url(value: str, request: Request) -> bool:
     try:
         parsed = urlsplit(value)
@@ -258,6 +270,9 @@ def _allowed_return_url(value: str, request: Request) -> bool:
     request_origin = f"{request.url.scheme}://{request.url.netloc}"
     return_origin = f"{parsed.scheme}://{parsed.netloc}"
     if return_origin == request_origin:
+        return True
+    configured_return_origin = _url_origin(os.environ.get("DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL", ""))
+    if configured_return_origin and return_origin == configured_return_origin:
         return True
     # 本地 demo 常见形态：Next dev 和 API server 不同 loopback 端口。
     return _is_loopback_host(parsed.hostname) and parsed.scheme == "http"

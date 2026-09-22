@@ -124,6 +124,30 @@ test("apiFetch does NOT redirect on 401 when skipAuthRedirect is set", async () 
   }
 });
 
+test("checkIsFirstUser treats unauthenticated probes as false without redirecting from login", async () => {
+  // 企业部署会关闭公开注册/首用户探测，后端可对该探测返回 401。
+  // 登录页调用它时，401 应该只表示“不是首用户”，不能再次跳回 /login
+  // 并把当前 /login?... 嵌入 next，否则会形成嵌套重定向循环。
+  const { setRuntimeAuthEnabled } = await loadApiModule();
+  const { checkIsFirstUser } = await import("../lib/auth");
+  setRuntimeAuthEnabled(true);
+  const win = installWindow("/login", "?next=%2Fchat");
+  const restore = stubFetch(jsonResponse(401, { detail: "Unauthorized" }));
+  try {
+    const settled = await Promise.race([
+      checkIsFirstUser().then((value) => ({ state: "resolved", value })),
+      tick().then(() => ({ state: "pending", value: undefined })),
+    ]);
+
+    assert.deepEqual(settled, { state: "resolved", value: false });
+    assert.equal(win.redirectedTo(), null);
+  } finally {
+    restore();
+    clearWindow();
+    setRuntimeAuthEnabled(false);
+  }
+});
+
 test("apiFetch passes successful responses through without redirecting", async () => {
   const { apiFetch } = await loadApiModule();
   const win = installWindow("/dashboard");

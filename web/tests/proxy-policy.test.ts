@@ -105,6 +105,14 @@ test("isAuthExempt allows public static assets through the auth gate (issue #599
   assert.equal(isAuthExempt("/pdfjs/wasm/openjpeg.wasm"), true);
 });
 
+test("isAuthExempt allows EduPlus2 demo-auth pages to start their own login flow", () => {
+  assert.equal(isAuthExempt("/enterprise/eduplus2/conversation-test"), true);
+  assert.equal(isAuthExempt("/enterprise/eduplus2/conversation-test/"), true);
+  assert.equal(isAuthExempt("/enterprise/eduplus2/fronting-demo"), true);
+  assert.equal(isAuthExempt("/enterprise/eduplus2/fronting-demo/"), true);
+  assert.equal(isAuthExempt("/enterprise/eduplus2/admin"), false);
+});
+
 test("isAuthExempt allows auth pages and Next internals", () => {
   assert.equal(isAuthExempt("/login"), true);
   assert.equal(isAuthExempt("/register"), true);

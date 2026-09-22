@@ -22,7 +22,7 @@ from starlette.responses import JSONResponse
 
 from deeptutor.core.providers import provider_context
 
-from ..context import current_token, identity_context
+from ..context import bind_identity_reference, current_token, identity_context
 from ..identity.service import LoginRateLimited
 from ..scope import TenantScope
 
@@ -81,6 +81,7 @@ class AuthenticationMiddleware:
             "/api/v1/auth/eduplus2/demo/callback",
             "/api/v1/auth/eduplus2/demo/result",
             "/api/v1/auth/eduplus2/demo/refresh",
+            "/api/settings/ui",
         )
         status = None
         identity = None
@@ -263,9 +264,11 @@ class SocketAuthentication:
 
     async def authenticate(self, ws):
         # ASGI 中间件已绑定/清理 ContextVar；WS 自身保存可 refresh 的当前 token。
+        token = current_token()
         identity = await self.enterprise.authorize()
-        claims = jwt.get_unverified_claims(current_token())
-        ws.state.enterprise_token = current_token()
+        claims = jwt.get_unverified_claims(token)
+        ws.state.enterprise_auth_context = bind_identity_reference(identity, token)
+        ws.state.enterprise_token = token
         ws.state.enterprise_identity = identity
         ws.state.enterprise_expires_at = int(claims.get("exp") or 0)
         return None
@@ -279,6 +282,9 @@ class SocketAuthentication:
         await self._ensure_eduplus2_token_allowed(token)
         await self.enterprise.lease.check()
         ws.state.enterprise_identity = identity
+        auth_context = getattr(ws.state, "enterprise_auth_context", None)
+        if auth_context is not None:
+            auth_context.update(identity, token)
 
     async def refresh(self, ws, payload):
         old_token = str(getattr(ws.state, "enterprise_token", "") or "")
@@ -330,6 +336,9 @@ class SocketAuthentication:
         ws.state.enterprise_token = new_token
         ws.state.enterprise_identity = new_identity
         ws.state.enterprise_expires_at = expires_at
+        auth_context = getattr(ws.state, "enterprise_auth_context", None)
+        if auth_context is not None:
+            auth_context.update(new_identity, new_token)
         return {
             "expires_at": expires_at,
             "refresh_deadline": max(
@@ -379,7 +388,7 @@ class SocketAuthentication:
 
 def create_application(enterprise):
     from deeptutor.api.application import create_api_application
-    from deeptutor.api.routers import resources, sessions, unified_ws
+    from deeptutor.api.routers import resources, sessions, settings, unified_ws, voice
 
     from ..eduplus2 import fronting_demo
 
@@ -388,6 +397,7 @@ def create_application(enterprise):
 
     eduplus2_auth = APIRouter()
     eduplus2_audit = APIRouter()
+    conversation_test = APIRouter()
 
     async def require_audit_admin():
         identity = await enterprise.identity.authenticate(current_token())
@@ -523,6 +533,112 @@ def create_application(enterprise):
         except RuntimeError:
             return JSONResponse({"detail": "Service unavailable"}, status_code=503)
 
+    @conversation_test.get("/options")
+    async def conversation_test_options():
+        """普通对话测试页的可选能力清单；只返回逻辑名和安全展示文案。"""
+
+        await enterprise.authorize()
+        try:
+            from deeptutor.api.utils.tool_options import build_tool_options
+            from deeptutor.multi_user.knowledge_access import (
+                list_visible_knowledge_bases,
+                manager_for_resource,
+                resolve_kb,
+            )
+            from deeptutor.services.skill.runtime import (
+                call_skill_service,
+                get_runtime_skill_service,
+            )
+        except Exception:
+            return {"knowledge_bases": [], "skills": [], "mcp_tools": []}
+
+        def safe_description(value: object) -> str:
+            text = str(value or "").strip()
+            for word in ("api_secret", "secret", "endpoint"):
+                text = text.replace(word, "redacted").replace(word.upper(), "REDACTED")
+            return text
+
+        rag_enabled = "rag" in set(getattr(enterprise.deployment, "allowed_tools", ()))
+        knowledge_bases = []
+        for item in list_visible_knowledge_bases():
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            resource_id = str(item.get("id") or name)
+            status = "ready"
+            description = safe_description(item.get("provenance_label"))
+            if rag_enabled:
+                try:
+                    resource = resolve_kb(resource_id, require_write=False)
+                    entry = manager_for_resource(resource).get_kb_entry(resource.name)
+                    entry_status = str((entry or {}).get("status") or "ready").strip()
+                    status = entry_status or "ready"
+                except PermissionError:
+                    status = "unauthorized"
+                except Exception:
+                    status = "unavailable"
+            else:
+                status = "unavailable"
+                description = "当前部署未启用知识库检索"
+            knowledge_bases.append(
+                {
+                    "id": resource_id,
+                    "label": name,
+                    "description": description,
+                    "status": status,
+                    "disabled": status != "ready",
+                }
+            )
+
+        try:
+            skill_service = get_runtime_skill_service()
+            skill_entries = await call_skill_service(skill_service, "summary_entries")
+        except Exception:
+            skill_entries = []
+        skills = [
+            {
+                "id": entry.name,
+                "label": entry.name,
+                "description": safe_description(entry.description),
+                "status": "ready" if entry.available else "unavailable",
+                "disabled": not entry.available,
+            }
+            for entry in skill_entries
+        ]
+
+        try:
+            tool_options = await build_tool_options()
+        except Exception:
+            tool_options = {"mcp_tools": []}
+
+        def friendly_mcp_label(name: str, description: str) -> str:
+            lowered = f"{name} {description}".lower()
+            if "lightrag" in lowered or "rag" in lowered:
+                return "外部检索工具"
+            return "外部工具"
+
+        mcp_tools = []
+        for item in tool_options.get("mcp_tools") or []:
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            description = safe_description(item.get("description"))
+            mcp_tools.append(
+                {
+                    "id": name,
+                    "label": friendly_mcp_label(name, description),
+                    "description": description[:240],
+                    "status": "ready",
+                    "disabled": False,
+                }
+            )
+
+        return {
+            "knowledge_bases": knowledge_bases,
+            "skills": skills,
+            "mcp_tools": mcp_tools,
+        }
+
     @auth.post("/login")
     async def login(payload: LoginRequest, request: Request, response: Response):
         token = await enterprise.identity.login(
@@ -605,9 +721,14 @@ def create_application(enterprise):
             (auth, "/api/auth"),
             (eduplus2_auth, "/api/v1"),
             (eduplus2_audit, "/api/v1/enterprise/audit/eduplus2"),
+            (conversation_test, "/api/v1/enterprise/conversation-test"),
+            # Next/AppShell 在登录前会读取界面语言和主题。只挂载核心的
+            # public_router，避免把完整 settings/admin 配置面暴露到企业最小 API。
+            (settings.public_router, "/api/settings"),
             (session_routes, "/api/sessions"),
             (resources.api_router, "/api/v1/resources"),
             (resources.router, "/files/resources"),
+            (voice.router, "/api/voice"),
             (unified_ws.router, "/api/v1"),
         ),
         lifespan=lifespan,

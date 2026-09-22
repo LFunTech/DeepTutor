@@ -71,6 +71,8 @@ export function buildStartTurnInput(input: StartTurnInput): StartTurnCommand {
     session_id: input.sessionId ?? null,
     tools: input.tools ?? null,
     knowledge_bases: input.knowledgeBases ?? [],
+    mcp_tools: input.mcpTools ?? [],
+    context_policy: input.contextPolicy ?? "auto",
     language: input.language ?? null,
     config: capabilityConfig(input),
     attachments: input.attachments ?? [],

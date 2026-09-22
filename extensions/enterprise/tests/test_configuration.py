@@ -61,3 +61,31 @@ def test_reject_insecure_origins_and_secret_literals():
             secret="env:KEY",
             allowed_roles=["admin"],
         )
+
+def test_deployment_config_allows_rag_tool_for_required_knowledge_bases():
+    from deeptutor_enterprise.configuration import DeploymentConfig
+
+    config = DeploymentConfig.model_validate(
+        {
+            "version": 1,
+            "tenant_id": "62ccf04e-0913-4fef-961e-ffbc6d8e449c",
+            "resource": "isolated",
+            "database_secret": "env:TEST_DATABASE_SECRET",
+            "signing_secret": "env:TEST_SIGNING_SECRET",
+            "auth_epoch_secret": "env:TEST_AUTH_EPOCH",
+            "origins": ["https://school.example"],
+            "allowed_tools": ["ask_user", "rag"],
+            "models": [
+                {
+                    "profile_id": "chat",
+                    "model_id": "primary",
+                    "model": "some-model",
+                    "base_url": "https://model.example/v1",
+                    "secret": "env:TEST_MODEL_SECRET",
+                    "allowed_roles": ["user", "tenant_admin"],
+                }
+            ],
+        }
+    )
+
+    assert config.allowed_tools == ("ask_user", "rag")

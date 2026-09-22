@@ -67,6 +67,23 @@ test("course, Reading, Watching, Mastery, references, edit, and budget are expli
   assert.equal(wire.timed_media_viewport?.time_seconds, 12.5);
 });
 
+test("required context controls are mapped onto the WebSocket contract", () => {
+  const wire = buildStartTurnInput({
+    content: "请用指定知识库讲解",
+    knowledgeBases: ["七年级数学"],
+    skills: ["step-by-step"],
+    tools: ["rag"],
+    mcpTools: ["lightrag.query"],
+    contextPolicy: "required",
+  });
+
+  assert.deepEqual(wire.knowledge_bases, ["七年级数学"]);
+  assert.deepEqual(wire.skills, ["step-by-step"]);
+  assert.deepEqual(wire.tools, ["rag"]);
+  assert.deepEqual(wire.mcp_tools, ["lightrag.query"]);
+  assert.equal(wire.context_policy, "required");
+});
+
 test("waiting-input replies stay commands and runtime config cannot leak into capability config", () => {
   assert.throws(
     () =>

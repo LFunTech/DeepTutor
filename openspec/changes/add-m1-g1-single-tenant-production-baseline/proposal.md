@@ -20,7 +20,7 @@ G1 的关键缺口不是再做一个 demo，而是把“可构建、可迁移、
 - 形成目标部署拓扑与发布清单：enterprise backend、frontend、应用 PostgreSQL、S3-compatible ObjectStore、Secret provider、LightRAG Server API binding、Ingress/TLS、readiness/liveness、单执行限制；部署/流水线拓扑必须来自目标环境契约，不能从“单租户/多租户”状态直接推导。
 - 固化 runtime 配置契约：生产模式、固定内部 tenant、PG-only、ObjectStore/Secret/Settings provider、EduPlus2 exchange、LightRAG service binding、模型 profile、audit/export、禁用本地权威 fallback。
 - 固化第三方资源提交契约：第三方应用先向 DeepTutor 申请受控 pre-signed upload URL，由 DeepTutor 生成 ObjectStore key/resource binding；第三方直传 S3-compatible ObjectStore 后，在 HTTP 或 WebSocket `start_turn` 提交 turn 时只提交 prompt + server-issued resource id/key 清单，DeepTutor 再经 ObjectStore 读取、校验并转交模型/RAG adapter。生产入口不得依赖调用方提供的任意外部 URL、长期可用下载地址或大 base64 payload。
-- 更新 EduPlus2 前置应用 demo 与 smoke：demo 页面必须展示 pre-signed upload → `prompt + resource_ids` 的资源输入边界，WebSocket 对话构造器必须使用 `resource_ids` 字段而非 `attachments.url/base64`；dry-run smoke 必须输出该资源链路为 delegated/待 A2.2 实测的证据项。
+- 更新 EduPlus2 前置应用 demo 与 smoke：demo 的真实 `/api/v1/ws` 对话测试区域必须内嵌 local/test 可执行的文件选择 → upload intent → pre-signed PUT → complete → `resource_ids` 自动填充演示，不再用独立资源说明板块代替完整流程；WebSocket 对话构造器必须使用 `resource_ids` 字段而非 `attachments.url/base64`；dry-run smoke 必须输出该资源链路为 delegated/待 A2.2 实测的证据项。
 - 交付 Kubernetes 源与环境模板：在目标集群契约登记后补齐 namespace、Deployment/Service/Ingress、ConfigMap/Secret 引用、Job/CronJob、NetworkPolicy/ServiceAccount/RBAC、probe、资源请求/限制、单执行 rollout 策略。
 - 交付 Woodpecker A3/G1 流水线：在目标 Woodpecker server/agent、受保护 ref、审批/Secret 边界和 registry 契约确认后，构建一次、推送镜像、锁定 digest、运行迁移、部署到 test K8s、业务 smoke、生产批准、受控回退、证据归档。
 - 交付 M1 smoke 套件：覆盖认证、EduPlus2 exchange、HTTP status、WebSocket `start_turn` / `auth_refresh`、session owner guard、pre-signed upload、HTTP/WS `resource_ids` 提交、ObjectStore、LightRAG/KB 可用性（目标环境具备时）、audit query/export、负例与脱敏检查。
@@ -34,7 +34,7 @@ G1 的关键缺口不是再做一个 demo，而是把“可构建、可迁移、
 - **M1/A1 收敛核对**：PG-only 与固定租户身份/会话/owner guard 的生产配置、迁移、真实 HTTP/WS/SDK 入口回归。
 - **M1/A2 收敛核对**：ObjectStore、settings/Secret provider、pre-signed upload/resource binding、资源链路、LightRAG service binding、KB/文档/检索可用性门禁。
 - **M1/A3/G1 生产验收**：Kubernetes manifests、Woodpecker pipeline、迁移 Job、部署、smoke、回退、证据归档。
-- **EduPlus2 作为 M1 smoke 输入**：使用已归档 exchange/fronting contract 和 demo 的测试路径验证 `dt_token`、WS 续签以及 `resource_ids` 引用提交边界，但不把 demo 升级为生产登录入口或完整资源上传实现。
+- **EduPlus2 作为 M1 smoke 输入**：使用已归档 exchange/fronting contract 和 demo 的测试路径验证 `dt_token`、WS 续签以及 `resource_ids` 引用提交边界；demo 可执行 local/test 资源预上传 happy path，但不把 demo 升级为生产登录入口、生产资源治理 UI 或完整多模态模型编排。
 - **Upstream mergeability**：所有产品/企业实现优先在 `extensions/enterprise/` 和部署源中完成；必要 core patch 只作为通用 seam，并记录目的、入口、风险和验证。
 - **Fail-closed 与负例**：依赖缺失、Secret 缺失、迁移漂移、SQLite/local fallback、跨 owner、过期/撤销 token、WS refresh 不匹配、LightRAG unavailable、ObjectStore 权限不足、rollout/smoke 失败均阻断 G1。
 
@@ -44,7 +44,7 @@ G1 的关键缺口不是再做一个 demo，而是把“可构建、可迁移、
 - 不交付 C1/C2 OMS 运营后台。
 - 不交付 Handoff/OIDC callback 生产登录、实时撤权 SLA 或周期合法性调度；这些仍属后续 proposal。
 - 不交付完整音频/视频/图片多模态模型编排能力；M1/G1 只固化可扩展的 ObjectStore 资源提交、安全校验、审计和 adapter 读取契约。
-- Demo 只体现资源预上传和 turn 引用边界；除 A2.2 明确验证项外，不把 demo-only 页面等同于生产资源治理 UI。
+- Demo 只体现 local/test 资源预上传 happy path 和 turn 引用边界；除 A2.2 明确验证项外，不把 demo-only 页面等同于生产资源治理 UI、目标 ObjectStore 验收或完整多模态能力。
 - 不把 LightRAG 内部 PG/HugeGraph schema/ACL 迁移实现放入 DeepTutor 企业包；DeepTutor 只绑定服务 API 与部署记录，LightRAG 侧由匹配制品/运维 Job 管理。
 - 不实现多执行者/HA；首发为单执行模式。若目标拓扑启用多执行者或 HA，必须先通过 G-H。
 - 不迁移真实业务数据或操作真实生产集群，除非后续单独获得环境、窗口和凭证授权。
@@ -70,7 +70,7 @@ G1 的关键缺口不是再做一个 demo，而是把“可构建、可迁移、
 2. **部署源与配置契约**：先登记目标部署契约（Woodpecker、registry、namespace、Ingress/TLS、SecretStore、RBAC、发布锁、回退和 evidence 存放位置），再补齐 `extensions/enterprise/` 或部署目录中的 K8s/Helm/Kustomize/manifest 源、ConfigMap/Secret ref、NetworkPolicy、probe 和单执行策略。
 3. **迁移与 readiness**：确保应用 PG migration、固定租户 bootstrap、ObjectStore/Secret/LightRAG/EduPlus2 readiness 均 fail closed；运行进程只校验版本，不在普通 lifespan 中抢跑迁移。
 4. **Woodpecker pipeline**：按目标 Woodpecker 契约实现 build/push/migrate/deploy/smoke/rollback/evidence 阶段，锁定 digest 与环境审批，拒绝 PR/未批准 tag/过期批准/Secret 越权/旧构建覆盖。
-5. **Smoke harness 与 demo**：补齐可重复、脱敏、目标环境可运行的 HTTP/WS/EduPlus2/pre-signed upload/ObjectStore/LightRAG/audit/negative smoke；更新 EduPlus2 fronting demo 展示 pre-signed upload → `prompt + resource_ids`，验证 HTTP/WS turn 只携带资源引用、不承载上传 payload；每次输出 run ID 和证据路径。
+5. **Smoke harness 与 demo**：补齐可重复、脱敏、目标环境可运行的 HTTP/WS/EduPlus2/pre-signed upload/ObjectStore/LightRAG/audit/negative smoke；更新 EduPlus2 fronting demo，在真实 `/api/v1/ws` 对话测试区域执行并展示文件选择 → upload intent → pre-signed PUT → complete → `prompt + resource_ids`，验证 HTTP/WS turn 只携带资源引用、不承载上传 payload；每次输出 run ID 和证据路径。
 6. **回退与恢复演练**：测试 migration 幂等、rollout/smoke 失败、兼容应用回退、无安全回退时维护模式，以及 release state 对账。
 7. **Upstream 兼容审查**：记录 core patch 清单、通用 seam 目的和 upstream merge 风险；跑基础 auth/HTTP/WS/session/audit 回归。
 8. **G1 收口**：在同构 test K8s 通过完整流水线；若获授权，再晋级目标生产环境并保留完整证据。未跑真实生产前只能标记“集成 G1 通过”，不能宣称已生产上线。

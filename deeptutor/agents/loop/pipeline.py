@@ -23,6 +23,7 @@ silently takes a tool away. A loop that wants a narrower surface overrides
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,14 @@ from deeptutor.services.llm import (
 from deeptutor.services.llm.context_window import resolve_effective_context_window
 from deeptutor.services.prompt import get_prompt_manager
 from deeptutor.services.prompt.lookup import prompt_text as _prompt_text
+from deeptutor.services.session.required_context import (
+    ContextResolutionError,
+    ensure_context_resolution,
+    mark_resolved,
+    mark_unavailable,
+    normalize_context_policy,
+    string_list,
+)
 from deeptutor.tools.builtin import PARTNER_BUILTIN_TOOL_NAMES
 
 logger = logging.getLogger(__name__)
@@ -412,8 +421,10 @@ class AgenticLoopPipeline:
             )
         await self._prepare_deferred_tools(context)
         await self._prepare_kb_manifests(context)
+        self._validate_required_knowledge_bases(context)
         self._exec_enabled = await self._exec_allowed(context)
         enabled_tools = self._compose_enabled_tools(context)
+        self._validate_required_builtin_tools(context, enabled_tools)
         use_native_tools = bool(enabled_tools) and self._can_use_native_tool_calling()
         tool_schemas = (
             self._build_llm_tool_schemas(enabled_tools, context) if use_native_tools else None
@@ -575,13 +586,34 @@ class AgenticLoopPipeline:
         ``runtime.providers``. All the pipeline owns is translating the turn's
         context into a :class:`ToolScope`.
         """
+        resolution = ensure_context_resolution(context.metadata)
+        requested_mcp_tools = string_list(
+            (resolution.get("requested") or {}).get("mcp_tools")
+            or context.metadata.get("mcp_tools")
+        )
+        policy = normalize_context_policy(resolution.get("policy") or context.metadata.get("context_policy"))
         if context.runtime.resource_capabilities is not None:
             self._tool_view = ProviderToolView.empty(self.registry)
+            self._deferred_loader = None
+            self._deferred_pool = []
+            if requested_mcp_tools:
+                mark_unavailable(
+                    context.metadata,
+                    kind="mcp_tool",
+                    names=requested_mcp_tools,
+                    code="mcp_tool_unavailable",
+                )
+                if policy == "required":
+                    raise ContextResolutionError(
+                        "Required MCP tool is unavailable in this turn environment",
+                        error_code="mcp_tool_unavailable",
+                    )
             return
         self._pageindex_providers: set[str] = set()
         self._pageindex_cloud_instructions = ""
         self._pageindex_oss_instructions = ""
         pageindex_tools: list[Any] = []
+        preloaded_names: list[str] = []
         try:
             for kb, bundle in await self._pageindex_sdk_tool_bundles(context):
                 self._pageindex_providers.add(bundle.provider)
@@ -590,8 +622,16 @@ class AgenticLoopPipeline:
                 else:
                     self._pageindex_cloud_instructions = bundle.instructions
                 pageindex_tools.extend(bundle.tools)
+            for tool in pageindex_tools:
+                name = getattr(tool, "name", "")
+                if not name:
+                    with contextlib.suppress(Exception):
+                        name = tool.get_definition().name
+                if name:
+                    preloaded_names.append(str(name))
         except Exception:
             logger.warning("PageIndex SDK tool preparation failed", exc_info=True)
+        preloaded_names.extend(name for name in requested_mcp_tools if name not in preloaded_names)
         try:
             view = await build_tool_view(
                 base_registry=self.registry,
@@ -605,7 +645,7 @@ class AgenticLoopPipeline:
                     ),
                 ),
                 overlay_tools=pageindex_tools,
-                preloaded_names=[tool.name for tool in pageindex_tools],
+                preloaded_names=preloaded_names,
             )
         except Exception:
             # ``build_tool_view`` is contractually non-raising; this is defence
@@ -618,6 +658,31 @@ class AgenticLoopPipeline:
         # Kept as a plain list: the context-budget chip counts the provider
         # tools whose schemas never entered the window.
         self._deferred_pool = list(view.pool)
+        if requested_mcp_tools:
+            pool_names: set[str] = set()
+            for tool in view.pool:
+                try:
+                    pool_names.add(str(tool.get_definition().name))
+                except Exception:
+                    name = getattr(tool, "name", "")
+                    if name:
+                        pool_names.add(str(name))
+            resolved = [name for name in requested_mcp_tools if name in pool_names]
+            missing = [name for name in requested_mcp_tools if name not in pool_names]
+            if resolved:
+                mark_resolved(context.metadata, "mcp_tools", resolved)
+            if missing:
+                mark_unavailable(
+                    context.metadata,
+                    kind="mcp_tool",
+                    names=missing,
+                    code="mcp_tool_unavailable",
+                )
+                if policy == "required":
+                    raise ContextResolutionError(
+                        "Required MCP tool is unavailable or unauthorized",
+                        error_code="mcp_tool_unavailable",
+                    )
 
     def _tool_scope(self, context: UnifiedContext) -> ToolScope:
         """Per-turn policy inputs for the provider layer."""
@@ -1796,6 +1861,117 @@ class AgenticLoopPipeline:
             self._kb_manifests = await asyncio.to_thread(self._collect_kb_manifests, kbs)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to build knowledge base manifests: %s", exc)
+
+    def _validate_required_knowledge_bases(self, context: UnifiedContext) -> None:
+        """Fail closed when a caller required KBs that are not ready/authorized."""
+
+        requested = self._selected_kbs(context)
+        if not requested:
+            return
+        resolution = ensure_context_resolution(context.metadata)
+        policy = normalize_context_policy(resolution.get("policy"))
+        if (
+            context.runtime.resource_capabilities is not None
+            and "rag" not in set(context.allowed_builtin_tools or [])
+        ):
+            mark_unavailable(
+                context.metadata,
+                kind="knowledge_base",
+                names=requested,
+                code="knowledge_base_unavailable",
+            )
+            if policy == "required":
+                raise ContextResolutionError(
+                    "Required knowledge base cannot be mounted in this turn environment",
+                    error_code="knowledge_base_unavailable",
+                )
+            return
+        resolved: list[str] = []
+        missing: list[str] = []
+        not_ready: list[str] = []
+        unauthorized: list[str] = []
+        try:
+            from fastapi import HTTPException
+
+            from deeptutor.multi_user.knowledge_access import manager_for_resource, resolve_kb
+        except Exception:
+            HTTPException = Exception  # type: ignore[assignment]
+            resolve_kb = None  # type: ignore[assignment]
+            manager_for_resource = None  # type: ignore[assignment]
+
+        for kb in requested:
+            if resolve_kb is None or manager_for_resource is None:
+                missing.append(kb)
+                continue
+            try:
+                resource = resolve_kb(kb, require_write=False)
+                manager = manager_for_resource(resource)
+                entry = manager.get_kb_entry(resource.name)
+            except HTTPException as exc:  # type: ignore[misc]
+                status_code = getattr(exc, "status_code", None)
+                if status_code == 403:
+                    unauthorized.append(kb)
+                else:
+                    missing.append(kb)
+                continue
+            except Exception:
+                missing.append(kb)
+                continue
+            status = str((entry or {}).get("status") or "").strip()
+            if entry is None:
+                missing.append(kb)
+            elif status and status != "ready":
+                not_ready.append(kb)
+            else:
+                resolved.append(kb)
+        if resolved:
+            mark_resolved(context.metadata, "knowledge_bases", resolved)
+        failures = [
+            ("knowledge_base", missing, "knowledge_base_unavailable"),
+            ("knowledge_base", not_ready, "knowledge_base_unavailable"),
+            ("knowledge_base", unauthorized, "context_authorization_failed"),
+        ]
+        for kind, names, code in failures:
+            mark_unavailable(context.metadata, kind=kind, names=names, code=code)
+        if policy == "required":
+            if unauthorized:
+                raise ContextResolutionError(
+                    "Required knowledge base is not authorized",
+                    error_code="context_authorization_failed",
+                )
+            if missing or not_ready:
+                raise ContextResolutionError(
+                    "Required knowledge base is unavailable or not ready",
+                    error_code="knowledge_base_unavailable",
+                )
+
+    def _validate_required_builtin_tools(
+        self,
+        context: UnifiedContext,
+        enabled_tools: list[str],
+    ) -> None:
+        requested = string_list(context.enabled_tools)
+        if not requested:
+            return
+        resolution = ensure_context_resolution(context.metadata)
+        policy = normalize_context_policy(resolution.get("policy"))
+        enabled = set(enabled_tools)
+        resolved = [name for name in requested if name in enabled]
+        missing = [name for name in requested if name not in enabled]
+        if resolved:
+            mark_resolved(context.metadata, "tools", resolved)
+        if missing:
+            mark_unavailable(
+                context.metadata,
+                kind="tool",
+                names=missing,
+                code="required_context_unavailable",
+            )
+            if policy == "required":
+                raise ContextResolutionError(
+                    "Required tool is unavailable in this turn",
+                    error_code="required_context_unavailable",
+                )
 
     @staticmethod
     def _collect_kb_manifests(kbs: list[str]) -> list[KbManifest]:

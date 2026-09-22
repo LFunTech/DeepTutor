@@ -12,9 +12,9 @@
 ## A2 文件、资源与检索替换收敛
 
 - [x] A2.1 迁移/配置：定义 DeepTutor 业务 ObjectStore、pre-signed upload/resource binding、Secret/Settings provider、LightRAG API binding、KB/index-version binding 和模型 profile 的 production 配置契约；只记录 Secret ref，不记录明文。
-- [ ] A2.2 真实入口：通过真实 API/WS 或维护命令验证创建上传意图、pre-signed URL 直传 ObjectStore、上传完成确认、HTTP 与 WebSocket `start_turn` 提交 `prompt + resource_id/key` 清单、后端读取资源、对象写读删/授权下载、KB 原文或样本资源登记、LightRAG service readiness、引用返回与 audit 关联。
-- [ ] A2.3 权限/异常测试：覆盖 ObjectStore bucket/权限、过期上传 URL、未完成上传、WebSocket raw binary/URL/base64 payload、非法 resource key、跨 owner/tenant/session 引用、MIME/大小超限、hash/checksum mismatch、Secret 缺失、LightRAG unavailable、未授权 KB/私有资源、服务派生副本状态不一致、删除补偿失败等负例。
-- [ ] A2.4 切换证据：保存 ObjectStore/LightRAG binding 版本、pre-signed upload policy 摘要、resource id/key 绑定摘要、manifest/hash、对象前缀、服务状态、清理/补偿结果；若目标环境未具备 LightRAG 样本检索，记录为 G1 阻断依赖而非放行。
+- [x] A2.2 真实入口：通过真实 API/WS 或维护命令验证创建上传意图、pre-signed URL 直传 ObjectStore、上传完成确认、HTTP 与 WebSocket `start_turn` 提交 `prompt + resource_id/key` 清单、后端读取资源、对象写读删/授权下载、KB 原文或样本资源登记、LightRAG service readiness、引用返回与 audit 关联。
+- [x] A2.3 权限/异常测试：覆盖 ObjectStore bucket/权限、过期上传 URL、未完成上传、WebSocket raw binary/URL/base64 payload、非法 resource key、跨 owner/tenant/session 引用、MIME/大小超限、hash/checksum mismatch、Secret 缺失、LightRAG unavailable、未授权 KB/私有资源、服务派生副本状态不一致、删除补偿失败等负例。
+- [x] A2.4 切换证据：保存 ObjectStore/LightRAG binding 版本、pre-signed upload policy 摘要、resource id/key 绑定摘要、manifest/hash、对象前缀、服务状态、清理/补偿结果；若目标环境未具备 LightRAG 样本检索，记录为 G1 阻断依赖而非放行。
 
 ## A3 单租户生产验收与 Woodpecker
 
@@ -26,9 +26,9 @@
 ## B1 EduPlus2 单租户接入边界回归
 
 - [x] B1.1 迁移/配置：复用已归档 EduPlus2 exchange/fronting contract 的 local/test 配置，明确生产基线中 EduPlus2 只作为 M1 smoke 输入，不启用 Handoff/OIDC callback 或周期合法性调度。
-- [ ] B1.2 真实入口：在目标环境 smoke 中完成 EduPlus2 user JWT exchange、HTTP bearer 调用、WebSocket `auth_refresh` 和一轮真实对话；前置 demo/测试 token 页面与 dry-run smoke 必须体现 pre-signed upload → `prompt + resource_ids`，且只输出脱敏摘要。
+- [x] B1.2 真实入口：在目标环境 smoke 中完成 EduPlus2 user JWT exchange、HTTP bearer 调用、WebSocket `auth_refresh` 和一轮真实对话；前置 demo/测试 token 页面与 dry-run smoke 必须体现 pre-signed upload → `prompt + resource_ids`，且只输出脱敏摘要。
 - [x] B1.3 权限/异常测试：覆盖 client inactive、tenant mismatch、app status disabled、expired JWT、resolve/profile/permission unavailable、rate limit、owner guard denied、WS identity change denied。
-- [ ] B1.4 切换证据：记录 client_id/tenant/user 的 hash、request id、exchange/audit event、refresh 结果；不记录 JWT/`dt_token`/client secret；不标记 B1 功能完成。
+- [x] B1.4 切换证据：记录 client_id/tenant/user 的 hash、request id、exchange/audit event、refresh 结果；不记录 JWT/`dt_token`/client secret；不标记 B1 功能完成。
 
 ## B2 多租户与租户自管理边界保护
 
@@ -54,8 +54,8 @@
 ## H 可用性/容量条件性任务
 
 - [x] H.1 迁移/配置：确认 M1 目标拓扑为单执行模式，设置明确的容量/恢复目标和非 HA 声明；若目标要求多执行者/HA，则阻断并先立 G-H proposal。
-- [ ] H.2 真实入口：验证发布期间排空、停止接新 turn、旧执行者终止、新执行者启动和不重叠证据；frontend/无执行权组件可单独滚动但不能放宽 backend 执行限制。
-- [ ] H.3 权限/异常测试：覆盖锁/DB 连通丢失、agent 中断、Pod 重启、旧 running/waiting turn 恢复、重复 cancel/reply、WS 重连 replay 等非 HA 故障边界。
+- [x] H.2 真实入口：验证发布期间排空、停止接新 turn、旧执行者终止、新执行者启动和不重叠证据；frontend/无执行权组件可单独滚动但不能放宽 backend 执行限制。
+- [x] H.3 权限/异常测试：覆盖锁/DB 连通丢失、agent 中断、Pod 重启、旧 running/waiting turn 恢复、重复 cancel/reply、WS 重连 replay 等非 HA 故障边界。
 - [x] H.4 切换证据：保存单执行限制、容量假设、恢复窗口、未通过 G-H 的限制说明；不得宣称高可用或多执行者安全。
 
 ## 验证与归档准备

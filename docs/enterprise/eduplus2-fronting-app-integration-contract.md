@@ -364,7 +364,38 @@ Content-Type: application/json
 | WS refresh 身份不一致 | `auth_revoked` 或 close | 重新 exchange 后重连 | “连接已失效，正在恢复。” | 确保 refresh 后 tenant/user/client/app 与旧连接一致。 |
 | audit export denied | HTTP 403 | 不重试 | “无审计导出权限。” | 使用 tenant_admin token；检查角色。 |
 
-## 9. 安全禁令
+## 9. WebSocket 上下文控制与多模态资源
+
+第三方前置应用调用 `/api/v1/ws` 发起对话时，资源与上下文按以下规则提交：
+
+- 文件、图片、音频、视频先调用 DeepTutor resource upload intent，使用返回的 pre-signed URL 上传，complete 成功后只把 `resource_ids` 放入 `start_turn`。
+- `start_turn` 可提交 `knowledge_bases`、`skills`、`tools`、`mcp_tools` 与 `context_policy`。
+- `context_policy` 缺省或为 `auto` 时，系统仅按默认策略暴露可用能力，不保证一定调用某个知识库、skill 或 MCP tool。
+- `context_policy: "best_effort"` 时，系统尽量挂载指定上下文；不可用项会进入脱敏 metadata，但可继续回答。
+- `context_policy: "required"` 时，指定 KB/skill/tool/MCP tool 必须在模型调用前通过存在性、ready、授权和可挂载校验；失败返回 `knowledge_base_unavailable`、`skill_unavailable`、`mcp_tool_unavailable`、`context_authorization_failed` 或 `required_context_unavailable`，不得静默降级。
+- MCP 只能按服务端登记 tool name 指定，例如 `mcp_tools: ["lightrag.query"]`；不得通过 WebSocket 传 server URL、Secret、headers、命令行或 provider config。
+
+示例：
+
+```json
+{
+  "type": "start_turn",
+  "protocol_version": "2.0",
+  "content": "请结合上传的试卷讲解第 3 题",
+  "capability": "chat",
+  "session_id": "existing-session-or-null",
+  "knowledge_bases": ["七年级数学"],
+  "skills": ["step-by-step"],
+  "mcp_tools": ["lightrag.query"],
+  "context_policy": "required",
+  "resource_ids": ["res_..."],
+  "attachments": []
+}
+```
+
+响应 `done.metadata.capability_usage` 会给出脱敏能力使用摘要；普通页面应展示为“知识库已用于回答 / 外部工具已启用但本轮未用 / 上传文件已发送给模型”等用户语言，不展示 raw WS frame、signed URL、ObjectStore key、token 或 Secret。
+
+## 10. 安全禁令
 
 1. 不把 EduPlus2 user JWT、DeepTutor `dt_token`、client secret、M2M token、webhook secret、签名值写入普通日志、审计正文、OpenSpec、文档、浏览器可读存储、URL 或错误消息。
 2. 不在前端 localStorage/sessionStorage 保存 bearer token；优先使用 BFF/server session、内存或 httpOnly secure cookie。
@@ -372,9 +403,9 @@ Content-Type: application/json
 4. 不把 tenant_admin 等同于个人内容 owner；个人 session/memory/notebook/artifact 仍需 owner/grant。
 5. 不把 P1 契约或 smoke 通过解释为 TMS/OMS、M1/G1、生产上线或实时撤权 SLA 已完成。
 
-## 10. Smoke 命令与证据模板
+## 11. Smoke 命令与证据模板
 
-### 10.1 P1 dry-run
+### 11.1 P1 dry-run
 
 ```bash
 ./.venv/bin/python scripts/enterprise/eduplus2_fronting_app_smoke.py \
@@ -392,7 +423,7 @@ Content-Type: application/json
 - `negative_cases`: 说明 missing token 与 expired token 的 fail-closed 形态。
 - 不输出 raw JWT、`dt_token`、client secret 或 M2M token。
 
-### 10.2 真实 EduPlus2 discovery/M2M/resolve smoke
+### 11.2 真实 EduPlus2 discovery/M2M/resolve smoke
 
 在确认 `.secrets` 已刷新且允许访问 test endpoint 后运行：
 
@@ -416,7 +447,7 @@ set +a
   --env-file .secrets/deeptutor-local-eduplus2.env
 ```
 
-### 10.3 复用现有 pytest 的 WS 与审计验证
+### 11.3 复用现有 pytest 的 WS 与审计验证
 
 WS refresh：
 
