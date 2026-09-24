@@ -99,7 +99,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/library/node:22-slim" --build-arg PYTHON_IMAGE="$${registry_host}/library/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
   - name: pre-deploy-check-test-cn
@@ -222,7 +222,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/library/node:22-slim" --build-arg PYTHON_IMAGE="$${registry_host}/library/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
   - name: pre-deploy-check-pre-cn
@@ -345,7 +345,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/library/node:22-slim" --build-arg PYTHON_IMAGE="$${registry_host}/library/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
   - name: pre-deploy-check-prod-cn-east
@@ -468,7 +468,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/library/node:22-slim" --build-arg PYTHON_IMAGE="$${registry_host}/library/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
   - name: pre-deploy-check-prod-overseas-a

@@ -999,3 +999,33 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.11` tag。
+
+### 2026-09-24 test-cn pipeline #18 内部基础镜像路径修正
+
+`deploy/test-cn/v1.4.0-rc.12` 触发 Woodpecker pipeline `#18` 后，release gate、metadata 和 secret preflight 继续通过。Kaniko 已按 build args 访问内部 registry，但失败于不存在的 mirror repository：
+
+```text
+GET https://docker-hub.f123.pub/v2/library/node/manifests/22-slim: NOT_FOUND: repository library/node not found
+```
+
+根因：内部 registry 中可用的 Node/Python base image 命名不在 `library/*` 路径。已通过 registry tag list（仅检查状态与 tag 名，不输出凭据）确认可用路径包括 `base/node:22-bookworm` 与 `base/python:3.11-slim`。
+
+修复：Woodpecker Kaniko build args 从 `library/node:22-slim` / `library/python:3.11-slim` 改为 `base/node:22-bookworm` / `base/python:3.11-slim`。Dockerfile 默认值保持 Docker Hub 官方镜像，只有 CI 覆盖到内部 registry。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.12` tag。
