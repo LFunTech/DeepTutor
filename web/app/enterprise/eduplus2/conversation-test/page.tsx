@@ -1095,8 +1095,8 @@ export default function EnterpriseConversationTestPage() {
   }
 
   return (
-    <main className="min-h-dvh overflow-y-auto bg-[#efe9dc] px-3 py-3 text-[#1f251f] md:px-5 md:py-5 xl:px-8">
-      <div className="grid min-h-[calc(100dvh-1.5rem)] w-full gap-5 lg:grid-cols-[420px_minmax(0,1fr)] xl:min-h-[calc(100dvh-2.5rem)] xl:grid-cols-[480px_minmax(0,1fr)] 2xl:grid-cols-[520px_minmax(0,1fr)]">
+    <main className="min-h-dvh overflow-y-auto bg-[#efe9dc] px-3 py-3 text-[#1f251f] md:px-5 md:py-5 lg:h-dvh lg:overflow-hidden xl:px-8">
+      <div className="grid min-h-[calc(100dvh-1.5rem)] w-full gap-5 md:min-h-[calc(100dvh-2.5rem)] lg:h-[calc(100dvh-2.5rem)] lg:min-h-0 lg:grid-cols-[420px_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[480px_minmax(0,1fr)] 2xl:grid-cols-[520px_minmax(0,1fr)]">
         <aside className="rounded-[1.75rem] border border-[#d8ccb6] bg-[#fffaf0]/90 p-5 shadow-[0_20px_60px_rgba(64,52,28,0.12)] lg:max-h-[calc(100dvh-2.5rem)] lg:overflow-y-auto xl:p-6">
           <div className="mb-5 rounded-2xl bg-[#133f38] p-4 text-white">
             <p className="text-xs font-semibold tracking-[0.24em] text-[#a6ded2]">普通测试</p>
@@ -1159,7 +1159,7 @@ export default function EnterpriseConversationTestPage() {
           </div>
         </aside>
 
-        <section className="flex min-h-[calc(100dvh-1.5rem)] flex-col rounded-[1.75rem] border border-[#d8ccb6] bg-[#fffdf7] shadow-[0_20px_80px_rgba(64,52,28,0.14)] lg:min-h-0 xl:min-h-[calc(100dvh-2.5rem)]">
+        <section className="flex min-h-[calc(100dvh-1.5rem)] flex-col overflow-hidden rounded-[1.75rem] border border-[#d8ccb6] bg-[#fffdf7] shadow-[0_20px_80px_rgba(64,52,28,0.14)] lg:h-full lg:min-h-0 xl:min-h-0">
           <header className="shrink-0 border-b border-[#e6dccb] p-5 xl:p-6">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>

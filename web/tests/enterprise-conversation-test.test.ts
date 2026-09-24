@@ -494,6 +494,18 @@ test("ordinary conversation page starts with a non technical waiting message", (
   assert.match(source, /正在连接对话服务/);
 });
 
+test("ordinary conversation page constrains desktop chat panel so the transcript can scroll", () => {
+  const source = readFileSync(
+    join(process.cwd(), "app/enterprise/eduplus2/conversation-test/page.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /lg:h-dvh/);
+  assert.match(source, /lg:overflow-hidden/);
+  assert.match(source, /lg:h-\[calc\(100dvh-2\.5rem\)\]/);
+  assert.match(source, /<section className="[^"]*overflow-hidden[^"]*lg:h-full/);
+});
+
 test("ordinary conversation thinking trace uses safe user facing copy", () => {
   assert.deepEqual(formatConversationThinkingForPeople("thinking", { content: "<think>先判断题意</think>" }), {
     kind: "thinking",
