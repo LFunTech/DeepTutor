@@ -40,7 +40,7 @@ steps:
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
     environment:
       TRUSTED_TRIGGER_METADATA_JSON:
-        from_secret: DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON
+        from_secret: dt_release_trusted_trigger_metadata_json
     commands:
       - mkdir -p "$EVIDENCE_DIR/gate"
       - |
@@ -64,7 +64,7 @@ steps:
     depends_on: [validate-release-trigger]
     environment:
       TRUSTED_TRIGGER_METADATA_JSON:
-        from_secret: DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON
+        from_secret: dt_release_trusted_trigger_metadata_json
     commands:
       - mkdir -p "$EVIDENCE_DIR/metadata"
       - |
@@ -149,25 +149,25 @@ steps:
       KUBE_DEPLOY_TOKEN:
         from_secret: kubeconfig_test
       SECRETSTORE_ROLE:
-        from_secret: DT_TEST_CN_SECRETSTORE_ROLE
+        from_secret: dt_test_cn_secretstore_role
       PG_MIGRATOR_DSN:
-        from_secret: DT_TEST_CN_PG_MIGRATOR_DSN
+        from_secret: dt_test_cn_pg_migrator_dsn
       APP_DB_SECRET_REF:
-        from_secret: DT_TEST_CN_APP_DB_SECRET_REF
+        from_secret: dt_test_cn_app_db_secret_ref
       OBJECTSTORE_SECRET_REF:
-        from_secret: DT_TEST_CN_OBJECTSTORE_SECRET_REF
+        from_secret: dt_test_cn_objectstore_secret_ref
       LIGHTRAG_API_SECRET_REF:
-        from_secret: DT_TEST_CN_LIGHTRAG_API_SECRET_REF
+        from_secret: dt_test_cn_lightrag_api_secret_ref
       EDUPLUS2_CLIENT_SECRET_REF:
-        from_secret: DT_TEST_CN_EDUPLUS2_CLIENT_SECRET_REF
+        from_secret: dt_test_cn_eduplus2_client_secret_ref
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_test_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_TEST_CN_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_test_cn_evidence_store_write_token
       VCS_TAG_VERIFY_TOKEN:
-        from_secret: DT_TEST_CN_VCS_TAG_VERIFY_TOKEN
+        from_secret: dt_test_cn_vcs_tag_verify_token
       SECRET_PREFLIGHT_METADATA_JSON:
-        from_secret: DT_TEST_CN_SECRET_PREFLIGHT_METADATA_JSON
+        from_secret: dt_test_cn_secret_preflight_metadata_json
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
@@ -190,11 +190,11 @@ steps:
       KUBE_DEPLOY_TOKEN:
         from_secret: kubeconfig_test
       PG_MIGRATOR_DSN:
-        from_secret: DT_TEST_CN_PG_MIGRATOR_DSN
+        from_secret: dt_test_cn_pg_migrator_dsn
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_test_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_TEST_CN_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_test_cn_evidence_store_write_token
     commands:
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
@@ -215,9 +215,9 @@ steps:
     environment:
       HOME: /kaniko
       REGISTRY_PUSH_USERNAME:
-        from_secret: DT_PRE_CN_REGISTRY_PUSH_USERNAME
+        from_secret: dt_pre_cn_registry_push_username
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PRE_CN_REGISTRY_PUSH_TOKEN
+        from_secret: dt_pre_cn_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
@@ -239,9 +239,9 @@ steps:
         ref: refs/tags/deploy/pre-cn/**
     environment:
       REGISTRY_PUSH_USERNAME:
-        from_secret: DT_PRE_CN_REGISTRY_PUSH_USERNAME
+        from_secret: dt_pre_cn_registry_push_username
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PRE_CN_REGISTRY_PUSH_TOKEN
+        from_secret: dt_pre_cn_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
@@ -267,29 +267,29 @@ steps:
         ref: refs/tags/deploy/pre-cn/**
     environment:
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PRE_CN_REGISTRY_PUSH_TOKEN
+        from_secret: dt_pre_cn_registry_push_token
       KUBE_DEPLOY_TOKEN:
-        from_secret: DT_PRE_CN_KUBE_DEPLOY_TOKEN
+        from_secret: dt_pre_cn_kube_deploy_token
       SECRETSTORE_ROLE:
-        from_secret: DT_PRE_CN_SECRETSTORE_ROLE
+        from_secret: dt_pre_cn_secretstore_role
       PG_MIGRATOR_DSN:
-        from_secret: DT_PRE_CN_PG_MIGRATOR_DSN
+        from_secret: dt_pre_cn_pg_migrator_dsn
       APP_DB_SECRET_REF:
-        from_secret: DT_PRE_CN_APP_DB_SECRET_REF
+        from_secret: dt_pre_cn_app_db_secret_ref
       OBJECTSTORE_SECRET_REF:
-        from_secret: DT_PRE_CN_OBJECTSTORE_SECRET_REF
+        from_secret: dt_pre_cn_objectstore_secret_ref
       LIGHTRAG_API_SECRET_REF:
-        from_secret: DT_PRE_CN_LIGHTRAG_API_SECRET_REF
+        from_secret: dt_pre_cn_lightrag_api_secret_ref
       EDUPLUS2_CLIENT_SECRET_REF:
-        from_secret: DT_PRE_CN_EDUPLUS2_CLIENT_SECRET_REF
+        from_secret: dt_pre_cn_eduplus2_client_secret_ref
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_PRE_CN_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_pre_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_PRE_CN_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_pre_cn_evidence_store_write_token
       VCS_TAG_VERIFY_TOKEN:
-        from_secret: DT_PRE_CN_VCS_TAG_VERIFY_TOKEN
+        from_secret: dt_pre_cn_vcs_tag_verify_token
       SECRET_PREFLIGHT_METADATA_JSON:
-        from_secret: DT_PRE_CN_SECRET_PREFLIGHT_METADATA_JSON
+        from_secret: dt_pre_cn_secret_preflight_metadata_json
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
@@ -308,15 +308,15 @@ steps:
     environment:
       DEEPTUTOR_DEPLOY_APPROVED: "yes"
       KUBECONFIG:
-        from_secret: DT_PRE_CN_KUBECONFIG
+        from_secret: dt_pre_cn_kubeconfig
       KUBE_DEPLOY_TOKEN:
-        from_secret: DT_PRE_CN_KUBE_DEPLOY_TOKEN
+        from_secret: dt_pre_cn_kube_deploy_token
       PG_MIGRATOR_DSN:
-        from_secret: DT_PRE_CN_PG_MIGRATOR_DSN
+        from_secret: dt_pre_cn_pg_migrator_dsn
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_PRE_CN_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_pre_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_PRE_CN_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_pre_cn_evidence_store_write_token
     commands:
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
@@ -337,9 +337,9 @@ steps:
     environment:
       HOME: /kaniko
       REGISTRY_PUSH_USERNAME:
-        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_USERNAME
+        from_secret: dt_prod_cn_east_registry_push_username
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN
+        from_secret: dt_prod_cn_east_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
@@ -361,9 +361,9 @@ steps:
         ref: refs/tags/deploy/prod-cn-east/**
     environment:
       REGISTRY_PUSH_USERNAME:
-        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_USERNAME
+        from_secret: dt_prod_cn_east_registry_push_username
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN
+        from_secret: dt_prod_cn_east_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
@@ -389,29 +389,29 @@ steps:
         ref: refs/tags/deploy/prod-cn-east/**
     environment:
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN
+        from_secret: dt_prod_cn_east_registry_push_token
       KUBE_DEPLOY_TOKEN:
-        from_secret: DT_PROD_CN_EAST_KUBE_DEPLOY_TOKEN
+        from_secret: dt_prod_cn_east_kube_deploy_token
       SECRETSTORE_ROLE:
-        from_secret: DT_PROD_CN_EAST_SECRETSTORE_ROLE
+        from_secret: dt_prod_cn_east_secretstore_role
       PG_MIGRATOR_DSN:
-        from_secret: DT_PROD_CN_EAST_PG_MIGRATOR_DSN
+        from_secret: dt_prod_cn_east_pg_migrator_dsn
       APP_DB_SECRET_REF:
-        from_secret: DT_PROD_CN_EAST_APP_DB_SECRET_REF
+        from_secret: dt_prod_cn_east_app_db_secret_ref
       OBJECTSTORE_SECRET_REF:
-        from_secret: DT_PROD_CN_EAST_OBJECTSTORE_SECRET_REF
+        from_secret: dt_prod_cn_east_objectstore_secret_ref
       LIGHTRAG_API_SECRET_REF:
-        from_secret: DT_PROD_CN_EAST_LIGHTRAG_API_SECRET_REF
+        from_secret: dt_prod_cn_east_lightrag_api_secret_ref
       EDUPLUS2_CLIENT_SECRET_REF:
-        from_secret: DT_PROD_CN_EAST_EDUPLUS2_CLIENT_SECRET_REF
+        from_secret: dt_prod_cn_east_eduplus2_client_secret_ref
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_PROD_CN_EAST_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_prod_cn_east_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_PROD_CN_EAST_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_prod_cn_east_evidence_store_write_token
       VCS_TAG_VERIFY_TOKEN:
-        from_secret: DT_PROD_CN_EAST_VCS_TAG_VERIFY_TOKEN
+        from_secret: dt_prod_cn_east_vcs_tag_verify_token
       SECRET_PREFLIGHT_METADATA_JSON:
-        from_secret: DT_PROD_CN_EAST_SECRET_PREFLIGHT_METADATA_JSON
+        from_secret: dt_prod_cn_east_secret_preflight_metadata_json
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
@@ -430,15 +430,15 @@ steps:
     environment:
       DEEPTUTOR_DEPLOY_APPROVED: "yes"
       KUBECONFIG:
-        from_secret: DT_PROD_CN_EAST_KUBECONFIG
+        from_secret: dt_prod_cn_east_kubeconfig
       KUBE_DEPLOY_TOKEN:
-        from_secret: DT_PROD_CN_EAST_KUBE_DEPLOY_TOKEN
+        from_secret: dt_prod_cn_east_kube_deploy_token
       PG_MIGRATOR_DSN:
-        from_secret: DT_PROD_CN_EAST_PG_MIGRATOR_DSN
+        from_secret: dt_prod_cn_east_pg_migrator_dsn
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_PROD_CN_EAST_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_prod_cn_east_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_PROD_CN_EAST_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_prod_cn_east_evidence_store_write_token
     commands:
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
@@ -459,9 +459,9 @@ steps:
     environment:
       HOME: /kaniko
       REGISTRY_PUSH_USERNAME:
-        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_USERNAME
+        from_secret: dt_prod_overseas_a_registry_push_username
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN
+        from_secret: dt_prod_overseas_a_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
@@ -483,9 +483,9 @@ steps:
         ref: refs/tags/deploy/prod-overseas-a/**
     environment:
       REGISTRY_PUSH_USERNAME:
-        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_USERNAME
+        from_secret: dt_prod_overseas_a_registry_push_username
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN
+        from_secret: dt_prod_overseas_a_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
@@ -511,29 +511,29 @@ steps:
         ref: refs/tags/deploy/prod-overseas-a/**
     environment:
       REGISTRY_PUSH_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN
+        from_secret: dt_prod_overseas_a_registry_push_token
       KUBE_DEPLOY_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_KUBE_DEPLOY_TOKEN
+        from_secret: dt_prod_overseas_a_kube_deploy_token
       SECRETSTORE_ROLE:
-        from_secret: DT_PROD_OVERSEAS_A_SECRETSTORE_ROLE
+        from_secret: dt_prod_overseas_a_secretstore_role
       PG_MIGRATOR_DSN:
-        from_secret: DT_PROD_OVERSEAS_A_PG_MIGRATOR_DSN
+        from_secret: dt_prod_overseas_a_pg_migrator_dsn
       APP_DB_SECRET_REF:
-        from_secret: DT_PROD_OVERSEAS_A_APP_DB_SECRET_REF
+        from_secret: dt_prod_overseas_a_app_db_secret_ref
       OBJECTSTORE_SECRET_REF:
-        from_secret: DT_PROD_OVERSEAS_A_OBJECTSTORE_SECRET_REF
+        from_secret: dt_prod_overseas_a_objectstore_secret_ref
       LIGHTRAG_API_SECRET_REF:
-        from_secret: DT_PROD_OVERSEAS_A_LIGHTRAG_API_SECRET_REF
+        from_secret: dt_prod_overseas_a_lightrag_api_secret_ref
       EDUPLUS2_CLIENT_SECRET_REF:
-        from_secret: DT_PROD_OVERSEAS_A_EDUPLUS2_CLIENT_SECRET_REF
+        from_secret: dt_prod_overseas_a_eduplus2_client_secret_ref
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_PROD_OVERSEAS_A_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_prod_overseas_a_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_prod_overseas_a_evidence_store_write_token
       VCS_TAG_VERIFY_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_VCS_TAG_VERIFY_TOKEN
+        from_secret: dt_prod_overseas_a_vcs_tag_verify_token
       SECRET_PREFLIGHT_METADATA_JSON:
-        from_secret: DT_PROD_OVERSEAS_A_SECRET_PREFLIGHT_METADATA_JSON
+        from_secret: dt_prod_overseas_a_secret_preflight_metadata_json
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
@@ -552,15 +552,15 @@ steps:
     environment:
       DEEPTUTOR_DEPLOY_APPROVED: "yes"
       KUBECONFIG:
-        from_secret: DT_PROD_OVERSEAS_A_KUBECONFIG
+        from_secret: dt_prod_overseas_a_kubeconfig
       KUBE_DEPLOY_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_KUBE_DEPLOY_TOKEN
+        from_secret: dt_prod_overseas_a_kube_deploy_token
       PG_MIGRATOR_DSN:
-        from_secret: DT_PROD_OVERSEAS_A_PG_MIGRATOR_DSN
+        from_secret: dt_prod_overseas_a_pg_migrator_dsn
       SMOKE_TOKEN_ISSUER_SECRET:
-        from_secret: DT_PROD_OVERSEAS_A_SMOKE_TOKEN_ISSUER_SECRET
+        from_secret: dt_prod_overseas_a_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
-        from_secret: DT_PROD_OVERSEAS_A_EVIDENCE_STORE_WRITE_TOKEN
+        from_secret: dt_prod_overseas_a_evidence_store_write_token
     commands:
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env

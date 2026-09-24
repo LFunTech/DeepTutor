@@ -715,3 +715,29 @@ openspec validate --all --strict
 - 由于工作区包含其他未关联修改，后续若触发流水线，应使用精确 path staged commit，不能 `git add .`。
 
 补充边界：`DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON` 当前来自 `.secrets/woodpecker-secrets/test.secrets` 的静态 JSON，字段包含 `protected_ref`、`approved`、`approval_id`、`actor`、`tag_object_sha`、`commit_sha`、`trust_source`。这足以让 baseline gate 读取“受信元数据”并验证字段/格式，但尚未接入实时 VCS protected-tag/approval API，因此不能把首次 test-cn run 解释为完整生产级 tag protection 验证。正式化时应由受信 verifier 在 tag 创建后动态写入或挂载该 metadata。
+
+### 2026-09-24 test-cn pipeline #1 首跑失败与修复
+
+已推送 commit `1edfeab59d61e1dd6760ea7c2487509c117123ad` 并创建 tag `deploy/test-cn/v1.4.0-rc.1`。Woodpecker pipeline `#1` 被触发，但在 `validate-release-trigger` 失败，后续步骤 skipped。
+
+失败日志摘要（不含 secret value）：
+
+```text
+trusted metadata is required; do not infer protection or approval in YAML
+```
+
+根因：Woodpecker repo-level secret 名称在实际 repo 中被规范化为小写，例如 `dt_release_trusted_trigger_metadata_json`，而 pipeline 使用 `from_secret: DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON`。因此 `TRUSTED_TRIGGER_METADATA_JSON` 未被注入。
+
+修复：`.woodpecker/protected-k8s-release.yml` 中所有 `DT_*` repo-level `from_secret` 引用改为小写；global secrets 维持现状：`DOCKER_USERNAME`、`DOCKER_PASSWORD`、`kubeconfig_test`。
+
+验证：
+
+```bash
+woodpecker-cli repo secret ls LFunTech/DeepTutor
+# repo secrets 显示为 dt_release_trusted_trigger_metadata_json、dt_test_cn_* 小写名称
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven -q
+# 1 passed
+```
+
+下一次触发必须使用新 tag，例如 `deploy/test-cn/v1.4.0-rc.2`；不移动已失败的 `rc.1` tag。

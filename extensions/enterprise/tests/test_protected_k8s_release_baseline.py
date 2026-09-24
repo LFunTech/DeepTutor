@@ -682,11 +682,11 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "from_secret: DOCKER_PASSWORD" in pipeline
     assert "from_secret: kubeconfig_test" in pipeline
     assert "from_secret: kubeconfig_test" in pipeline
-    assert "from_secret: DT_TEST_CN_REGISTRY_PUSH_TOKEN" not in pipeline
-    assert "from_secret: DT_TEST_CN_REGISTRY_PUSH_USERNAME" not in pipeline
-    assert "from_secret: DT_TEST_CN_KUBECONFIG" not in pipeline
-    assert "from_secret: DT_TEST_CN_KUBE_DEPLOY_TOKEN" not in pipeline
-    assert "from_secret: DT_PROD_CN_EAST_KUBE_DEPLOY_TOKEN" in pipeline
+    assert "from_secret: dt_test_cn_registry_push_token" not in pipeline
+    assert "from_secret: dt_test_cn_registry_push_username" not in pipeline
+    assert "from_secret: dt_test_cn_kubeconfig" not in pipeline
+    assert "from_secret: dt_test_cn_kube_deploy_token" not in pipeline
+    assert "from_secret: dt_prod_cn_east_kube_deploy_token" in pipeline
     assert "DT_${ENV_KEY}" not in pipeline
     assert "--approved" not in pipeline
     assert "--protected-ref" not in pipeline
@@ -703,8 +703,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
             assert "from_secret: DOCKER_PASSWORD" in pipeline
             assert "from_secret: kubeconfig_test" in pipeline
         else:
-            assert f"from_secret: DT_{suffix}_REGISTRY_PUSH_TOKEN" in pipeline
-            assert f"from_secret: DT_{suffix}_KUBE_DEPLOY_TOKEN" in pipeline
+            assert f"from_secret: dt_{suffix.lower()}_registry_push_token" in pipeline
+            assert f"from_secret: dt_{suffix.lower()}_kube_deploy_token" in pipeline
 
     backend = (k8s_dir / "backend.yaml").read_text(encoding="utf8")
     migration = (k8s_dir / "migration-job.yaml").read_text(encoding="utf8")
