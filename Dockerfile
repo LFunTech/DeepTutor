@@ -21,11 +21,15 @@
 # do not depend on direct access to index.docker.io.
 ARG NODE_IMAGE=node:22-slim
 ARG PYTHON_IMAGE=python:3.11-slim
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 # Run on the build platform natively (not under QEMU emulation).
 # The output is platform-independent static assets (JS/HTML/CSS),
 # so there is no need to cross-compile this stage.
 FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder
+
+ARG NPM_REGISTRY
 
 WORKDIR /app/web
 
@@ -33,7 +37,8 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json* ./
 
 # Install dependencies with generous timeout for CI environments
-RUN npm config set fetch-timeout 600000 && \
+RUN npm config set registry "${NPM_REGISTRY}" && \
+    npm config set fetch-timeout 600000 && \
     npm config set fetch-retries 5 && \
     npm ci --legacy-peer-deps
 
@@ -68,10 +73,13 @@ FROM ${NODE_IMAGE} AS node-runtime
 # ============================================
 FROM ${PYTHON_IMAGE} AS python-base
 
+ARG PIP_INDEX_URL
+
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
@@ -100,13 +108,15 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy requirements and install Python dependencies
 COPY requirements/ ./requirements/
 COPY requirements.txt ./
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN pip install --index-url "${PIP_INDEX_URL}" --upgrade pip && \
+    pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt
 
 # ============================================
 # Stage 3: Production Image
 # ============================================
 FROM ${PYTHON_IMAGE} AS production
+
+ARG PIP_INDEX_URL
 
 # Labels
 LABEL maintainer="DeepTutor Team" \
@@ -116,6 +126,7 @@ LABEL maintainer="DeepTutor Team" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
     MALLOC_ARENA_MAX=2 \
     MALLOC_TRIM_THRESHOLD_=131072 \
     NODE_ENV=production \

@@ -1065,3 +1065,34 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.13` tag。
+
+### 2026-09-24 test-cn pipeline #22 npm 依赖下载耗时与第十一次修复
+
+`deploy/test-cn/v1.4.0-rc.14` 触发 Woodpecker pipeline `#22` 后，release gate、metadata 和 secret preflight 继续通过。Kaniko 已使用 `--cache-copy-layers`，但 `npm ci --legacy-peer-deps` 仍长时间运行并依赖默认 npm registry；为避免继续占用 agent，已手动停止该流水线。停止前状态：build step `killed`，后续 pre-deploy/deploy canceled。
+
+根因：Dockerfile 内的 `npm ci` 与后续 Python dependency install 默认面向公网 registry；在当前 Woodpecker/集群网络中应显式使用可访问的内部/国内镜像源。Study Mate 的流水线也显式设置 npm mirror。
+
+修复：
+
+- Dockerfile 增加 `ARG NPM_REGISTRY` 与 `ARG PIP_INDEX_URL`，默认分别保持 `https://registry.npmjs.org/` 与 `https://pypi.org/simple`，不破坏普通本地构建。
+- frontend builder 阶段执行 `npm config set registry "${NPM_REGISTRY}"`。
+- python-base/production 阶段设置 `PIP_INDEX_URL`，requirements 安装显式使用 `--index-url "${PIP_INDEX_URL}"`。
+- Woodpecker Kaniko 步骤传入 `NPM_REGISTRY=https://mirror.f123.pub/repository/npm/` 与 `PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.14` tag。

@@ -773,6 +773,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert '--build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm"' in pipeline
     assert '--build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim"' in pipeline
     assert "--context=dir:///woodpecker/src" in pipeline
+    assert '--build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/"' in pipeline
+    assert '--build-arg PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"' in pipeline
     assert "--cache-copy-layers" in pipeline
     assert "--single-snapshot" not in pipeline
     assert "--snapshot-mode=redo" not in pipeline
@@ -866,8 +868,12 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     dockerfile = dockerfile_path.read_text(encoding="utf8")
     assert "ARG NODE_IMAGE=node:22-slim" in dockerfile
     assert "ARG PYTHON_IMAGE=python:3.11-slim" in dockerfile
+    assert "ARG NPM_REGISTRY=https://registry.npmjs.org/" in dockerfile
+    assert "ARG PIP_INDEX_URL=https://pypi.org/simple" in dockerfile
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" in dockerfile
     assert "FROM ${PYTHON_IMAGE} AS production" in dockerfile
+    assert 'npm config set registry "${NPM_REGISTRY}"' in dockerfile
+    assert 'pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt' in dockerfile
 
     dockerignore = dockerignore_path.read_text(encoding="utf8")
     for required in (".secrets/", ".codegraph/", ".superpowers/", ".worktrees/", "**/.env", "**/.env.*"):
