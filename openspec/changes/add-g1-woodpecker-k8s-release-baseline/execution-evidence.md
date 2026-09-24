@@ -964,3 +964,38 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.10` tag。
+
+### 2026-09-24 test-cn pipeline #16 Docker Hub base image 拉取超时与第九次修复
+
+`deploy/test-cn/v1.4.0-rc.11` 触发 Woodpecker pipeline `#16` 后，release gate、metadata 和 secret preflight 仍通过。Kaniko 开始解析 Dockerfile，并失败于直接访问 Docker Hub base image：
+
+```text
+Retrieving image node:22-slim from registry index.docker.io
+error building image: Get "https://index.docker.io/v2/": dial tcp ...:443: i/o timeout
+```
+
+根因：受保护发布流水线应使用 Woodpecker/集群可访问的 registry mirror，不能依赖 runner 直接访问 `index.docker.io`。当前 Dockerfile 将 `node:22-slim`、`python:3.11-slim` 写死在 `FROM` 中。
+
+修复：
+
+- Dockerfile 增加 `ARG NODE_IMAGE=node:22-slim` 与 `ARG PYTHON_IMAGE=python:3.11-slim`，默认保持本地/普通 Docker 构建兼容。
+- Woodpecker Kaniko 步骤追加 build args：`NODE_IMAGE=$${registry_host}/library/node:22-slim`、`PYTHON_IMAGE=$${registry_host}/library/python:3.11-slim`，在 CI 中通过内部 registry/mirror 拉取 base image。
+- 新增测试覆盖 Dockerfile base image build args 与 pipeline Kaniko build args。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.11` tag。

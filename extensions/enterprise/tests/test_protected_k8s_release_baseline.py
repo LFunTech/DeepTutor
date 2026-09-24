@@ -741,6 +741,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     evidence_template = root / "docs/enterprise/protected-k8s-release-evidence-template.md"
     k8s_readme = k8s_dir / "README.md"
     dockerignore_path = root / ".dockerignore"
+    dockerfile_path = root / "Dockerfile"
 
     registry_text = registry_path.read_text(encoding="utf8")
     assert "registry.example" not in registry_text
@@ -769,6 +770,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "base64.b64encode" not in pipeline
     assert '"username":"%s","password":"%s"' in pipeline
     assert "unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy" in pipeline
+    assert '--build-arg NODE_IMAGE="$${registry_host}/library/node:22-slim"' in pipeline
+    assert '--build-arg PYTHON_IMAGE="$${registry_host}/library/python:3.11-slim"' in pipeline
     assert ". ./.deeptutor-release.env" in pipeline
     assert "from_secret: DOCKER_USERNAME" in pipeline
     assert "from_secret: DOCKER_PASSWORD" in pipeline
@@ -855,6 +858,12 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "target_env_id" in template
     assert "release-evidence/<target-env-id>/<version>/" in template
     assert "不得包含 JWT、dt_token、client secret" in template
+
+    dockerfile = dockerfile_path.read_text(encoding="utf8")
+    assert "ARG NODE_IMAGE=node:22-slim" in dockerfile
+    assert "ARG PYTHON_IMAGE=python:3.11-slim" in dockerfile
+    assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" in dockerfile
+    assert "FROM ${PYTHON_IMAGE} AS production" in dockerfile
 
     dockerignore = dockerignore_path.read_text(encoding="utf8")
     for required in (".secrets/", ".codegraph/", ".superpowers/", ".worktrees/", "**/.env", "**/.env.*"):
