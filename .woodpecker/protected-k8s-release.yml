@@ -130,9 +130,9 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=python-base --skip-unused-stages --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --build-arg RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup" --build-arg RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup" --build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirror.f123.pub/repository/rust/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
-  - name: build-runtime-image-test-cn
+  - name: build-runtime-base-test-cn
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [compile-frontend-test-cn, compile-python-deps-test-cn]
+    depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/test-cn/**
@@ -153,7 +153,33 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime-base --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+
+
+  - name: build-runtime-image-test-cn
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [build-runtime-base-test-cn, compile-frontend-test-cn, compile-python-deps-test-cn]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/test-cn/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DOCKER_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DOCKER_PASSWORD
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-test-cn
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
@@ -306,9 +332,9 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=python-base --skip-unused-stages --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --build-arg RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup" --build-arg RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup" --build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirror.f123.pub/repository/rust/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
-  - name: build-runtime-image-pre-cn
+  - name: build-runtime-base-pre-cn
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [compile-frontend-pre-cn, compile-python-deps-pre-cn]
+    depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/pre-cn/**
@@ -329,7 +355,33 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime-base --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+
+
+  - name: build-runtime-image-pre-cn
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [build-runtime-base-pre-cn, compile-frontend-pre-cn, compile-python-deps-pre-cn]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/pre-cn/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: dt_pre_cn_registry_push_username
+      REGISTRY_PUSH_TOKEN:
+        from_secret: dt_pre_cn_registry_push_token
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-pre-cn
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
@@ -482,9 +534,9 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=python-base --skip-unused-stages --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --build-arg RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup" --build-arg RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup" --build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirror.f123.pub/repository/rust/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
-  - name: build-runtime-image-prod-cn-east
+  - name: build-runtime-base-prod-cn-east
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [compile-frontend-prod-cn-east, compile-python-deps-prod-cn-east]
+    depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/prod-cn-east/**
@@ -505,7 +557,33 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime-base --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+
+
+  - name: build-runtime-image-prod-cn-east
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [build-runtime-base-prod-cn-east, compile-frontend-prod-cn-east, compile-python-deps-prod-cn-east]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-cn-east/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: dt_prod_cn_east_registry_push_username
+      REGISTRY_PUSH_TOKEN:
+        from_secret: dt_prod_cn_east_registry_push_token
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-prod-cn-east
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
@@ -658,9 +736,9 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=python-base --skip-unused-stages --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --build-arg RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup" --build-arg RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup" --build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirror.f123.pub/repository/rust/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
-  - name: build-runtime-image-prod-overseas-a
+  - name: build-runtime-base-prod-overseas-a
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [compile-frontend-prod-overseas-a, compile-python-deps-prod-overseas-a]
+    depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/prod-overseas-a/**
@@ -681,7 +759,33 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime-base --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim" --build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian" --build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security" --build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+
+
+  - name: build-runtime-image-prod-overseas-a
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [build-runtime-base-prod-overseas-a, compile-frontend-prod-overseas-a, compile-python-deps-prod-overseas-a]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-overseas-a/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: dt_prod_overseas_a_registry_push_username
+      REGISTRY_PUSH_TOKEN:
+        from_secret: dt_prod_overseas_a_registry_push_token
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-prod-overseas-a
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4

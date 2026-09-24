@@ -743,6 +743,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     dockerignore_path = root / ".dockerignore"
     dockerfile_path = root / "Dockerfile"
     protected_runtime_dockerfile_path = root / "Dockerfile.protected-runtime"
+    protected_runtime_base_dockerfile_path = root / "Dockerfile.protected-runtime-base"
 
     registry_text = registry_path.read_text(encoding="utf8")
     assert "registry.example" not in registry_text
@@ -776,9 +777,15 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "--context=dir:///woodpecker/src" in pipeline
     assert "--dockerfile=Dockerfile --target=frontend-builder" in pipeline
     assert "--dockerfile=Dockerfile --target=python-base --skip-unused-stages" in pipeline
+    assert "--dockerfile=Dockerfile.protected-runtime-base" in pipeline
     assert "--dockerfile=Dockerfile.protected-runtime" in pipeline
     assert "/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
     assert "/python-deps:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
+    assert "/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
+    assert (
+        '--build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}"'
+        in pipeline
+    )
     assert (
         '--build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}"'
         in pipeline
@@ -833,9 +840,10 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
         suffix = env_id.replace("-", "_").upper()
         assert f"compile-frontend-{env_id}" in pipeline
         assert f"compile-python-deps-{env_id}" in pipeline
+        assert f"build-runtime-base-{env_id}" in pipeline
         assert f"build-runtime-image-{env_id}" in pipeline
         assert (
-            f"depends_on: [compile-frontend-{env_id}, compile-python-deps-{env_id}]"
+            f"depends_on: [build-runtime-base-{env_id}, compile-frontend-{env_id}, compile-python-deps-{env_id}]"
             in pipeline
         )
         assert f"pre-deploy-check-{env_id}" in pipeline
@@ -883,6 +891,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
         "k8s_dir": k8s_dir,
         "evidence_template": evidence_template,
         "protected_runtime_dockerfile": protected_runtime_dockerfile_path,
+        "protected_runtime_base_dockerfile": protected_runtime_base_dockerfile_path,
     }
     for label, artifact_path in active_artifacts.items():
         assert "g1" not in str(artifact_path).lower(), label
@@ -897,6 +906,9 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
         "readme": readme,
         "evidence_template": template,
         "protected_runtime_dockerfile": protected_runtime_dockerfile_path.read_text(
+            encoding="utf8"
+        ),
+        "protected_runtime_base_dockerfile": protected_runtime_base_dockerfile_path.read_text(
             encoding="utf8"
         ),
     }.items():
@@ -963,35 +975,54 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "!.deeptutor-build/**" not in dockerignore
 
     protected_runtime_dockerfile = protected_runtime_dockerfile_path.read_text(encoding="utf8")
+    protected_runtime_base_dockerfile = protected_runtime_base_dockerfile_path.read_text(encoding="utf8")
+    assert "ARG RUNTIME_BASE_IMAGE" in protected_runtime_dockerfile
     assert "ARG FRONTEND_ARTIFACT_IMAGE" in protected_runtime_dockerfile
     assert "ARG PYTHON_DEPS_IMAGE" in protected_runtime_dockerfile
+    assert "FROM ${RUNTIME_BASE_IMAGE} AS production" in protected_runtime_dockerfile
     assert "FROM ${FRONTEND_ARTIFACT_IMAGE} AS frontend-artifact" in protected_runtime_dockerfile
     assert "FROM ${PYTHON_DEPS_IMAGE} AS python-deps" in protected_runtime_dockerfile
-    assert "FROM ${NODE_IMAGE} AS node-runtime" in protected_runtime_dockerfile
-    assert "FROM ${PYTHON_IMAGE} AS production" in protected_runtime_dockerfile
+    assert "COPY deploy/docker-runtime/supervisord.conf" in protected_runtime_dockerfile
+    assert "COPY deploy/docker-runtime/entrypoint.sh" in protected_runtime_dockerfile
     assert (
         "COPY --from=python-deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages"
         in protected_runtime_dockerfile
     )
     assert "COPY --from=python-deps /usr/local/bin /usr/local/bin" in protected_runtime_dockerfile
     assert (
-        "COPY --from=frontend-artifact /app/web/.next/standalone/ ./web/"
+        "COPY --from=frontend-artifact --chown=deeptutor:deeptutor /app/web/.next/standalone/ ./web/"
         in protected_runtime_dockerfile
     )
     assert (
-        "COPY --from=frontend-artifact /app/web/.next/static/ ./web/.next/static/"
+        "COPY --from=frontend-artifact --chown=deeptutor:deeptutor /app/web/.next/static/ ./web/.next/static/"
         in protected_runtime_dockerfile
     )
     assert (
-        "COPY --from=frontend-artifact /app/web/public/ ./web/public/"
+        "COPY --from=frontend-artifact --chown=deeptutor:deeptutor /app/web/public/ ./web/public/"
         in protected_runtime_dockerfile
     )
+    assert "RUN cat >" not in protected_runtime_dockerfile
+    assert "apt-get install" not in protected_runtime_dockerfile
+    assert "FROM ${NODE_IMAGE} AS node-runtime" not in protected_runtime_dockerfile
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" not in protected_runtime_dockerfile
     assert "python-base" not in protected_runtime_dockerfile
     assert ".deeptutor-build" not in protected_runtime_dockerfile
     assert "npm ci --legacy-peer-deps" not in protected_runtime_dockerfile
     assert "RUN pip install" not in protected_runtime_dockerfile
     assert "rustup.rs" not in protected_runtime_dockerfile
+
+    assert "FROM ${NODE_IMAGE} AS node-runtime" in protected_runtime_base_dockerfile
+    assert "FROM ${PYTHON_IMAGE} AS runtime-base" in protected_runtime_base_dockerfile
+    assert "${APT_DEBIAN_MIRROR}" in protected_runtime_base_dockerfile
+    assert "${APT_SECURITY_MIRROR}" in protected_runtime_base_dockerfile
+    assert "PIP_INDEX_URL=${PIP_INDEX_URL}" in protected_runtime_base_dockerfile
+    assert "apt-get install -y --no-install-recommends" in protected_runtime_base_dockerfile
+    assert "groupadd --system --gid 1000 deeptutor" in protected_runtime_base_dockerfile
+    assert "data/user/workspace/chat/deep_research/reports" in protected_runtime_base_dockerfile
+    assert "COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node" in protected_runtime_base_dockerfile
+    assert "npm --version" in protected_runtime_base_dockerfile
+    assert "frontend-builder" not in protected_runtime_base_dockerfile
+    assert "python-base" not in protected_runtime_base_dockerfile
 
 
 def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution():

@@ -1370,3 +1370,22 @@ web/.next
 - 更新测试契约，覆盖 `--target=frontend-builder`、`--target=python-base --skip-unused-stages`、`frontend-build`/`python-deps` artifact images、runtime external stages 以及镜像源 build args。
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.27` tag。
+
+### 2026-09-25 test-cn pipeline #37 artifact-image 并行拆分已验证与 runtime base 再拆分
+
+`deploy/test-cn/v1.4.0-rc.28` 触发 Woodpecker pipeline `#37` 后，已确认前端与 Python 依赖编译被拆为独立 Kaniko artifact-image steps，且二者在 `prepare-release-metadata` 后同时启动：
+
+- `compile-frontend-test-cn`：`Started=1790268001`，`Stopped=1790268036`，`State=success`，推送 `frontend-build:$DEEPTUTOR_IMAGE_TAG`。
+- `compile-python-deps-test-cn`：`Started=1790268001`，`Stopped=1790268579`，`State=success`，推送 `python-deps:$DEEPTUTOR_IMAGE_TAG`。
+- `secret-preflight-test-cn` 同期启动并成功，说明 build/preflight DAG 已并行化。
+
+后续 `build-runtime-image-test-cn` 能成功解析并复制上述 artifact images，但日志显示 runtime final stage 在复制大体积 `/usr/local/lib/python3.11/site-packages` 与 frontend standalone 后，仍为多个小型 `RUN` 指令反复执行 Kaniko full filesystem snapshot：`mkdir`、`groupadd/useradd/chown`、`cat > supervisord.conf`、`sed`、`cat > programs.conf`、`cat > start-backend.sh`、`chmod`、`cat > start-frontend.sh` 等步骤每次约消耗 110–130 秒。该瓶颈不是编译失败，而是最终装配阶段的小层过多导致 Kaniko snapshot 成本叠加。
+
+按“编译/装配职责拆开并行”的原则继续修正：
+
+- 新增 `Dockerfile.protected-runtime-base`，只构建 runtime OS/base layer：Tsinghua apt mirror、supervisor/git/OpenCV runtime libs、Node runtime 复制、npm/npx symlink、`deeptutor` 非 root 用户和 `/app/data` 目录骨架。
+- Woodpecker 为每个环境新增 `build-runtime-base-<env>` step，依赖 `prepare-release-metadata`，与 `compile-frontend-<env>`、`compile-python-deps-<env>` 并行推送 `runtime-base:$DEEPTUTOR_IMAGE_TAG`。
+- `build-runtime-image-<env>` 依赖三类 artifact images：`runtime-base`、`frontend-build`、`python-deps`；最终 `Dockerfile.protected-runtime` 从 `RUNTIME_BASE_IMAGE` 开始，只复制 runtime config/scripts、Python deps、frontend standalone 和应用源码，不再运行 apt/npm/pip/Rust，也不再用 heredoc/sed/chmod 生成 runtime 文件。
+- runtime 进程配置与启动脚本迁移为受版本控制文件：`deploy/docker-runtime/supervisord.conf`、`programs.conf`、`start-backend.sh`、`start-frontend.sh`、`entrypoint.sh`、`healthcheck.py`；脚本权限在源码中固定，避免镜像最终阶段额外 `chmod`。
+
+下一次触发使用新 commit 和新 tag；不移动已触发的 `rc.28` tag。

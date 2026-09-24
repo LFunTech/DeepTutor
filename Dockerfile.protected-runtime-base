@@ -1,0 +1,107 @@
+# ============================================
+# DeepTutor protected release runtime base
+# ============================================
+# This Dockerfile is used by Woodpecker protected K8s releases to build the
+# runtime OS layer in parallel with frontend and Python dependency compilation.
+# It contains only platform-matched runtime binaries, system packages,
+# supervisord, the unprivileged app user, and the writable data skeleton.
+# ============================================
+
+ARG NODE_IMAGE=node:22-slim
+ARG PYTHON_IMAGE=python:3.11-slim
+ARG APT_DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
+# Provides the platform-matched node binary and npm/npx wrappers for runtime.
+FROM ${NODE_IMAGE} AS node-runtime
+
+FROM ${PYTHON_IMAGE} AS runtime-base
+
+ARG APT_DEBIAN_MIRROR
+ARG APT_SECURITY_MIRROR
+ARG PIP_INDEX_URL
+
+LABEL maintainer="DeepTutor Team" \
+      description="DeepTutor protected release runtime base"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    MALLOC_ARENA_MAX=2 \
+    MALLOC_TRIM_THRESHOLD_=131072 \
+    NODE_ENV=production \
+    DEEPTUTOR_IGNORE_PROCESS_ENV_OVERRIDES=1
+
+WORKDIR /app
+
+# Install system dependencies and create the immutable runtime skeleton.
+# Note: libgl1 and libglib2.0-0 are required for OpenCV (used by mineru).
+# Note: git is required to install CLI apps — most of the CLI-Anything catalog
+#       installs with `pip install git+…`, which shells out to git. It is needed
+#       in *this* image and not in the runner: installing is a privileged
+#       main-app action, running is the runner's (Dockerfile.runner).
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i \
+            -e "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i \
+            -e "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            /etc/apt/sources.list; \
+    fi; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-ci-retries; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+        bash \
+        git \
+        supervisor \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd --system --gid 1000 deeptutor; \
+    useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin deeptutor; \
+    mkdir -p \
+        /etc/supervisor/conf.d \
+        data/user/settings \
+        data/memory \
+        data/user/workspace/memory \
+        data/user/workspace/notebook \
+        data/user/workspace/co-writer/audio \
+        data/user/workspace/co-writer/tool_calls \
+        data/user/workspace/chat/chat \
+        data/user/workspace/chat/deep_solve \
+        data/user/workspace/chat/deep_question \
+        data/user/workspace/chat/deep_research/reports \
+        data/user/workspace/chat/math_animator \
+        data/user/workspace/chat/_detached_exec \
+        data/user/logs \
+        data/knowledge_bases; \
+    chown -R deeptutor:deeptutor /app/data
+
+# Copy Node.js from node-runtime stage (platform-matched binary).
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN set -eux; \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
+    node --version; \
+    npm --version
