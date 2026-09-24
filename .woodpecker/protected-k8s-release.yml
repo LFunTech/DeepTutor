@@ -28,13 +28,6 @@ when:
         - refs/tags/deploy/prod-cn-east/**
         - refs/tags/deploy/prod-overseas-a/**
 
-variables:
-  REGISTRY_FILE: extensions/enterprise/protected-k8s-release-environments.example.json
-  RELEASE_ENV_FILE: .deeptutor-release.env
-  IMAGE_ENV_FILE: .deeptutor-image.env
-  EVIDENCE_DIR: release-evidence
-  CI_TOOLS_IMAGE: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
-
 steps:
   - name: validate-release-trigger
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
@@ -42,7 +35,7 @@ steps:
       TRUSTED_TRIGGER_METADATA_JSON:
         from_secret: dt_release_trusted_trigger_metadata_json
     commands:
-      - mkdir -p "$EVIDENCE_DIR/gate"
+      - mkdir -p release-evidence/gate
       - |
         test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
           test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
@@ -53,10 +46,10 @@ steps:
         if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
           trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
         else
-          trusted_metadata_file="$EVIDENCE_DIR/gate/trusted-trigger-metadata.json"
+          trusted_metadata_file="release-evidence/gate/trusted-trigger-metadata.json"
           printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
         fi
-        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli trigger --registry "$REGISTRY_FILE" --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output "$EVIDENCE_DIR/gate"
+        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli trigger --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output release-evidence/gate
       - test "$(python -c 'import json; print(json.load(open("release-evidence/gate/trigger-gate.json"))["ready"])')" = "True"
 
   - name: prepare-release-metadata
@@ -66,7 +59,7 @@ steps:
       TRUSTED_TRIGGER_METADATA_JSON:
         from_secret: dt_release_trusted_trigger_metadata_json
     commands:
-      - mkdir -p "$EVIDENCE_DIR/metadata"
+      - mkdir -p release-evidence/metadata
       - |
         test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
           test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
@@ -77,11 +70,11 @@ steps:
         if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
           trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
         else
-          trusted_metadata_file="$EVIDENCE_DIR/metadata/trusted-trigger-metadata.json"
+          trusted_metadata_file="release-evidence/metadata/trusted-trigger-metadata.json"
           printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
         fi
-        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli prepare-metadata --registry "$REGISTRY_FILE" --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output-env-file "$RELEASE_ENV_FILE" --output "$EVIDENCE_DIR/metadata"
-      - test -s "$RELEASE_ENV_FILE"
+        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli prepare-metadata --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output-env-file .deeptutor-release.env --output release-evidence/metadata
+      - test -s .deeptutor-release.env
 
 
   - name: build-runtime-image-test-cn
@@ -133,8 +126,8 @@ steps:
         digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
         test -n "$${digest}"
         case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
-        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
-        test -s "$IMAGE_ENV_FILE"
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > .deeptutor-image.env
+        test -s .deeptutor-image.env
 
 
   - name: secret-preflight-test-cn
@@ -173,7 +166,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry extensions/enterprise/protected-k8s-release-environments.example.json --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
 
@@ -255,8 +248,8 @@ steps:
         digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
         test -n "$${digest}"
         case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
-        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
-        test -s "$IMAGE_ENV_FILE"
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > .deeptutor-image.env
+        test -s .deeptutor-image.env
 
 
   - name: secret-preflight-pre-cn
@@ -295,7 +288,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry extensions/enterprise/protected-k8s-release-environments.example.json --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
 
@@ -377,8 +370,8 @@ steps:
         digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
         test -n "$${digest}"
         case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
-        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
-        test -s "$IMAGE_ENV_FILE"
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > .deeptutor-image.env
+        test -s .deeptutor-image.env
 
 
   - name: secret-preflight-prod-cn-east
@@ -417,7 +410,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry extensions/enterprise/protected-k8s-release-environments.example.json --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
 
@@ -499,8 +492,8 @@ steps:
         digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
         test -n "$${digest}"
         case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
-        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
-        test -s "$IMAGE_ENV_FILE"
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > .deeptutor-image.env
+        test -s .deeptutor-image.env
 
 
   - name: secret-preflight-prod-overseas-a
@@ -539,7 +532,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry extensions/enterprise/protected-k8s-release-environments.example.json --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
 

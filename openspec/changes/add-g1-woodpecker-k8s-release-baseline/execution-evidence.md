@@ -860,3 +860,33 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败或 killed 的既有 tag。
+
+### 2026-09-24 test-cn pipeline #11 暴露 top-level variables 不注入运行时环境
+
+`deploy/test-cn/v1.4.0-rc.8` 触发 Woodpecker pipeline `#11` 后，`validate-release-trigger` 不再进行在线 pip 安装，但在读取 registry 文件时失败：
+
+```text
+IsADirectoryError: [Errno 21] Is a directory: '.'
+```
+
+日志显示命令中的 `--registry "$REGISTRY_FILE"` 在运行时变为空值，`Path("")` 被解析为当前目录。根因：pipeline 顶层 `variables:` 不是 Woodpecker step 运行时环境变量注入机制；Woodpecker 官方环境变量文档要求通过 step-level `environment:` 注入运行时变量，且 `${VAR}` 会经历配置预处理。当前 release pipeline 的常量（registry path、evidence path、env 文件名）无需作为运行时可变项。
+
+修复：移除顶层 `variables:` 块，将 release gate 所需常量改为命令中的显式语义路径，例如 `extensions/enterprise/protected-k8s-release-environments.example.json`、`release-evidence/gate`、`.deeptutor-release.env`、`.deeptutor-image.env`。新增测试确保 pipeline 不再依赖 `$REGISTRY_FILE` 或顶层 `variables:`。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/src/deeptutor_enterprise/protected_k8s_release_cli.py extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.8` tag。

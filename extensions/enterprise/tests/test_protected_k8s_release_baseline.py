@@ -760,6 +760,9 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "docker-hub.f123.pub/base/ci-tools:alpine-3.22.4" in pipeline
     assert "pydantic>=2,<3" not in pipeline
     assert "pip install" not in pipeline
+    assert "variables:" not in pipeline
+    assert "--registry $REGISTRY_FILE" not in pipeline
+    assert "extensions/enterprise/protected-k8s-release-environments.example.json" in pipeline
     assert ". ./.deeptutor-release.env" in pipeline
     assert "from_secret: DOCKER_USERNAME" in pipeline
     assert "from_secret: DOCKER_PASSWORD" in pipeline
