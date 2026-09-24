@@ -790,3 +790,26 @@ PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_rel
 openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 # valid
 ```
+
+### 2026-09-24 test-cn pipeline #6 失败与四次修复
+
+`deploy/test-cn/v1.4.0-rc.4` 触发 Woodpecker pipeline `#6` 后，`validate-release-trigger` 在安装 `pydantic` 时失败：
+
+```text
+ERROR: Could not install packages due to an OSError: Missing dependencies for SOCKS support.
+```
+
+根因：ci-tools 运行环境继承了 SOCKS proxy 相关环境变量，但 pip 环境缺少 SOCKS 支持。修复为 pip 安装 release gate 最小依赖时显式禁用 proxy：`python -m pip install --proxy "" --no-cache-dir --break-system-packages 'pydantic>=2,<3'`。
+
+验证：
+
+```bash
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven -q
+# 1 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
