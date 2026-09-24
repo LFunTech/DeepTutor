@@ -767,3 +767,26 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败 tag。
+
+### 2026-09-24 test-cn pipeline #4 失败与三次修复
+
+`deploy/test-cn/v1.4.0-rc.3` 触发 Woodpecker pipeline `#4` 后，`validate-release-trigger` 已不再被 `${VAR}` 预处理为空阻断，进入 Python CLI，但失败于 ci-tools 镜像缺少运行 CLI 所需的 `pydantic`：
+
+```text
+ModuleNotFoundError: No module named 'pydantic'
+```
+
+修复：所有运行 `deeptutor_enterprise.protected_k8s_release_cli` 的 ci-tools 步骤在调用前安装最小依赖 `pydantic>=2,<3`。该依赖仅用于 release gate/preflight/evidence scan 的 Pydantic registry 模型校验，不安装 DeepTutor 全量运行依赖。
+
+验证：
+
+```bash
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven -q
+# 1 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
