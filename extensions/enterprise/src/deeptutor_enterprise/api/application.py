@@ -539,12 +539,9 @@ def create_application(enterprise):
 
         await enterprise.authorize()
         try:
+            from deeptutor_enterprise.knowledge_bases import list_externalized_knowledge_bases
+
             from deeptutor.api.utils.tool_options import build_tool_options
-            from deeptutor.multi_user.knowledge_access import (
-                list_visible_knowledge_bases,
-                manager_for_resource,
-                resolve_kb,
-            )
             from deeptutor.services.skill.runtime import (
                 call_skill_service,
                 get_runtime_skill_service,
@@ -559,31 +556,22 @@ def create_application(enterprise):
             return text
 
         rag_enabled = "rag" in set(getattr(enterprise.deployment, "allowed_tools", ()))
+        lightrag_bound = getattr(enterprise.deployment, "lightrag", None) is not None
+        store = enterprise.store_provider.get()
         knowledge_bases = []
-        for item in list_visible_knowledge_bases():
-            name = str(item.get("name") or "").strip()
-            if not name:
-                continue
-            resource_id = str(item.get("id") or name)
-            status = "ready"
-            description = safe_description(item.get("provenance_label"))
-            if rag_enabled:
-                try:
-                    resource = resolve_kb(resource_id, require_write=False)
-                    entry = manager_for_resource(resource).get_kb_entry(resource.name)
-                    entry_status = str((entry or {}).get("status") or "ready").strip()
-                    status = entry_status or "ready"
-                except PermissionError:
-                    status = "unauthorized"
-                except Exception:
-                    status = "unavailable"
-            else:
+        for item in await list_externalized_knowledge_bases(store):
+            status = item.status
+            description = safe_description(item.description)
+            if not rag_enabled:
                 status = "unavailable"
                 description = "当前部署未启用知识库检索"
+            elif not lightrag_bound:
+                status = "unavailable"
+                description = "当前部署未绑定知识库检索服务"
             knowledge_bases.append(
                 {
-                    "id": resource_id,
-                    "label": name,
+                    "id": item.id,
+                    "label": item.label,
                     "description": description,
                     "status": status,
                     "disabled": status != "ready",

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,6 +82,44 @@ async def app(pg_dsn, monkeypatch):
     application = create_application(deployment)
     async with application.router.lifespan_context(application):
         yield application
+
+
+async def seed_externalized_kb(application, *, owner_id="admin", kb_id="kb-demo", label="示例知识库"):
+    from deeptutor_enterprise.knowledge_bases import KNOWLEDGE_BASE_DOCUMENT_KIND
+    from deeptutor_enterprise.scope import TenantScope
+
+    enterprise = application.state.enterprise
+    digest = hashlib.sha256(f"{kb_id}:doc".encode()).hexdigest()
+    metadata = {
+        "kb_label": label,
+        "description": "用于测试的外部化知识库",
+        "status": "ready",
+        "search_mode": "mix",
+    }
+    async with enterprise.db.transaction(
+        TenantScope(str(enterprise.deployment.tenant_id), owner_id)
+    ) as c:
+        await c.execute(
+            "INSERT INTO enterprise.resource_objects"
+            "(tenant_id,owner_id,id,resource_kind,resource_id,bucket,object_key,"
+            "content_hash,size_bytes,mime_type,state,retention,metadata,created_by) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ready','retained',%s::jsonb,%s)",
+            (
+                str(enterprise.deployment.tenant_id),
+                owner_id,
+                uuid.uuid4(),
+                KNOWLEDGE_BASE_DOCUMENT_KIND,
+                kb_id,
+                "deeptutor-test",
+                f"tests/kb/{kb_id}/{uuid.uuid4()}",
+                digest,
+                64,
+                "text/plain",
+                json.dumps(metadata),
+                owner_id,
+            ),
+        )
+    return kb_id
 
 
 async def test_http_auth_csrf_revoke_and_closed_routes(app):
@@ -353,11 +392,25 @@ async def test_upload_intent_completion_rejects_expired_pending_upload(app):
     assert "expired" in completed.text.lower()
 
 
-async def test_conversation_test_options_are_authenticated_and_non_secret(app):
+async def test_conversation_test_options_are_authenticated_and_non_secret(app, monkeypatch):
     """普通测试页选项接口只返回可选能力，不暴露 provider 配置或密钥。"""
 
+    from deeptutor.multi_user import knowledge_access
+
+    monkeypatch.setattr(
+        knowledge_access,
+        "list_visible_knowledge_bases",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read local data KBs")),
+    )
     enterprise = app.state.enterprise
     token = await enterprise.identity.login("admin", "long-password-1", client="conversation-test")
+    identity = await enterprise.identity.authenticate(token)
+    await seed_externalized_kb(
+        app,
+        owner_id=identity.user_id,
+        kb_id="external-kb",
+        label="外部化知识库",
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="https://school.example",
@@ -375,6 +428,7 @@ async def test_conversation_test_options_are_authenticated_and_non_secret(app):
         assert isinstance(payload["knowledge_bases"], list)
         assert isinstance(payload["skills"], list)
         assert isinstance(payload["mcp_tools"], list)
+        assert payload["knowledge_bases"][0]["id"] == "external-kb"
         serialized = authorized.text.lower()
         assert "secret" not in serialized
         assert "api_secret" not in serialized
@@ -384,36 +438,14 @@ async def test_conversation_test_options_are_authenticated_and_non_secret(app):
 
 
 async def test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enabled(
-    app, monkeypatch
+    app,
 ):
     """部署未允许知识库检索时，普通测试页不得展示可选但发送必失败的 KB。"""
 
-    from deeptutor.multi_user import knowledge_access
-
-    monkeypatch.setattr(
-        knowledge_access,
-        "list_visible_knowledge_bases",
-        lambda: [
-            {
-                "id": "user:kb:test",
-                "name": "test",
-                "provenance_label": "Created by you",
-            }
-        ],
-    )
-    monkeypatch.setattr(
-        knowledge_access,
-        "resolve_kb",
-        lambda resource_id, require_write=False: SimpleNamespace(name="test"),
-    )
-    monkeypatch.setattr(
-        knowledge_access,
-        "manager_for_resource",
-        lambda resource: SimpleNamespace(get_kb_entry=lambda name: {"status": "ready"}),
-    )
-
     enterprise = app.state.enterprise
     token = await enterprise.identity.login("admin", "long-password-1", client="conversation-test")
+    identity = await enterprise.identity.authenticate(token)
+    await seed_externalized_kb(app, owner_id=identity.user_id, kb_id="user-kb-test", label="test")
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="https://school.example",
@@ -423,7 +455,7 @@ async def test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enab
 
     assert response.status_code == 200, response.text
     [kb] = response.json()["knowledge_bases"]
-    assert kb["id"] == "user:kb:test"
+    assert kb["id"] == "user-kb-test"
     assert kb["status"] == "unavailable"
     assert kb["disabled"] is True
     assert "知识库检索" in kb["description"]
@@ -768,6 +800,81 @@ async def test_enterprise_turn_environment_required_mcp_fails_closed(app):
             )
 
     assert exc.value.error_code == "mcp_tool_unavailable"
+
+
+async def test_enterprise_turn_environment_loads_multi_model_catalog_from_pg(
+    app, monkeypatch
+):
+    """模型目录应来自 PG，DB 保存多个 profile 的 secret ref，而不是单本地 key。"""
+
+    from deeptutor_enterprise.context import identity_context
+    from deeptutor_enterprise.model_catalog import save_runtime_model_catalog
+    from deeptutor_enterprise.runtime import TurnEnvironment
+
+    enterprise = app.state.enterprise
+    monkeypatch.setenv("DT_TEST_MODEL_BASIC", "basic-secret")
+    monkeypatch.setenv("DT_TEST_MODEL_ADVANCED", "advanced-secret")
+    token = await enterprise.identity.login("admin", "long-password-1", client="model-catalog")
+    identity = await enterprise.identity.authenticate(token)
+    with identity_context(identity, token):
+        store = enterprise.store_provider.get()
+        async with store.db.transaction(store.scope) as c:
+            for name, reference in (
+                ("model.basic", "env:DT_TEST_MODEL_BASIC"),
+                ("model.advanced", "env:DT_TEST_MODEL_ADVANCED"),
+            ):
+                await c.execute(
+                    "INSERT INTO enterprise.secret_references"
+                    "(tenant_id,scope_kind,scope_id,name,provider,reference,version,status,"
+                    "redacted_summary,updated_by) "
+                    "VALUES(%s,'tenant','',%s,'env',%s,1,'active',%s,%s) "
+                    "ON CONFLICT (tenant_id,scope_kind,scope_id,name) DO UPDATE "
+                    "SET provider='env',reference=EXCLUDED.reference,status='active',"
+                    "redacted_summary=EXCLUDED.redacted_summary,updated_by=EXCLUDED.updated_by,"
+                    "version=enterprise.secret_references.version+1,updated_at=now()",
+                    (
+                        store.scope.tenant_id,
+                        name,
+                        reference,
+                        f"env:{name}:active",
+                        identity.user_id,
+                    ),
+                )
+        catalog = {
+            "models": [
+                {
+                    "profile_id": "chat",
+                    "model_id": "basic",
+                    "model": "qwen3.7-plus",
+                    "base_url": "https://model.example/v1",
+                    "secret_ref": "model.basic",
+                    "provider": "openai",
+                    "allowed_roles": ["user", "tenant_admin"],
+                },
+                {
+                    "profile_id": "chat",
+                    "model_id": "advanced",
+                    "model": "qwen3.8-max",
+                    "base_url": "https://model.example/v1",
+                    "secret_ref": "model.advanced",
+                    "provider": "openai",
+                    "allowed_roles": ["user", "tenant_admin"],
+                },
+            ]
+        }
+        await save_runtime_model_catalog(store, catalog=catalog, actor_id=identity.user_id)
+        prepared = await TurnEnvironment(enterprise).prepare_request(
+            {
+                "content": "使用高级模型",
+                "capability": "chat",
+                "tools": [],
+                "llm_selection": {"profile_id": "chat", "model_id": "advanced"},
+            }
+        )
+
+    assert prepared.llm_config.model == "qwen3.8-max"
+    assert prepared.llm_config.api_key == "advanced-secret"
+    assert "advanced-secret" not in json.dumps(catalog)
 
 
 async def test_websocket_auth_refresh_updates_copied_turn_execution_context(app, monkeypatch):

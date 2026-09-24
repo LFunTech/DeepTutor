@@ -13,6 +13,7 @@ from deeptutor.services.llm.capabilities import supports_vision
 from deeptutor.services.session.required_context import (
     ContextResolutionError,
     initial_context_resolution,
+    mark_resolved,
     mark_unavailable,
     normalize_context_policy,
     string_list,
@@ -23,6 +24,8 @@ from deeptutor.services.session.turns.environment import (
 )
 
 from .context import current_identity
+from .knowledge_bases import EnterpriseLightRAGTool, resolve_requested_knowledge_bases
+from .model_catalog import load_runtime_model_deployments
 from .scope import TenantScope
 
 MAX_INLINE_IMAGE_RESOURCE_BYTES = 20 * 1024 * 1024
@@ -59,10 +62,17 @@ class TurnEnvironment:
         policy = normalize_context_policy(payload.get("context_policy"))
         identity = await self.enterprise.authorize()
         config = self.enterprise.configuration
+        store = self.enterprise.store_provider.get()
+        models = await load_runtime_model_deployments(store, config.deployment.models)
         selection = payload.get("llm_selection") or (session or {}).get("preferences", {}).get(
             "llm_selection"
         )
-        model = config.select_model(selection, role=identity.role, user_id=identity.user_id)
+        model = config.select_model(
+            selection,
+            role=identity.role,
+            user_id=identity.user_id,
+            models=models,
+        )
         tools = payload.get("tools")
         allowed = config.deployment.allowed_tools
         if tools is not None and not set(tools) <= set(allowed):
@@ -81,30 +91,39 @@ class TurnEnvironment:
                     error_code="mcp_tool_unavailable",
                 )
         requested_kbs = string_list(payload.get("knowledge_bases"))
-        if requested_kbs and "rag" not in set(allowed):
-            mark_unavailable(
-                context_resolution,
-                kind="knowledge_base",
-                names=requested_kbs,
-                code="knowledge_base_unavailable",
+        resolved_kbs: list[str] = []
+        kb_modes: dict[str, str] = {}
+        if requested_kbs:
+            resolved_kbs, unavailable_kbs, kb_modes = await resolve_requested_knowledge_bases(
+                store,
+                requested_kbs,
+                rag_enabled="rag" in set(allowed),
+                lightrag_binding=getattr(config.deployment, "lightrag", None),
             )
-            if policy == "required":
+            if resolved_kbs:
+                mark_resolved(context_resolution, "knowledge_bases", resolved_kbs)
+            for code, names in unavailable_kbs.items():
+                mark_unavailable(
+                    context_resolution,
+                    kind="knowledge_base",
+                    names=names,
+                    code=code,
+                )
+            if unavailable_kbs and policy == "required":
                 raise ContextResolutionError(
                     "Required knowledge base cannot be mounted in this turn environment",
-                    error_code="knowledge_base_unavailable",
+                    error_code=next(iter(unavailable_kbs)),
                 )
         payload = {
             **payload,
             "language": payload.get("language") or config.deployment.language,
             "llm_selection": {"profile_id": model.profile_id, "model_id": model.model_id},
             "tools": list(allowed if tools is None else tools),
-            "knowledge_bases": requested_kbs if "rag" in set(allowed) else [],
+            "knowledge_bases": resolved_kbs,
             "mcp_tools": [],
             "context_policy": policy,
         }
-        llm_config = config.resolve_model(
-            payload["llm_selection"], role=identity.role, user_id=identity.user_id
-        )
+        llm_config = config.resolve_model_deployment(model)
         resource_attachments = await self._materialize_resource_attachments(
             payload,
             llm_config=llm_config,
@@ -115,6 +134,17 @@ class TurnEnvironment:
             config.chat_params(),
             tuple(payload["tools"]),
             resource_attachments=resource_attachments,
+            tool_overrides=(
+                (
+                    EnterpriseLightRAGTool(
+                        binding=config.deployment.lightrag,
+                        allowed_kbs=resolved_kbs,
+                        modes=kb_modes,
+                    ),
+                )
+                if "rag" in set(payload["tools"]) and config.deployment.lightrag is not None
+                else ()
+            ),
             context_resolution=context_resolution,
         )
 

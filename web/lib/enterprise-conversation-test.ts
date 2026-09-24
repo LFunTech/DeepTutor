@@ -68,11 +68,42 @@ export interface ConversationThinkingStep {
   content: string;
 }
 
+export interface ConversationAskUserOption {
+  label: string;
+  description: string;
+}
+
+export interface ConversationAskUserQuestion {
+  id: string;
+  header: string;
+  prompt: string;
+  options: ConversationAskUserOption[];
+  multiSelect: boolean;
+  allowFreeText: boolean;
+  placeholder: string;
+}
+
+export interface ConversationAskUserPrompt {
+  intro: string;
+  questions: ConversationAskUserQuestion[];
+}
+
 export interface ConversationThinkingDisplay {
   kind: string;
   title: string;
   content: string;
   appendToPrevious: boolean;
+}
+
+export const CONVERSATION_AUTH_REFRESH_RETRY_NOTICE = "登录状态刷新暂时失败，正在重试。";
+export const CONVERSATION_SOCKET_CLOSED_NOTICE = "连接已中断，请重新发送。";
+
+export interface ConversationTurnCloseState {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  status?: "pending" | "done" | "failed";
+  statusMessage?: string | undefined;
 }
 
 function timestampOrNull(value: unknown): number | null {
@@ -152,6 +183,112 @@ export function conversationSendBlockReason(input: ConversationSendState): strin
     return "有文件上传失败，请移除失败项或重新选择后再发送。";
   }
   return "";
+}
+
+export function conversationPublicErrorMessage(code: string, fallback: string): string {
+  if (
+    [
+      "required_context_unavailable",
+      "knowledge_base_unavailable",
+      "skill_unavailable",
+      "mcp_tool_unavailable",
+      "context_authorization_failed",
+    ].includes(code)
+  ) {
+    return `所选知识库、Skills 或外部工具暂时不可用，或当前账号无权使用。`;
+  }
+  if (code === "session_active_turn") {
+    return "上一轮还在等待你的补充，请先回答页面里的追问，或点击“新建对话”重新开始。";
+  }
+  if (code === "turn_authorization_expired") {
+    return "登录状态已刷新或过期，请重新发送这一轮。";
+  }
+  return fallback || "对话没有成功完成，请稍后重试。";
+}
+
+function normalizedAskUserPrompt(value: unknown): ConversationAskUserPrompt | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const questionsRaw = Array.isArray(raw.questions) ? raw.questions : [];
+  const questions = questionsRaw
+    .map((entry, index): ConversationAskUserQuestion | null => {
+      if (!entry || typeof entry !== "object") return null;
+      const item = entry as Record<string, unknown>;
+      const prompt = `${item.prompt ?? item.question ?? ""}`.trim();
+      const id = `${item.id ?? item.questionId ?? `q${index + 1}`}`.trim();
+      if (!prompt || !id) return null;
+      const optionsRaw = Array.isArray(item.options) ? item.options : [];
+      const options = optionsRaw
+        .map((option): ConversationAskUserOption | null => {
+          if (!option || typeof option !== "object") {
+            const label = `${option ?? ""}`.trim();
+            return label ? { label, description: "" } : null;
+          }
+          const rawOption = option as Record<string, unknown>;
+          const label = `${rawOption.label ?? ""}`.trim();
+          if (!label) return null;
+          return { label, description: `${rawOption.description ?? ""}`.trim() };
+        })
+        .filter((option): option is ConversationAskUserOption => option !== null);
+      return {
+        id,
+        header: `${item.header ?? ""}`.trim(),
+        prompt,
+        options,
+        multiSelect: Boolean(item.multi_select ?? item.multiSelect),
+        allowFreeText: item.allow_free_text === false || item.allowFreeText === false ? false : true,
+        placeholder: `${item.placeholder ?? ""}`.trim(),
+      };
+    })
+    .filter((question): question is ConversationAskUserQuestion => question !== null);
+  if (questions.length === 0) return null;
+  return {
+    intro: `${raw.intro ?? ""}`.trim(),
+    questions,
+  };
+}
+
+export function extractConversationAskUserPrompt(input: {
+  type: string;
+  metadata?: unknown;
+}): ConversationAskUserPrompt | null {
+  const metadata =
+    input.metadata && typeof input.metadata === "object"
+      ? (input.metadata as Record<string, unknown>)
+      : {};
+  if (input.type === "tool_result") {
+    const toolMetadata =
+      metadata.tool_metadata && typeof metadata.tool_metadata === "object"
+        ? (metadata.tool_metadata as Record<string, unknown>)
+        : {};
+    return normalizedAskUserPrompt(toolMetadata.ask_user);
+  }
+  if (input.type === "progress") {
+    return normalizedAskUserPrompt(metadata.ask_user_draft);
+  }
+  return null;
+}
+
+export function buildConversationAskUserReply(
+  prompt: ConversationAskUserPrompt,
+  values: Record<string, string>,
+): { text: string; answers: { questionId: string; text: string }[] } {
+  const answers = prompt.questions
+    .map((question) => ({
+      questionId: question.id,
+      text: `${values[question.id] ?? ""}`.trim(),
+    }))
+    .filter((answer) => answer.text);
+  return {
+    answers,
+    text: prompt.questions
+      .map((question) => {
+        const text = `${values[question.id] ?? ""}`.trim();
+        return text ? `${question.prompt}：${text}` : "";
+      })
+      .filter(Boolean)
+      .join("\n"),
+  };
 }
 
 function publicLabel(item: CapabilityUsageItem): string {
@@ -281,6 +418,23 @@ export function isConversationTerminalWebSocketEvent(type: string): boolean {
   return type === "done" || type === "error" || type === "protocol_error";
 }
 
+export function settlePendingConversationTurnAfterSocketClose<T extends ConversationTurnCloseState>(
+  turns: T[],
+  assistantTurnId: string,
+): T[] {
+  return turns.map((turn) => {
+    if (turn.id !== assistantTurnId || turn.role !== "assistant" || turn.status !== "pending") {
+      return turn;
+    }
+    return {
+      ...turn,
+      content: turn.content || CONVERSATION_SOCKET_CLOSED_NOTICE,
+      status: "failed",
+      statusMessage: undefined,
+    };
+  });
+}
+
 export function nextConversationAuthRefreshDelayMs(input: {
   nowSeconds: number;
   expiresAt: number | null | undefined;
@@ -292,6 +446,25 @@ export function nextConversationAuthRefreshDelayMs(input: {
   const refreshAtSeconds = input.expiresAt - Math.max(0, input.leewaySeconds);
   const delayMs = Math.max(0, refreshAtSeconds - input.nowSeconds) * 1_000;
   return Math.max(minDelayMs, delayMs);
+}
+
+export function conversationAuthRefreshFailureState(input: {
+  consecutiveFailures: number;
+  visibleAfterFailures?: number;
+}): { consecutiveFailures: number; notice: string } {
+  const consecutiveFailures = Math.max(0, input.consecutiveFailures) + 1;
+  const visibleAfterFailures = Math.max(1, input.visibleAfterFailures ?? 2);
+  return {
+    consecutiveFailures,
+    notice:
+      consecutiveFailures >= visibleAfterFailures
+        ? CONVERSATION_AUTH_REFRESH_RETRY_NOTICE
+        : "",
+  };
+}
+
+export function clearConversationAuthRefreshNotice(currentNotice: string): string {
+  return currentNotice === CONVERSATION_AUTH_REFRESH_RETRY_NOTICE ? "" : currentNotice;
 }
 
 export function formatConversationProgressForPeople(

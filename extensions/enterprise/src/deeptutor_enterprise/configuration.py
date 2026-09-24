@@ -101,7 +101,7 @@ class SecretProviderBinding(BaseModel):
     name: str | None = Field(default=None, min_length=1)
 
 
-class LightRAGBinding(_HttpsEndpointMixin):
+class LightRAGBinding(BaseModel):
     """LightRAG Server API 绑定；DeepTutor 不保存图/检索库凭证。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -110,6 +110,24 @@ class LightRAGBinding(_HttpsEndpointMixin):
     workspace_binding: str = Field(min_length=1)
     index_version: str = Field(min_length=1)
     contract_version: str = Field(min_length=1)
+
+    @field_validator("endpoint")
+    @classmethod
+    def endpoint_allows_loopback_for_local_debug(cls, value):
+        parsed = urlsplit(value)
+        if (
+            parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or not parsed.hostname
+        ):
+            raise ValueError("endpoint must be an http(s) origin without credentials/query")
+        if parsed.scheme == "https":
+            return value.rstrip("/")
+        if parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+            return value.rstrip("/")
+        raise ValueError("endpoint must be HTTPS, except loopback HTTP for local debug")
 
 
 class EduPlus2Binding(_HttpsEndpointMixin):
@@ -201,6 +219,8 @@ class DeploymentConfig(BaseModel):
     def production_requires_bindings(self):
         if self.production is None:
             return self
+        if self.lightrag is not None and urlsplit(self.lightrag.endpoint).scheme != "https":
+            raise ValueError("production baseline requires HTTPS LightRAG endpoint")
         missing = [
             name
             for name in (
@@ -278,10 +298,11 @@ class Configuration:
             }
         )
 
-    def select_model(self, selection, *, role, user_id):
+    def select_model(self, selection, *, role, user_id, models=None):
+        candidates = tuple(models or self.deployment.models)
         allowed = [
             m
-            for m in self.deployment.models
+            for m in candidates
             if role in m.allowed_roles or user_id in m.allowed_user_ids
         ]
         if selection:
@@ -295,10 +316,9 @@ class Configuration:
             raise PermissionError("model is not authorized")
         return allowed[0]
 
-    def resolve_model(self, selection, *, role, user_id):
+    def resolve_model_deployment(self, model):
         from deeptutor.services.llm.config import LLMConfig
 
-        model = self.select_model(selection, role=role, user_id=user_id)
         transport = self.model_transport(model)
         api_key = resolve_secret(model.secret)
         transport.validate_provider(
@@ -317,3 +337,7 @@ class Configuration:
             temperature=0.2,
             transport=transport,
         )
+
+    def resolve_model(self, selection, *, role, user_id, models=None):
+        model = self.select_model(selection, role=role, user_id=user_id, models=models)
+        return self.resolve_model_deployment(model)

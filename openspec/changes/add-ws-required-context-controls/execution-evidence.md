@@ -817,3 +817,290 @@ git diff --check -- <本轮相关源码/测试/OpenSpec路径>
 ```
 
 语音输入补充：重新发起 EduPlus2 SSO 得到新 demo session 后，用 macOS `say` + `afconvert` 生成中文 WAV，通过同一 `/api/voice/stt` Bearer 路径调用，HTTP 200，返回非空转写文本（`text_len=37`）。该命令不输出 JWT/`dt_token` 或音频正文。
+
+## 2026-09-23 普通测试页可选上下文种子数据
+
+为便于普通测试页验证“选择知识库/Skills 后再发起真实 `/api/v1/ws` 对话”的流程，本轮补齐本地联调数据：
+
+- Skills：从 `~/Projects/skills` 选择并导入当前场景适合普通学习/写作/教学测试的 skill 到运行时内置 skill 根 `deeptutor/skills/builtin/`，包括 `teach`、`k12-lesson-planning`、`k12-lesson-differentiation`、`scaffold-exercises`、`research`、`doc-coauthoring`、`writing-for-agents`、`writing-shape`、`writing-fragments`、`to-spec`、`to-questionnaire`、`grill-me`。加上既有 `docx`、`pdf`、`pptx`、`skill-creator`、`xlsx`，运行时 `summary_entries` 可见 17 个 skill。
+- 知识库：下载 Project Gutenberg 开放/公有领域资料到 `.local/deeptutor-dev/home/data/knowledge_bases/open-learning-demo/raw/`，并将短摘录写入本地 LightRAG server：
+  - `https://www.gutenberg.org/ebooks/21076`（The First Six Books of the Elements of Euclid）
+  - `https://www.gutenberg.org/ebooks/201`（Flatland: A Romance of Many Dimensions）
+- DeepTutor KB 指针：在 `.local/deeptutor-dev/home/data/knowledge_bases/kb_config.json` 注册 `open-learning-demo`，类型 `lightrag_server`、provider `lightrag-server`、状态 `ready`、search mode `naive`，后端访问本机 `http://127.0.0.1:9621`。
+- 验证：
+  - `list_visible_knowledge_bases()` 在租户用户上下文可见 `local-lightrag`、`open-learning-demo`、`test`，其中 `open-learning-demo` 状态为 `ready`。
+  - `get_runtime_skill_service().summary_entries()` 可见 17 个 skill，并包含本轮导入的 `teach`、`k12-lesson-planning`、`research`、`scaffold-exercises`、`doc-coauthoring`、`writing-for-agents`。
+  - `LightRagServerPipeline.search(..., "open-learning-demo")` 返回 provider `lightrag-server`、mode `naive`、`content_len=89114`、`error=None`，检索上下文包含 `OPEN_LEARNING_DEMO_SHORT_FLATLAND`、`Flatland`、`Project Gutenberg`，source 数量为 5。
+
+备注：最初尝试写入整本长摘录时 LightRAG 图抽取耗时过长，已取消该长批次；当前用于页面测试的是短摘录批次，不影响 `open-learning-demo` 的 ready 指针和检索验证。
+
+## 2026-09-23 长回答期间认证刷新瞬时失败降噪
+
+用户在普通测试页长回答过程中看到“登录状态刷新暂时失败，正在重试。”。排障证据显示 `/api/v1/auth/eduplus2/demo/refresh` 存在偶发 503，但其前后大量 200，WebSocket 已建立且对话输出本身未必失败；原前端逻辑在一次刷新失败后立即显示提示，且后续刷新成功不会清除该临时提示。
+
+本轮调整：
+
+- 前端将单次 refresh 失败视为 transient，不立即打扰普通用户；连续失败达到阈值后才显示“正在重试”提示。
+- refresh 成功后清理该临时提示并重置连续失败计数。
+- 本地 EduPlus2 demo 后端脚本把 `DT_EDUPLUS2_DT_TOKEN_TTL_SECONDS` 从 60 秒调到 1800 秒，避免本地长对话联调时约每 15 秒刷新一次外部认证服务；30 分钟 TTL 更匹配 LLM + thinking 的长回答耗时，且仍保留长会话 token refresh 路径。
+
+验证：
+
+```bash
+cd web && ./node_modules/.bin/tsc -p tsconfig.node-tests.json && \
+  node -r ./scripts/register-node-test-aliases.cjs --test \
+  dist/node-tests/tests/enterprise-conversation-test.test.js
+# 20 tests passed；新增用例覆盖“单次 auth refresh failure 不显示用户可见错误、连续失败才提示、成功后清理临时提示”。
+
+openspec validate add-ws-required-context-controls --strict
+# Change 'add-ws-required-context-controls' is valid
+```
+
+本地重启并 smoke：
+
+```text
+backend: 127.0.0.1:8001, PID 2959
+frontend: 127.0.0.1:3782, PID 3419
+
+settings_public 200
+page_public 200
+demo_start 303 location_present True
+local_login 200
+options 200 kb_count 3 skill_count 17
+ws connected subprotocol deeptutor-token
+```
+
+30 分钟 TTL follow-up（用户确认 LLM + thinking 长回答通常较长）：
+
+```text
+DT_EDUPLUS2_DT_TOKEN_TTL_SECONDS=1800
+backend restarted: 127.0.0.1:8001, PID 43789
+
+settings_public 200
+demo_start 303 location_present True
+local_login 200
+options 200 kb_count 3 skill_count 17
+```
+
+多轮对话 follow-up：单独把 DT access token TTL 调到 30 分钟仍不足以覆盖多轮对话，因为 demo 页面后续 refresh 依赖 `demo_session` 查到内存中的 `DemoResult.refresh_token`；原 `_RESULT_TTL_SECONDS=5m` 会导致长时间不刷新后 session 先被清理。保留 OIDC `state` 5 分钟防重放窗口，新增 `DT_EDUPLUS2_FRONTING_DEMO_RESULT_TTL_SECONDS` 作为本地/测试 demo 的 result/session 可刷新窗口，本地脚本设为 8 小时。
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src ./.venv/bin/python -m pytest \
+  -c extensions/enterprise/pytest.ini -q \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py::test_demo_result_ttl_can_cover_multi_turn_refresh_window \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py::test_demo_refresh_uses_refresh_token_and_reissues_dt_token
+# 2 passed
+```
+
+本地重启后 smoke：
+
+```text
+backend restarted: 127.0.0.1:8001, PID 64951
+dt_token_ttl=1800
+result_ttl=28800
+
+settings_public 200
+demo_start 303 location_present True
+local_login 200
+options 200 kb_count 3 skill_count 17
+```
+
+## 2026-09-23 refresh 503 根因排查补充
+
+用户指出“5 分钟 refresh 一次也不应因为并发导致 503”。排查确认：并发不是合理根因；`/api/v1/auth/eduplus2/demo/refresh` 原先把 refresh grant、token response、用户 JWT 选择和 DeepTutor exchange 任一步抛出的 `RuntimeError` 都统一映射为 `503 {"detail":"Service unavailable"}`，导致外部只能看到 503，无法判断失败边界。
+
+本轮调整：
+
+- `refresh_response` 在 RuntimeError 分支返回脱敏 `error_code`，例如 `eduplus2_refresh_grant_failed`、`eduplus2_refresh_response_invalid`、`eduplus2_refresh_token_unavailable`、`eduplus2_user_jwt_missing` 等，不回显 refresh token、JWT、client secret 或上游响应正文。
+- 同一分支写入安全 warning 日志，仅包含 `request_id`、`demo_session_hash` 和 `error_code`，用于下次出现 503 时定位边界。
+- 本地 `.secrets/deeptutor-local-enterprise-deployment.json` 的顶层 `token_seconds` 从 300 调整为 3600；此前 `DT_EDUPLUS2_DT_TOKEN_TTL_SECONDS=1800` 会被 identity token 上限 300 秒压回 5 分钟，导致本地 30 分钟 TTL 并未真正生效。
+
+验证：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src ./.venv/bin/python -m pytest \
+  -c extensions/enterprise/pytest.ini -q \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py::test_demo_refresh_failure_returns_safe_diagnostic_code
+# 1 passed
+
+PYTHONPATH=.:extensions/enterprise/src ./.venv/bin/python -m pytest \
+  -c extensions/enterprise/pytest.ini -q \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py::test_runtime_error_detail_is_specific_and_redacted \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py::test_demo_refresh_uses_refresh_token_and_reissues_dt_token \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py::test_demo_refresh_failure_returns_safe_diagnostic_code \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py::test_demo_result_ttl_can_cover_multi_turn_refresh_window
+# 4 passed
+
+./.venv/bin/python -m ruff check \
+  extensions/enterprise/src/deeptutor_enterprise/eduplus2/fronting_demo.py \
+  extensions/enterprise/tests/test_eduplus2_fronting_auth_demo.py
+# All checks passed
+```
+
+后续定位说明：若用户再次看到 refresh 503，应优先看 `error_code` 与后端 warning 日志；若 code 为 `eduplus2_refresh_grant_failed`，根因在 EduPlus2 refresh grant 或 refresh token 生命周期/轮换策略；若为 `eduplus2_user_jwt_missing`，说明 refresh response 未返回可用于 DeepTutor exchange 的业务 JWT；若为 profile/permission/resolve 相关 code，则根因在 DeepTutor exchange 过程中调用 EduPlus2 开放 API 的边界。
+
+OpenSpec 与本地重启验证：
+
+```bash
+openspec validate add-ws-required-context-controls --strict
+# Change 'add-ws-required-context-controls' is valid
+
+openspec validate --all --strict
+# Totals: 15 passed, 0 failed (15 items)
+```
+
+本地后端已重启并加载新代码/本地 TTL cap：
+
+```text
+backend: 127.0.0.1:8001, PID 39454
+settings_public 200
+local_config_token_seconds 3600
+demo_start 303 location_present True
+```
+
+## 2026-09-23 普通测试页 WS close 未收到 done 时的 pending 收尾
+
+用户反馈普通对话测试页停在“正在输出”不动。现场日志显示后端已接受 WebSocket，但前端若未收到 `done/error/protocol_error`，原 `close` handler 只释放发送按钮，不会把当前 assistant turn 从 `pending` 改为终态；因此气泡会继续以 `streaming={true}` 渲染“正在输出”。
+
+本轮调整：
+
+- 增加 `settlePendingConversationTurnAfterSocketClose()`，当 WS close 且当前 assistant turn 仍为 `pending` 时，转为 `failed` 并显示普通用户提示“连接已中断，请重新发送。”。
+- 普通测试页 `close` handler 调用该收尾逻辑，避免 close-without-done 留下永久 pending 气泡。
+- 保持 `done/error/protocol_error` 的既有终态处理不变；有已输出内容但缺少 done 时保留已输出内容，只取消 streaming 状态。
+
+验证：
+
+```bash
+cd web && ./node_modules/.bin/tsc -p tsconfig.node-tests.json
+# exit 0
+
+cd web && node -r ./scripts/register-node-test-aliases.cjs --test \
+  dist/node-tests/tests/enterprise-conversation-test.test.js
+# 21 tests passed；新增用例覆盖 websocket close without done 时 pending assistant turn 被收尾，不再显示“正在输出”。
+
+cd web && npm run typecheck
+# exit 0
+
+.secrets/run-local-enterprise-demo-frontend.sh
+# Next.js build compiled successfully；/enterprise/eduplus2/conversation-test route included；server ready on 127.0.0.1:3782
+
+curl https://deeptutor.lfun.pub/enterprise/eduplus2/conversation-test
+# page_public 200
+```
+
+## 2026-09-24 Service unavailable / ask_user waiting_input 修复
+
+用户反馈普通对话测试页“总是 Service unavailable”。系统化排查确认这不是 HTTP 503，而是 WebSocket `protocol_error`：
+
+- UI 显示 `error_code=start_turn_rejected`，后端 HTTP 日志无 503。
+- 持久化 turn 中存在 `waiting_input` 状态，最后事件为 `tool_result`，`metadata.tool_metadata.ask_user` 要求用户补充问题。
+- 普通测试页此前不会展示 `ask_user` 补充信息卡，也不会发送 `submit_user_reply`，导致同一 session 后续 `start_turn` 被 active turn 拒绝。
+- PostgreSQL session store 原先在 active turn 冲突时抛裸 `RuntimeError("Session already has an active turn")`，企业错误脱敏层把它显示为 `Service unavailable` / `start_turn_rejected`。
+
+本轮调整：
+
+- PostgreSQL active turn 冲突改为复用通用 `ActiveTurnConflict`，并在异常上暴露 `error_code=session_active_turn`、`retryable=True`；前端将其翻译成“上一轮还在等待你的补充，请先回答页面里的追问，或点击‘新建对话’重新开始。”。
+- 普通测试页解析 `tool_result.metadata.tool_metadata.ask_user`，展示普通用户可理解的补充信息卡片，支持选项/自由文本，并通过同一 WebSocket 发送 `submit_user_reply`。
+- 新建对话会关闭当前 WS 并清理本地 pending 状态，避免遗留连接误导用户。
+- 配置型长 turn 在授权撤销时写入稳定 `turn_authorization_expired`，避免终态错误继续没有 code。
+- 本地浏览器 smoke 发现 `deeptutor.lfun.pub` 反代 Next dev 时 HMR WS 为 404 会导致新标签白屏；为用户可测，本地 frontend 改用 production build + `next start` 运行，避免 HMR 依赖。
+
+RED/GREEN 验证：
+
+```bash
+cd web && .\/node_modules\/.bin\/tsc -p tsconfig.node-tests.json
+# RED: 缺少 extractConversationAskUserPrompt / buildConversationAskUserReply / conversationPublicErrorMessage 导出
+
+.\/.venv\/bin\/python -m pytest -q tests\/persistence\/postgres\/business\/test_active_turn_conflict.py
+# RED: Postgres 仍抛 RuntimeError: Session already has an active turn
+
+.\/.venv\/bin\/python -m pytest -q \
+  tests\/agents\/chat\/test_required_context.py::test_configured_turn_runtime_marks_authorization_revocation_with_stable_code
+# RED: failure_code == ''，预期 turn_authorization_expired
+```
+
+实现后验证：
+
+```bash
+cd web && .\/node_modules\/.bin\/tsc -p tsconfig.node-tests.json && \
+  node -r .\/scripts\/register-node-test-aliases.cjs --test \
+  dist\/node-tests\/tests\/enterprise-conversation-test.test.js
+# 24 tests passed
+
+cd web && npm run typecheck
+# exit 0
+
+.\/.venv\/bin\/python -m pytest -q \
+  tests\/persistence\/postgres\/business\/test_active_turn_conflict.py \
+  tests\/agents\/chat\/test_required_context.py::test_configured_turn_runtime_marks_authorization_revocation_with_stable_code \
+  tests\/agents\/chat\/test_required_context.py::test_configured_turn_runtime_required_missing_skill_fails_closed
+# 3 passed
+
+.\/.venv\/bin\/python -m ruff check \
+  deeptutor\/services\/session\/protocol.py \
+  deeptutor\/persistence\/postgres\/session.py \
+  deeptutor\/services\/session\/turns\/configured.py \
+  tests\/persistence\/postgres\/business\/test_active_turn_conflict.py \
+  tests\/agents\/chat\/test_required_context.py
+# All checks passed
+
+cd web && npm run build
+# Compiled successfully；/enterprise/eduplus2/conversation-test route included
+```
+
+真实浏览器 smoke（使用 `.secrets/.login-credentials` 中测试账号；未输出账号、密码、token、demo_session）：
+
+```text
+frontend production: 127.0.0.1:3782
+backend: 127.0.0.1:8001
+login via /api/v1/auth/eduplus2/demo/start -> conversation-test: ok
+select KB open-learning-demo + Skill teach -> send 学习RAG
+ask_user card visible: true
+Service unavailable visible: false
+submit_user_reply ack visible: true
+Service unavailable after submit: false
+```
+
+注意：后端重启会清空 demo in-memory result store，旧 URL 上的 `demo_session` 会返回 `Demo session not found`；手动测试时需要从测试页重新点击 EduPlus2 登录入口获取新 demo session。
+
+本轮 OpenSpec 验证：
+
+```bash
+openspec validate add-ws-required-context-controls --strict
+# Change 'add-ws-required-context-controls' is valid
+
+openspec validate --all --strict
+# Totals: 15 passed, 0 failed (15 items)
+```
+
+## 2026-09-24 required KB 与普通测试页 options 去本地 data 复验
+
+针对用户发现的本地 `data` 目录残留，复查并修正普通测试页和 configured WebSocket turn 的 KB 路径：
+
+- `/api/v1/enterprise/conversation-test/options` 不再调用 core `list_visible_knowledge_bases()`，只列出当前 owner 在 PG `resource_objects` 中登记的 `knowledge_base_document`。
+- `context_policy=required` 且选择 KB 时，企业 `TurnEnvironment` 在模型调用前用 PG/ObjectStore + LightRAG binding 解析并标记 resolved/unavailable；core agent loop 在 configured runtime 中信任预解析结果，不再探测本地 `data/knowledge_bases`。
+- 页面可见 KB smoke 返回 `kb_count=2`、状态均为 `ready`，且仓库内运行态 `data` 目录已清空。
+
+验证命令：
+
+```bash
+.venv/bin/python -m pytest --asyncio-mode=auto \
+  extensions/enterprise/tests/test_configuration.py \
+  tests/agents/chat/test_required_context.py::test_configured_turn_uses_pre_resolved_kb_without_local_data_probe \
+  extensions/enterprise/tests/test_application.py::test_conversation_test_options_are_authenticated_and_non_secret \
+  extensions/enterprise/tests/test_application.py::test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enabled -q
+# 7 passed
+
+.venv/bin/ruff check \
+  deeptutor/services/session/turns/environment.py \
+  deeptutor/services/session/turns/configured.py \
+  deeptutor/agents/loop/pipeline.py \
+  extensions/enterprise/src/deeptutor_enterprise/knowledge_bases.py \
+  extensions/enterprise/src/deeptutor_enterprise/runtime.py \
+  extensions/enterprise/src/deeptutor_enterprise/api/application.py \
+  extensions/enterprise/src/deeptutor_enterprise/configuration.py \
+  extensions/enterprise/tests/test_application.py \
+  extensions/enterprise/tests/test_configuration.py \
+  tests/agents/chat/test_required_context.py
+# All checks passed
+```

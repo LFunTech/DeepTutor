@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from deeptutor.core.context import Attachment
+    from deeptutor.core.tool_protocol import BaseTool
     from deeptutor.services.llm.config import LLMConfig
 
 
@@ -19,6 +20,7 @@ class PreparedTurnEnvironment:
     chat_params: dict[str, Any]
     allowed_tools: tuple[str, ...] = ("ask_user",)
     resource_attachments: tuple[Attachment, ...] = ()
+    tool_overrides: tuple[BaseTool, ...] = ()
     summary_agent_params: dict[str, Any] | None = None
     context_resolution: dict[str, Any] | None = None
 

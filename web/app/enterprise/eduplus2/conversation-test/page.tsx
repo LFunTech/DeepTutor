@@ -12,6 +12,7 @@ import { useSearchParams } from "next/navigation";
 
 import { TranscriptTurnContent } from "./TranscriptTurnContent";
 import type { ContextPolicy } from "@/contracts/generated/turn-protocol";
+import { buildSubmitUserReply } from "@/contracts/parse/turn-command";
 import {
   buildAuthRefreshCommand,
   buildDemoWebSocketUrl,
@@ -21,10 +22,15 @@ import {
 } from "@/lib/eduplus2-fronting-demo";
 import {
   buildConversationUploadIntentRequest,
+  buildConversationAskUserReply,
   buildConversationTestStartTurn,
+  clearConversationAuthRefreshNotice,
+  conversationAuthRefreshFailureState,
+  conversationPublicErrorMessage,
   conversationSendBlockReason,
   conversationSpeechFailureNotice,
   encodeConversationWavFromFloat32,
+  extractConversationAskUserPrompt,
   formatConversationThinkingForPeople,
   formatConversationProgressForPeople,
   formatCapabilityUsageForPeople,
@@ -33,8 +39,10 @@ import {
   isSpeechRecognitionAvailable,
   isServerSpeechRecordingAvailable,
   nextConversationAuthRefreshDelayMs,
+  settlePendingConversationTurnAfterSocketClose,
   shouldShowConversationLoginLanding,
   withConversationSpeechStartTimeout,
+  type ConversationAskUserPrompt,
   type CapabilityUsageSummary,
   type ConversationThinkingStep,
 } from "@/lib/enterprise-conversation-test";
@@ -100,6 +108,11 @@ type TranscriptTurn = {
   thinkingSteps?: ConversationThinkingStep[];
   usage?: CapabilityUsageSummary | null;
   diagnosticCode?: string;
+  turnId?: string;
+  askUser?: ConversationAskUserPrompt | null;
+  askUserAnswers?: Record<string, string>;
+  askUserSubmitting?: boolean;
+  askUserResolved?: boolean;
 };
 
 type SpeechRecognitionConstructor = new () => {
@@ -151,21 +164,6 @@ function appendText(current: string, next: string): string {
   const trimmed = next.trim();
   if (!trimmed) return current;
   return current.trim() ? `${current.trim()} ${trimmed}` : trimmed;
-}
-
-function publicErrorMessage(code: string, fallback: string): string {
-  if (
-    [
-      "required_context_unavailable",
-      "knowledge_base_unavailable",
-      "skill_unavailable",
-      "mcp_tool_unavailable",
-      "context_authorization_failed",
-    ].includes(code)
-  ) {
-    return `所选知识库、Skills 或外部工具暂时不可用，或当前账号无权使用。`;
-  }
-  return fallback || "对话没有成功完成，请稍后重试。";
 }
 
 function localUsageSummary(input: {
@@ -266,8 +264,10 @@ export default function EnterpriseConversationTestPage() {
   const pcmAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const pcmAudioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const pcmAudioChunksRef = useRef<Float32Array[]>([]);
+  const activeSocketRef = useRef<WebSocket | null>(null);
   const dtTokenRef = useRef("");
   const expiresAtRef = useRef<number | null>(null);
+  const authRefreshFailuresRef = useRef(0);
 
   const readyResources = uploads.filter((item) => item.status === "ready");
   const uploading = uploads.some((item) => item.status === "uploading");
@@ -290,10 +290,12 @@ export default function EnterpriseConversationTestPage() {
     });
     const token = refreshed.dt_token ?? "";
     const tokenExpiresAt = getDemoTokenExpiresAt(refreshed);
+    authRefreshFailuresRef.current = 0;
     setDtToken(token);
     dtTokenRef.current = token;
     setExpiresAt(tokenExpiresAt);
     expiresAtRef.current = tokenExpiresAt;
+    setPageNotice((current) => clearConversationAuthRefreshNotice(current));
     return { token, expiresAt: tokenExpiresAt };
   }, [demoSession]);
 
@@ -650,8 +652,96 @@ export default function EnterpriseConversationTestPage() {
     setSpeechState("idle");
   };
 
+  const setAskUserAnswer = (assistantTurnId: string, questionId: string, value: string) => {
+    setTurns((items) =>
+      items.map((item) =>
+        item.id === assistantTurnId
+          ? {
+              ...item,
+              askUserAnswers: {
+                ...(item.askUserAnswers ?? {}),
+                [questionId]: value,
+              },
+            }
+          : item,
+      ),
+    );
+  };
+
+  const toggleAskUserOption = (
+    assistantTurnId: string,
+    questionId: string,
+    optionLabel: string,
+    multiSelect: boolean,
+  ) => {
+    setTurns((items) =>
+      items.map((item) => {
+        if (item.id !== assistantTurnId) return item;
+        const current = `${item.askUserAnswers?.[questionId] ?? ""}`.trim();
+        let next = optionLabel;
+        if (multiSelect) {
+          const parts = current
+            ? current
+                .split(/[、,，]/)
+                .map((part) => part.trim())
+                .filter(Boolean)
+            : [];
+          next = parts.includes(optionLabel)
+            ? parts.filter((part) => part !== optionLabel).join("、")
+            : [...parts, optionLabel].join("、");
+        }
+        return {
+          ...item,
+          askUserAnswers: {
+            ...(item.askUserAnswers ?? {}),
+            [questionId]: next,
+          },
+        };
+      }),
+    );
+  };
+
+  const submitAskUserReply = (assistantTurnId: string) => {
+    const turn = turns.find((item) => item.id === assistantTurnId);
+    const askUser = turn?.askUser ?? null;
+    const turnId = turn?.turnId ?? "";
+    if (!askUser || !turnId) {
+      setPageNotice("暂时无法提交补充信息，请重新发送或新建对话。");
+      return;
+    }
+    const reply = buildConversationAskUserReply(askUser, turn?.askUserAnswers ?? {});
+    if (reply.answers.length === 0 && !reply.text.trim()) {
+      setPageNotice("请先填写至少一项补充信息。");
+      return;
+    }
+    const socket = activeSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setPageNotice("连接已中断，请重新发送或新建对话。");
+      return;
+    }
+    setPageNotice("");
+    setTurns((items) =>
+      items.map((item) =>
+        item.id === assistantTurnId
+          ? { ...item, askUserSubmitting: true, statusMessage: "已提交，正在继续生成…" }
+          : item,
+      ),
+    );
+    socket.send(
+      JSON.stringify(
+        buildSubmitUserReply({
+          turnId,
+          text: reply.text,
+          answers: reply.answers,
+        }),
+      ),
+    );
+  };
+
   useEffect(() => {
     return () => {
+      activeSocketRef.current?.close();
+      activeSocketRef.current = null;
       recognitionRef.current?.stop();
       const recorder = mediaRecorderRef.current;
       if (recorder && recorder.state !== "inactive") recorder.stop();
@@ -715,6 +805,7 @@ export default function EnterpriseConversationTestPage() {
       const token = await ensureToken();
       if (!token) throw new Error("请先完成登录");
       const socket = new WebSocket(buildDemoWebSocketUrl(window.location), buildWebSocketProtocols(token));
+      activeSocketRef.current = socket;
       let refreshTimer: number | undefined;
       const clearAuthRefreshTimer = () => {
         if (refreshTimer === undefined) return;
@@ -744,7 +835,11 @@ export default function EnterpriseConversationTestPage() {
               sendAuthRefresh(refreshed.token || dtTokenRef.current);
               scheduleAuthRefresh();
             } catch {
-              setPageNotice("登录状态刷新暂时失败，正在重试。");
+              const failure = conversationAuthRefreshFailureState({
+                consecutiveFailures: authRefreshFailuresRef.current,
+              });
+              authRefreshFailuresRef.current = failure.consecutiveFailures;
+              if (failure.notice) setPageNotice(failure.notice);
               scheduleAuthRefresh(5_000);
             }
           })();
@@ -776,6 +871,16 @@ export default function EnterpriseConversationTestPage() {
         const type = String(payload.type ?? "");
         const eventSessionId = String(payload.session_id ?? "");
         if (eventSessionId) setSessionId(eventSessionId);
+        const eventTurnId = String(payload.turn_id ?? "");
+        if (eventTurnId) {
+          setTurns((items) =>
+            items.map((item) =>
+              item.id === assistantTurnId && item.role === "assistant"
+                ? { ...item, turnId: eventTurnId }
+                : item,
+            ),
+          );
+        }
         if (isConversationTerminalWebSocketEvent(type)) {
           clearAuthRefreshTimer();
           setSending(false);
@@ -816,7 +921,30 @@ export default function EnterpriseConversationTestPage() {
             ),
           );
         }
-        if (type === "content") {
+        if (type === "command_ack") {
+          const accepted = payload.accepted === true;
+          const code = String(payload.error_code ?? "");
+          setTurns((items) =>
+            items.map((item) =>
+              item.id === assistantTurnId
+                ? {
+                    ...item,
+                    askUserSubmitting: false,
+                    askUserResolved: accepted ? true : item.askUserResolved,
+                    status: accepted ? "pending" : "failed",
+                    statusMessage: accepted
+                      ? "已收到补充信息，正在继续回答…"
+                      : conversationPublicErrorMessage(code, String(payload.message ?? "补充信息提交失败")),
+                    diagnosticCode: accepted ? item.diagnosticCode : code,
+                  }
+                : item,
+            ),
+          );
+          if (!accepted) {
+            clearAuthRefreshTimer();
+            setSending(false);
+          }
+        } else if (type === "content") {
           const chunk = String(payload.content ?? "");
           setTurns((items) =>
             items.map((item) =>
@@ -825,9 +953,26 @@ export default function EnterpriseConversationTestPage() {
                 : item,
             ),
           );
+        } else if (type === "tool_result") {
+          const askUser = extractConversationAskUserPrompt({ type, metadata });
+          if (askUser) {
+            setTurns((items) =>
+              items.map((item) =>
+                item.id === assistantTurnId
+                  ? {
+                      ...item,
+                      askUser,
+                      askUserAnswers: item.askUserAnswers ?? {},
+                      askUserResolved: false,
+                      statusMessage: "我需要再确认几件事，回答后会继续。",
+                    }
+                  : item,
+              ),
+            );
+          }
         } else if (type === "error" || type === "protocol_error") {
           const code = String(payload.error_code ?? metadata.error_code ?? "");
-          const message = publicErrorMessage(code, String(payload.content ?? payload.message ?? ""));
+          const message = conversationPublicErrorMessage(code, String(payload.content ?? payload.message ?? ""));
           setTurns((items) =>
             items.map((item) =>
               item.id === assistantTurnId
@@ -860,7 +1005,7 @@ export default function EnterpriseConversationTestPage() {
                     statusMessage: undefined,
                     content:
                       item.content ||
-                      (status === "failed" ? publicErrorMessage(code, "对话失败") : item.content),
+                      (status === "failed" ? conversationPublicErrorMessage(code, "对话失败") : item.content),
                   }
                 : item,
             ),
@@ -870,6 +1015,7 @@ export default function EnterpriseConversationTestPage() {
       });
       socket.addEventListener("error", () => {
         clearAuthRefreshTimer();
+        if (activeSocketRef.current === socket) activeSocketRef.current = null;
         setTurns((items) =>
           items.map((item) =>
             item.id === assistantTurnId
@@ -886,6 +1032,10 @@ export default function EnterpriseConversationTestPage() {
       });
       socket.addEventListener("close", () => {
         clearAuthRefreshTimer();
+        if (activeSocketRef.current === socket) activeSocketRef.current = null;
+        setTurns((items) =>
+          settlePendingConversationTurnAfterSocketClose(items, assistantTurnId),
+        );
         setSending(false);
       });
     } catch (error) {
@@ -905,9 +1055,12 @@ export default function EnterpriseConversationTestPage() {
   };
 
   const newConversation = () => {
+    activeSocketRef.current?.close();
+    activeSocketRef.current = null;
     setSessionId("");
     setTurns([]);
     setUploads([]);
+    setSending(false);
     setPageNotice("已开始新的对话，本地测试记录已清空。");
   };
 
@@ -942,9 +1095,9 @@ export default function EnterpriseConversationTestPage() {
   }
 
   return (
-    <main className="h-dvh overflow-y-auto bg-[#efe9dc] px-4 py-4 text-[#1f251f] md:px-6 md:py-6 lg:overflow-hidden">
-      <div className="mx-auto grid min-h-full max-w-7xl gap-5 lg:h-full lg:min-h-0 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="rounded-[1.75rem] border border-[#d8ccb6] bg-[#fffaf0]/90 p-5 shadow-[0_20px_60px_rgba(64,52,28,0.12)] lg:min-h-0 lg:overflow-y-auto">
+    <main className="min-h-dvh overflow-y-auto bg-[#efe9dc] px-3 py-3 text-[#1f251f] md:px-5 md:py-5 xl:px-8">
+      <div className="grid min-h-[calc(100dvh-1.5rem)] w-full gap-5 lg:grid-cols-[420px_minmax(0,1fr)] xl:min-h-[calc(100dvh-2.5rem)] xl:grid-cols-[480px_minmax(0,1fr)] 2xl:grid-cols-[520px_minmax(0,1fr)]">
+        <aside className="rounded-[1.75rem] border border-[#d8ccb6] bg-[#fffaf0]/90 p-5 shadow-[0_20px_60px_rgba(64,52,28,0.12)] lg:max-h-[calc(100dvh-2.5rem)] lg:overflow-y-auto xl:p-6">
           <div className="mb-5 rounded-2xl bg-[#133f38] p-4 text-white">
             <p className="text-xs font-semibold tracking-[0.24em] text-[#a6ded2]">普通测试</p>
             <h1 className="mt-2 text-2xl font-semibold">完整对话流程</h1>
@@ -1006,8 +1159,8 @@ export default function EnterpriseConversationTestPage() {
           </div>
         </aside>
 
-        <section className="flex min-h-[calc(100dvh-2rem)] flex-col rounded-[1.75rem] border border-[#d8ccb6] bg-[#fffdf7] shadow-[0_20px_80px_rgba(64,52,28,0.14)] lg:h-full lg:min-h-0">
-          <header className="shrink-0 border-b border-[#e6dccb] p-5">
+        <section className="flex min-h-[calc(100dvh-1.5rem)] flex-col rounded-[1.75rem] border border-[#d8ccb6] bg-[#fffdf7] shadow-[0_20px_80px_rgba(64,52,28,0.14)] lg:min-h-0 xl:min-h-[calc(100dvh-2.5rem)]">
+          <header className="shrink-0 border-b border-[#e6dccb] p-5 xl:p-6">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="text-xs font-semibold tracking-[0.24em] text-[#2e7d6d]">真实服务联调</p>
@@ -1026,7 +1179,7 @@ export default function EnterpriseConversationTestPage() {
             </p>
           </header>
 
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 xl:p-6">
             {turns.length === 0 ? (
               <div className="rounded-[1.5rem] border border-dashed border-[#cdbf9f] bg-[#f8f1e5] p-8 text-center text-[#62665d]">
                 发送第一句话，开始一段可持续的真实对话。
@@ -1034,7 +1187,7 @@ export default function EnterpriseConversationTestPage() {
             ) : null}
             {turns.map((turn) => (
               <article
-                className={`max-w-3xl rounded-[1.5rem] p-4 ${
+                className={`max-w-5xl rounded-[1.5rem] p-4 ${
                   turn.role === "user"
                     ? "ml-auto bg-[#123f38] text-white"
                     : "mr-auto border border-[#e2d5bf] bg-white text-[#252a24]"
@@ -1048,6 +1201,17 @@ export default function EnterpriseConversationTestPage() {
                   statusMessage={turn.statusMessage}
                   thinkingSteps={turn.thinkingSteps}
                 />
+                {turn.role === "assistant" && turn.askUser && !turn.askUserResolved ? (
+                  <AskUserReplyCard
+                    assistantTurnId={turn.id}
+                    prompt={turn.askUser}
+                    answers={turn.askUserAnswers ?? {}}
+                    submitting={turn.askUserSubmitting === true}
+                    onTextChange={setAskUserAnswer}
+                    onOptionClick={toggleAskUserOption}
+                    onSubmit={submitAskUserReply}
+                  />
+                ) : null}
                 {turn.role === "assistant" ? (
                   <CapabilityPanel usage={turn.usage} diagnosticCode={turn.diagnosticCode} />
                 ) : null}
@@ -1055,7 +1219,7 @@ export default function EnterpriseConversationTestPage() {
             ))}
           </div>
 
-          <footer className="shrink-0 border-t border-[#e6dccb] p-5">
+          <footer className="shrink-0 border-t border-[#e6dccb] p-5 xl:p-6">
             {pageNotice ? <p className="mb-3 rounded-xl bg-[#fff4d6] px-4 py-2 text-sm text-[#7b5c0f]">{pageNotice}</p> : null}
             {speechNotice ? <p className="mb-3 rounded-xl bg-[#f0f6ff] px-4 py-2 text-sm text-[#305478]">{speechNotice}</p> : null}
             {uploads.length > 0 ? (
@@ -1116,6 +1280,95 @@ export default function EnterpriseConversationTestPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function AskUserReplyCard(props: {
+  assistantTurnId: string;
+  prompt: ConversationAskUserPrompt;
+  answers: Record<string, string>;
+  submitting: boolean;
+  onTextChange: (assistantTurnId: string, questionId: string, value: string) => void;
+  onOptionClick: (
+    assistantTurnId: string,
+    questionId: string,
+    optionLabel: string,
+    multiSelect: boolean,
+  ) => void;
+  onSubmit: (assistantTurnId: string) => void;
+}) {
+  return (
+    <div className="mt-4 rounded-2xl border border-[#c7ded3] bg-[#f0faf5] p-4 text-sm text-[#26322b]">
+      <p className="font-semibold">继续前想确认一下</p>
+      {props.prompt.intro ? <p className="mt-2 text-[#546257]">{props.prompt.intro}</p> : null}
+      <div className="mt-3 space-y-4">
+        {props.prompt.questions.map((question) => {
+          const value = props.answers[question.id] ?? "";
+          return (
+            <div className="rounded-2xl bg-white/80 p-3" key={question.id}>
+              {question.header ? (
+                <p className="mb-1 text-xs font-semibold text-[#0d6a56]">{question.header}</p>
+              ) : null}
+              <p className="font-semibold">{question.prompt}</p>
+              {question.options.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {question.options.map((option) => {
+                    const selected = question.multiSelect
+                      ? value
+                          .split(/[、,，]/)
+                          .map((part) => part.trim())
+                          .includes(option.label)
+                      : value === option.label;
+                    return (
+                      <button
+                        className={`rounded-full border px-3 py-1.5 text-left transition ${
+                          selected
+                            ? "border-[#0d5f53] bg-[#d9f0e8] text-[#0d5f53]"
+                            : "border-[#d8ccb6] bg-white hover:bg-[#f4edde]"
+                        }`}
+                        key={option.label}
+                        type="button"
+                        onClick={() =>
+                          props.onOptionClick(
+                            props.assistantTurnId,
+                            question.id,
+                            option.label,
+                            question.multiSelect,
+                          )
+                        }
+                      >
+                        <span className="font-semibold">{option.label}</span>
+                        {option.description ? (
+                          <span className="ml-1 text-xs text-[#697166]">{option.description}</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {question.allowFreeText ? (
+                <textarea
+                  className="mt-2 min-h-16 w-full resize-none rounded-xl border border-[#d8ccb6] bg-white px-3 py-2 outline-none focus:border-[#0d5f53]"
+                  placeholder={question.placeholder || "也可以直接输入你的想法…"}
+                  value={value}
+                  onChange={(event) =>
+                    props.onTextChange(props.assistantTurnId, question.id, event.target.value)
+                  }
+                />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <button
+        className="mt-4 rounded-full bg-[#0d5f53] px-5 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#9aa39b]"
+        disabled={props.submitting}
+        type="button"
+        onClick={() => props.onSubmit(props.assistantTurnId)}
+      >
+        {props.submitting ? "正在提交…" : "提交并继续"}
+      </button>
+    </div>
   );
 }
 

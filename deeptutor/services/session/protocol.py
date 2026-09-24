@@ -27,6 +27,8 @@ class ActiveTurnConflict(RuntimeError):
     def __init__(self, message: str, *, turn_id: str = "") -> None:
         super().__init__(message)
         self.turn_id = turn_id
+        self.error_code = "session_active_turn"
+        self.retryable = True
 
 
 @runtime_checkable

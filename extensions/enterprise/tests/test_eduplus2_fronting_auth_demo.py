@@ -378,6 +378,106 @@ async def test_demo_refresh_uses_refresh_token_and_reissues_dt_token(
     assert second_user_jwt not in refresh.text
 
 
+async def test_demo_refresh_failure_returns_safe_diagnostic_code(
+    app, monkeypatch: pytest.MonkeyPatch
+):
+    """refresh 失败时应返回脱敏诊断码，避免所有 503 都只能看到 service unavailable。"""
+
+    from deeptutor_enterprise.eduplus2 import fronting_demo
+    from deeptutor_enterprise.eduplus2.testing import StaticEduPlus2Resolver
+
+    configure_demo_env(monkeypatch)
+    enterprise = app.state.enterprise
+    monkeypatch.setattr(
+        enterprise,
+        "eduplus2_resolver",
+        StaticEduPlus2Resolver(
+            {
+                "client-a": {
+                    "client_id": "client-a",
+                    "external_tenant_id": "tenant-a",
+                    "external_tenant_name": "学校 A",
+                    "external_app_id": "app-math",
+                    "external_app_name": "数学应用",
+                    "status": "active",
+                    "subscription_status": "active",
+                    "policy": {"scopes": ["chat"]},
+                    "version": "v1",
+                }
+            }
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(enterprise, "eduplus2_signing_key", EDUPLUS2_KEY, raising=False)
+    monkeypatch.setattr(enterprise, "eduplus2_issuer", ISSUER, raising=False)
+    admin = await enterprise.identity.login(
+        "admin", "long-password-1", client="demo-refresh-diagnostic"
+    )
+    await enterprise.eduplus2.register_client(
+        admin, "client-a", surface="tms", expected_tenant_id="tenant-a"
+    )
+    first_user_jwt = user_jwt(tid="tenant-a", eui="u-refresh-diagnostic", azp="client-a")
+
+    async def fake_code_exchange(_config, _state, _code: str):
+        return {
+            "id_token": first_user_jwt,
+            "refresh_token": "refresh-secret-that-must-never-leak",
+            "token_type": "Bearer",
+        }
+
+    async def failing_refresh(_config, _refresh_token: str):
+        raise RuntimeError("EduPlus2 refresh grant failed: refresh-secret-that-must-never-leak")
+
+    monkeypatch.setattr(fronting_demo, "exchange_authorization_code", fake_code_exchange)
+    monkeypatch.setattr(fronting_demo, "refresh_user_token", failing_refresh)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://school.example",
+        follow_redirects=False,
+    ) as client:
+        start = await client.get("/api/v1/auth/eduplus2/demo/start")
+        state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+        callback = await client.get(
+            "/api/v1/auth/eduplus2/demo/callback",
+            params={"state": state, "code": "auth-code-123"},
+        )
+        demo_session = parse_qs(urlsplit(callback.headers["location"]).query)["demo_session"][0]
+        refresh = await client.post(
+            "/api/v1/auth/eduplus2/demo/refresh",
+            json={"demo_session": demo_session},
+        )
+
+    assert refresh.status_code == 503, refresh.text
+    assert refresh.json() == {
+        "detail": "Service unavailable",
+        "error_code": "eduplus2_refresh_grant_failed",
+    }
+    assert "refresh-secret-that-must-never-leak" not in refresh.text
+    assert first_user_jwt not in refresh.text
+
+
+async def test_demo_result_ttl_can_cover_multi_turn_refresh_window(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """多轮长对话不能只延长 dt_token；demo_session 的 refresh 窗口也要覆盖。"""
+
+    from deeptutor_enterprise.eduplus2.fronting_demo import DemoResult
+
+    monkeypatch.setenv("DT_EDUPLUS2_FRONTING_DEMO_RESULT_TTL_SECONDS", str(8 * 60 * 60))
+    before = time.time()
+    result = DemoResult(
+        ok=True,
+        request_id="demo-ttl",
+        token_type="Bearer",
+        dt_token="header.payload.signature",
+        summary={},
+        steps=[],
+        refresh_token="refresh-token",
+    )
+
+    assert result.expires_at - before >= (8 * 60 * 60) - 5
+
+
 async def test_demo_callback_rejects_unknown_state_without_exchanging_code(
     app, monkeypatch: pytest.MonkeyPatch
 ):

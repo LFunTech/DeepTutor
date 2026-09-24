@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from deeptutor.agents.chat.agentic_pipeline import AgenticChatPipeline
-from deeptutor.core.context import UnifiedContext
+from deeptutor.core.context import TurnRuntimeContext, UnifiedContext
 from deeptutor.core.stream import StreamEvent, StreamEventType
 from deeptutor.core.tool_protocol import BaseTool, ToolDefinition, ToolResult
 from deeptutor.services.session.required_context import (
@@ -200,6 +200,37 @@ def test_required_knowledge_base_unauthorized_fails_with_authorization_code(monk
 
     assert exc.value.error_code == "context_authorization_failed"
     assert ctx.metadata["context_resolution"]["unavailable"][0]["name"] == "private-kb"
+
+
+def test_configured_turn_uses_pre_resolved_kb_without_local_data_probe(monkeypatch) -> None:
+    pipe = _pipe(monkeypatch, [])
+
+    def should_not_probe_local_kb(*_args, **_kwargs):
+        raise AssertionError("configured turns must not read local data knowledge bases")
+
+    monkeypatch.setattr(
+        "deeptutor.multi_user.knowledge_access.resolve_kb",
+        should_not_probe_local_kb,
+    )
+    ctx = UnifiedContext(
+        session_id="session-1",
+        knowledge_bases=["external-kb"],
+        allowed_builtin_tools=["rag"],
+        runtime=TurnRuntimeContext(resource_capabilities=frozenset()),
+        metadata={
+            "context_policy": "required",
+            "context_resolution": {
+                "policy": "required",
+                "requested": {"knowledge_bases": ["external-kb"]},
+                "resolved": {"knowledge_bases": ["external-kb"]},
+                "unavailable": [],
+            },
+        },
+    )
+
+    pipe._validate_required_knowledge_bases(ctx)
+
+    assert ctx.metadata["context_resolution"]["resolved"]["knowledge_bases"] == ["external-kb"]
 
 
 def test_auto_context_usage_does_not_report_unavailable_kb_as_used() -> None:
@@ -418,3 +449,84 @@ def test_configured_turn_runtime_required_missing_skill_fails_closed(monkeypatch
     assert skill_rows == [
         {"kind": "skill", "label": "missing-skill", "status": "unavailable", "count": 0}
     ]
+
+
+def test_configured_turn_runtime_marks_authorization_revocation_with_stable_code() -> None:
+    from deeptutor.services.session._turn_runtime_shared import _TurnExecution
+    from deeptutor.services.session.turns.configured import ConfiguredTurnRuntime
+    from deeptutor.services.session.turns.environment import PreparedTurnEnvironment
+
+    class Store:
+        def __init__(self) -> None:
+            self.finalized: dict[str, Any] | None = None
+
+        async def update_session_preferences(self, *_args, **_kwargs):
+            return None
+
+        async def get_messages_for_context(self, *_args, **_kwargs):
+            return []
+
+        async def add_message(self, *_args, **_kwargs):
+            return 1
+
+        async def append_turn_event(self, turn_id, event):
+            return {"turn_id": turn_id, **event, "seq": event.get("seq", 1)}
+
+        async def finalize_turn(self, turn_id, **kwargs):
+            self.finalized = {"turn_id": turn_id, **kwargs}
+            return {"events": kwargs["events"]}
+
+    class Environment:
+        async def authorize_request(self, action, *, session_id=None, turn_id=None):
+            if action == "finalize":
+                raise PermissionError("token expired")
+            return None
+
+    async def no_output(_context):
+        if False:
+            yield None
+
+    class Runtime(ConfiguredTurnRuntime):
+        def __init__(self) -> None:
+            self.store = Store()
+            self.turn_environment = Environment()
+            self._lock = asyncio.Lock()
+            self._executions = {}
+            self._reply_queues = {}
+            self.turn_engine = SimpleNamespace(execute=no_output)
+
+        async def _maybe_generate_session_title(self, **_kwargs):
+            return None
+
+    runtime = Runtime()
+    payload = {
+        "content": "普通问题",
+        "capability": "chat",
+        "tools": [],
+        "context_policy": "required",
+        "language": "zh",
+        "llm_selection": {"profile_id": "chat", "model_id": "primary"},
+    }
+    execution = _TurnExecution(
+        turn_id="turn-1",
+        session_id="session-1",
+        capability="chat",
+        payload=payload,
+        prepared_environment=PreparedTurnEnvironment(
+            payload=payload,
+            llm_config=SimpleNamespace(model="test-model", max_tokens=128),
+            chat_params={"temperature": 0.2},
+            allowed_tools=(),
+        ),
+    )
+    runtime._executions[execution.turn_id] = execution
+
+    asyncio.run(runtime._run_configured_turn(execution))
+
+    assert runtime.store.finalized is not None
+    assert runtime.store.finalized["status"] == "failed"
+    assert runtime.store.finalized["failure_code"] == "turn_authorization_expired"
+    error_event = runtime.store.finalized["events"][-2]
+    done_event = runtime.store.finalized["events"][-1]
+    assert error_event["metadata"]["error_code"] == "turn_authorization_expired"
+    assert done_event["metadata"]["error_code"] == "turn_authorization_expired"

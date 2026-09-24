@@ -428,3 +428,74 @@ openspec validate --all --strict
 git diff --check -- <本轮相关源码/测试/OpenSpec路径>
 # exit 0
 ```
+
+## 2026-09-24 conversation-test skill 补种纠偏：从本地 builtin 改为 PG + S3 用户层
+
+用户指出上一轮测试 skill 未按约定上传到 S3，而是落在本地 `deeptutor/skills/builtin`。复查确认工作区曾出现 12 个未跟踪的本地 builtin skill 目录；这会让普通对话测试页误以为 skill 已配置，但来源是本地文件系统，不符合 A2 的 ObjectStore 外部化约定。
+
+本轮纠偏：
+
+- 从 `/Users/minwang/Projects/skills` 读取 12 个教学/研究/写作类测试 skill 包。
+- 通过 `ExternalizedSkillService.install_tree(force=True)` 写入每个启用用户的用户层 `dynamic_skill`，即 PG `enterprise.resource_objects` 元数据 + 远程 S3/ObjectStore 对象内容。
+- 删除错误产生的未跟踪本地 builtin 目录；删除前校验对应目录不在 `git ls-files` 中，且源包仍存在于 `/Users/minwang/Projects/skills`。
+- 不记录 S3 credential、JWT、signed URL 或用户明文标识。
+
+| 命令 / 验证 | 退出码 | 脱敏结果摘要 | 限制 / 后续 |
+| --- | --- | --- | --- |
+| `ExternalizedSkillService.install_tree(...)` seed 脚本 | 0 | 3 个启用用户各写入 12 个 `dynamic_skill`；`failed_or_skipped=[]`；随后通过 `ExternalizedSkillService.read_skill_file()` 读回 36 个用户层 skill。 | 这是本地联调环境的数据补种，不是目标 K8s/Woodpecker 发布。 |
+| scoped PG + ObjectStore 复查脚本 | 0 | 每个用户 scoped 查询均有 `dynamic_ready_count=12`；`teach_source=user`；示例对象 key 位于 `tenants/<tenant>/owners/<owner_hash>/dynamic_skill/...`；`teach_size=18646`。 | 输出仅保留 owner hash 前缀和对象 key 前缀，不输出完整对象 key。 |
+| 精确删除未跟踪本地 builtin 目录 | 0 | 已移除 `doc-coauthoring`、`grill-me`、`k12-lesson-*`、`research`、`scaffold-exercises`、`teach`、`to-*`、`writing-*` 这 12 个误放本地 builtin 目录；`git status deeptutor/skills/builtin` 不再显示这些未跟踪目录。 | 已保留 `/Users/minwang/Projects/skills` 源包。 |
+| 真实后端 `/api/v1/enterprise/conversation-test/options` smoke | 0 | 使用本地进程临时 mint 的当前 tenant token 调用真实 HTTPS 后端，返回 200；12 个补种 skill 全部出现在能力清单中，总 skill 数 17。 | token 不输出、不保存；该 smoke 只验证 options 清单，不调用模型。 |
+
+结论：普通对话测试页现在看到的 12 个测试 skill 已来自用户层 `dynamic_skill`，由 PG + S3/ObjectStore 驱动，不再依赖错误的本地 builtin 目录。
+
+## 2026-09-24 local data 目录外部化纠偏：KB 与模型 Secret 不再依赖 `data/`
+
+用户指出工作区仍存在 `data/` 与 `.local/.../data`，与“业务数据和资源上 PG/S3”的约定冲突。复查确认这不是单纯残留目录问题，存在两个真实运行路径仍会读本地 `data`：
+
+- 本地企业后端启动脚本从 `.local/deeptutor-dev/home/data/user/settings/model_catalog.json` 读取 `DT_MODEL_API_KEY`。
+- 普通对话测试页 options 仍通过 core `list_visible_knowledge_bases()` / `KnowledgeBaseManager` 读取本地 `data/knowledge_bases`。
+
+本轮纠偏：
+
+- 将 `DT_MODEL_API_KEY` 迁移到 `.secrets/.local.secrets`，启动脚本只从 Secret 文件加载，不再读取 `data/user/settings/model_catalog.json`。
+- 新增企业侧 `knowledge_base_document` 元数据路径：知识库清单从 PG `enterprise.resource_objects` 读取，文档内容通过 `PostgresObjectResourceStore` 写入远程 S3/ObjectStore。
+- 企业 `TurnEnvironment` 在模型调用前用 PG/ObjectStore + LightRAG binding 解析 required KB，并把 resolved KB 写入 `context_resolution`；core configured turn 不再 fallback 到本地 KB manager 扫描 `data/knowledge_bases`。
+- 为企业 turn 注册受控 `rag` tool override，直接调用部署绑定的 LightRAG Server；`kb_name` 必须来自本轮已解析的 KB。
+- 本地 LightRAG 调试绑定写入 ignored deployment config；生产配置仍要求 HTTPS LightRAG endpoint。
+- 将旧 `data` 目录和旧 `.local/.../data*` 目录移出仓库到 `/tmp/deeptutor-local-data-archive-20260924095743`，作为临时人工回滚材料；仓库内不再保留运行态 `data` 目录。
+
+| 命令 / 验证 | 退出码 | 脱敏结果摘要 | 限制 / 后续 |
+| --- | --- | --- | --- |
+| KB seed 脚本（PG + S3/ObjectStore） | 0 | 从旧本地 KB 样本文档一次性补种到 `knowledge_base_document`：3 个启用用户、2 个 KB、15 个文档对象；对象内容经 `PostgresObjectResourceStore.put()` 写入远程 ObjectStore，PG 记录 metadata/status。 | 仅输出计数，不输出对象 key、S3 credential、signed URL 或文档正文。 |
+| `.venv/bin/python -m pytest --asyncio-mode=auto extensions/enterprise/tests/test_configuration.py tests/agents/chat/test_required_context.py::test_configured_turn_uses_pre_resolved_kb_without_local_data_probe extensions/enterprise/tests/test_application.py::test_conversation_test_options_are_authenticated_and_non_secret extensions/enterprise/tests/test_application.py::test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enabled -q` | 0 | 7 passed；覆盖 local loopback LightRAG 只允许非 production、production 禁止 HTTP、configured turn 已解析 KB 时不读本地 `data`、options 使用外部化 KB 且 local KB access 被 monkeypatch 为失败仍通过。 | scoped regression。 |
+| `.venv/bin/ruff check ...`（本轮 Python 源码/测试） | 0 | All checks passed。 | scoped lint。 |
+| 后端/前端重启 | 0 / long-running | backend PID `83053` 监听 `127.0.0.1:8001`，frontend PID `83682` 监听 `*:3782`；`/api/settings/ui` 返回 200，`/enterprise/eduplus2/conversation-test` 返回 200。 | 以前台工具 session 运行，供本地手动测试。 |
+| 临时 mint 当前 tenant token 后调用真实 `/api/v1/enterprise/conversation-test/options` | 0 | HTTP 200；`kb_count=2`、`skill_count=17`、`mcp_count=0`；KB statuses 均为 `ready`。未输出 token。 | 使用内部 smoke token，不替代 EduPlus2 浏览器登录 smoke。 |
+| `find` runtime data path 复查 | 0 | 排除 `.git`、`.venv`、`web/node_modules`、`web/.next*` 后，仓库内 `data` / `.local/*/data*` / `data.*` 目录为空。重启 backend/frontend 并调用 options 后仍为空。 | `/tmp/deeptutor-local-data-archive-20260924095743` 暂存旧材料，后续确认无回滚需要后可删除。 |
+
+结论：当前本地企业联调路径不再依赖仓库内 `data/` 作为业务状态、模型 Secret、skill 或 KB 权威；普通对话测试页展示的 KB 来自 PG + S3/ObjectStore 元数据，required KB 不会再通过 core local KB manager 读取本地文件。
+
+## 2026-09-24 模型目录纠偏：PG 维护多模型 profile 与 secret ref，Secret provider 保存 key 明文
+
+用户指出“模型 key 不应该只有单个 `.secrets` env；DeepTutor 支持配置多个模型，对应也应有多个 key”。本轮确认并修正设计边界：DB 不保存 key 明文；DB 保存多模型 profile、授权策略和每个 profile 的 `secret_ref`，Secret provider / K8s Secret / env 保存真正 key。
+
+本轮改动：
+
+- 新增企业侧 `model_catalog` 运行态读取：优先从 PG `enterprise.runtime_settings` 的 `model_catalog` 读取活动模型目录；未配置时才回退部署文件。
+- `model_catalog` 中每个模型条目只记录 `secret_ref`，运行时再从 PG `enterprise.secret_references` 解析为 Secret provider 引用（当前 local 为 `env:*`）。
+- `TurnEnvironment.prepare_request()` 每轮从当前 tenant PG 模型目录解析可用模型，支持同一 `profile_id` 下多个 `model_id` 和各自 secret ref。
+- 本地联调 `.secrets/.local.secrets` 已补齐 per-model env 名称；启动脚本会加载所有 `DT_MODEL_API_KEY*`，不再只能加载单个固定 key 名。
+- 本地 PG 已补种两个模型 profile：`chat/primary -> qwen3.8-max`、`chat/qwen37_plus -> qwen3.7-plus`，分别绑定独立 secret ref；未输出/保存 key 明文到 evidence。
+
+| 命令 / 验证 | 退出码 | 脱敏结果摘要 | 限制 / 后续 |
+| --- | --- | --- | --- |
+| local PG seed for `runtime_settings.model_catalog` + `secret_references` | 0 | `runtime_model_catalog_seeded profiles=2 secret_refs=2 values_redacted`。 | 本地联调数据补种；生产应由 SecretStore/治理入口写入相同结构。 |
+| `.venv/bin/python -m pytest --asyncio-mode=auto extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_loads_multi_model_catalog_from_pg extensions/enterprise/tests/test_configuration.py tests/agents/chat/test_required_context.py::test_configured_turn_uses_pre_resolved_kb_without_local_data_probe -q` | 0 | 6 passed；覆盖 PG 多模型目录、两个 secret ref、按 `llm_selection` 选择 advanced 模型并加载对应 key。 | scoped regression。 |
+| `.venv/bin/python -m pytest --asyncio-mode=auto extensions/enterprise/tests/test_configuration.py extensions/enterprise/tests/test_application.py::test_conversation_test_options_are_authenticated_and_non_secret extensions/enterprise/tests/test_application.py::test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enabled extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_loads_multi_model_catalog_from_pg tests/agents/chat/test_required_context.py -q` | 0 | 21 passed。 | targeted regression。 |
+| `.venv/bin/ruff check extensions/enterprise/src/deeptutor_enterprise/model_catalog.py extensions/enterprise/src/deeptutor_enterprise/runtime.py extensions/enterprise/src/deeptutor_enterprise/configuration.py extensions/enterprise/tests/test_application.py` | 0 | All checks passed。 | scoped lint。 |
+| direct model catalog smoke | 0 | `model_catalog_smoke model=qwen3.7-plus profiles=2 key_loaded=True`；验证 DB 目录可选中第二个模型且能经 secret ref 加载 key。 | 未输出 key 值。 |
+| backend restart | 0 / long-running | backend 已重启并加载新的 `DT_MODEL_API_KEY*` env；`/api/settings/ui` 返回 200。 | 运行中本地服务。 |
+| runtime data path 复查 | 0 | 正常 backend 接口访问后仓库内仍无运行态 `data/` / `.local/*/data*`。 | pytest 本身可能因 core local fixture 生成临时 `data/user/settings`，验证后已移入 `/tmp/deeptutor-local-data-archive-20260924095743`。 |
+
+状态迁移判断：本轮未新增 DB schema；复用既有 `runtime_settings` 与 `secret_references`，因此不需要新增 SQL migration。对本地已有数据的补种是 local unblock；生产/测试环境应通过治理/SecretStore 写入同样的 `model_catalog` 与 secret refs。

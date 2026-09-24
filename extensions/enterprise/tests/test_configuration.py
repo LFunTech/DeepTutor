@@ -89,3 +89,58 @@ def test_deployment_config_allows_rag_tool_for_required_knowledge_bases():
     )
 
     assert config.allowed_tools == ("ask_user", "rag")
+
+
+def test_lightrag_binding_allows_loopback_only_outside_production():
+    from deeptutor_enterprise.configuration import DeploymentConfig, LightRAGBinding
+    from pydantic import ValidationError
+
+    local = LightRAGBinding.model_validate(
+        {
+            "endpoint": "http://127.0.0.1:9621",
+            "api_secret": "env:LIGHTRAG_API_KEY",
+            "workspace_binding": "local",
+            "index_version": "idx-local",
+            "contract_version": "lightrag-api-v1",
+        }
+    )
+    assert local.endpoint == "http://127.0.0.1:9621"
+
+    raw = {
+        "version": 1,
+        "tenant_id": "62ccf04e-0913-4fef-961e-ffbc6d8e449c",
+        "resource": "isolated",
+        "database_secret": "env:TEST_DATABASE_SECRET",
+        "signing_secret": "env:TEST_SIGNING_SECRET",
+        "auth_epoch_secret": "env:TEST_AUTH_EPOCH",
+        "origins": ["https://school.example"],
+        "models": [
+            {
+                "profile_id": "chat",
+                "model_id": "primary",
+                "model": "some-model",
+                "base_url": "https://model.example/v1",
+                "secret": "env:TEST_MODEL_SECRET",
+                "allowed_roles": ["user", "tenant_admin"],
+            }
+        ],
+        "object_store": {
+            "provider": "s3-compatible",
+            "endpoint": "https://objects.example",
+            "bucket": "deeptutor-test",
+            "region": "us-east-1",
+            "access_key_secret": "env:OBJECT_ACCESS",
+            "secret_key_secret": "env:OBJECT_SECRET",
+        },
+        "settings_provider": {"kind": "postgres"},
+        "secret_provider": {"kind": "env", "name": "test"},
+        "lightrag": local.model_dump(),
+        "eduplus2": {
+            "base_url": "https://eduplus2.example",
+            "client_id": "eduplus2",
+            "client_secret": "env:EDUPLUS2_SECRET",
+        },
+        "production": {"runtime_mode": "production"},
+    }
+    with pytest.raises(ValidationError):
+        DeploymentConfig.model_validate(raw)

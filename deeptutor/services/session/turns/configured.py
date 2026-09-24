@@ -311,6 +311,10 @@ class ConfiguredTurnRuntime:
             registry = ToolRegistry()
             for name in prepared.allowed_tools:
                 registry.register(BUILTIN_TOOL_SPEC_BY_NAME[name].create())
+            for tool in prepared.tool_overrides:
+                if tool.name not in set(prepared.allowed_tools):
+                    raise ValueError("Configured tool override is not authorized")
+                registry.register(tool)
             skills_manifest = ""
             requested_skills = string_list(payload.get("skills"))
             if requested_skills:
@@ -540,6 +544,9 @@ class ConfiguredTurnRuntime:
                     # 此处只允许记录受控失败，不再提交撤销后的成功输出或调用模型。
                     revoked = True
                     status, error = "failed", "Turn authorization is no longer valid"
+                if revoked and not failure_code:
+                    failure_code = "turn_authorization_expired"
+                    retryable = True
                 metadata = None
                 if context is not None and not revoked:
                     state = normalize_provider_response_state(

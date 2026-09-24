@@ -1854,6 +1854,10 @@ class AgenticLoopPipeline:
         whose files cannot be read costs the manifest, not the turn.
         """
         self._kb_manifests = []
+        if context.runtime.resource_capabilities is not None:
+            # 受控/生产 turn 的 KB 可见性由 TurnEnvironment 在 PG/ObjectStore/
+            # 外部检索绑定上预先解析；这里不能回退扫描本地 data/knowledge_bases。
+            return
         kbs = self._rag_kbs(context)
         if not kbs:
             return
@@ -1885,6 +1889,24 @@ class AgenticLoopPipeline:
                     "Required knowledge base cannot be mounted in this turn environment",
                     error_code="knowledge_base_unavailable",
                 )
+            return
+        if context.runtime.resource_capabilities is not None:
+            resolved = set(
+                string_list((resolution.get("resolved") or {}).get("knowledge_bases"))
+            )
+            missing = [kb for kb in requested if kb not in resolved]
+            if missing:
+                mark_unavailable(
+                    context.metadata,
+                    kind="knowledge_base",
+                    names=missing,
+                    code="knowledge_base_unavailable",
+                )
+                if policy == "required":
+                    raise ContextResolutionError(
+                        "Required knowledge base is unavailable or not ready",
+                        error_code="knowledge_base_unavailable",
+                    )
             return
         resolved: list[str] = []
         missing: list[str] = []

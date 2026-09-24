@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 
 from deeptutor.services.session.ask_user_trace import filter_ask_user_events
 from deeptutor.services.session.event_preview import MAX_TRACE_PREVIEW_EVENTS, compact_trace_preview
+from deeptutor.services.session.protocol import ActiveTurnConflict
 from deeptutor.services.session.provider_response_state import redact_private_message_metadata
 from deeptutor.services.session.question_bank import QuestionBankReferenceConflict
 from deeptutor.services.session.scope import StoreScope
@@ -336,7 +337,9 @@ class PostgresSessionStore(PostgresNotebookMixin):
             )
         ).fetchone()
         if active:
-            raise RuntimeError("Session already has an active turn")
+            raise ActiveTurnConflict(
+                "Session already has an active turn", turn_id=str(active["id"])
+            )
         row = await (
             await c.execute(
                 "INSERT INTO enterprise.turns(tenant_id,user_id,session_id,id,capability,owner_id,fencing_token) VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING *",

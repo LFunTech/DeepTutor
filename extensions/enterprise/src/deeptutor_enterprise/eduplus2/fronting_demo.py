@@ -11,6 +11,7 @@ import base64
 from dataclasses import dataclass, field
 import hashlib
 import json
+import logging
 import os
 import secrets
 import time
@@ -25,14 +26,28 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 from ..configuration import resolve_secret
 
+_LOGGER = logging.getLogger(__name__)
 _DEFAULT_SCOPES = "openid profile offline_access"
 _STATE_TTL_SECONDS = 5 * 60
 _RESULT_TTL_SECONDS = 5 * 60
+_RESULT_TTL_ENV = "DT_EDUPLUS2_FRONTING_DEMO_RESULT_TTL_SECONDS"
+_MAX_RESULT_TTL_SECONDS = 24 * 60 * 60
 _DISABLED_FLAGS = {"0", "false", "off", "no"}
 _ENABLED_FLAGS = {"1", "true", "on", "yes"}
 _STATE_STORE: dict[str, "DemoState"] = {}
 _RESULT_STORE: dict[str, "DemoResult"] = {}
 _EXCHANGE_REQUIRED_CLAIMS = ("iss", "exp", "iat", "tid", "eui", "sub", "azp")
+
+
+def _result_ttl_seconds() -> int:
+    raw = str(os.environ.get(_RESULT_TTL_ENV, "") or "").strip()
+    if not raw:
+        return _RESULT_TTL_SECONDS
+    try:
+        seconds = int(raw)
+    except ValueError:
+        return _RESULT_TTL_SECONDS
+    return max(_RESULT_TTL_SECONDS, min(seconds, _MAX_RESULT_TTL_SECONDS))
 
 
 class FrontingDemoConfigurationError(RuntimeError):
@@ -75,7 +90,7 @@ class DemoResult:
     steps: list[dict[str, Any]]
     refresh_token: str = ""
     created_at: float = field(default_factory=time.time)
-    expires_at: float = field(default_factory=lambda: time.time() + _RESULT_TTL_SECONDS)
+    expires_at: float = field(default_factory=lambda: time.time() + _result_ttl_seconds())
 
     def to_response(self) -> dict[str, Any]:
         return {
@@ -546,6 +561,9 @@ def _safe_error_detail(exc: Exception) -> str:
         ("EduPlus2 token endpoint rejected request", "eduplus2_token_endpoint_rejected"),
         ("EduPlus2 token endpoint is unavailable", "eduplus2_token_endpoint_unavailable"),
         ("EduPlus2 token response is invalid", "eduplus2_token_response_invalid"),
+        ("EduPlus2 refresh grant failed", "eduplus2_refresh_grant_failed"),
+        ("EduPlus2 refresh response is invalid", "eduplus2_refresh_response_invalid"),
+        ("EduPlus2 refresh token is unavailable", "eduplus2_refresh_token_unavailable"),
         ("EduPlus2 resolve endpoint rejected request", "eduplus2_resolve_endpoint_rejected"),
         ("EduPlus2 resolve endpoint is unavailable", "eduplus2_resolve_endpoint_unavailable"),
         ("EduPlus2 resolve response is invalid", "eduplus2_resolve_response_invalid"),
@@ -711,8 +729,20 @@ async def refresh_response(request: Request, enterprise) -> JSONResponse:
         return JSONResponse({"detail": "Operation conflict"}, status_code=409)
     except FrontingDemoConfigurationError as exc:
         return configuration_error_response(exc)
-    except RuntimeError:
-        return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+    except RuntimeError as exc:
+        error_code = _safe_error_detail(exc)
+        _LOGGER.warning(
+            "eduplus2_fronting_demo_refresh_failed",
+            extra={
+                "request_id": result.request_id,
+                "demo_session_hash": _hash_identifier(session_id),
+                "error_code": error_code,
+            },
+        )
+        return JSONResponse(
+            {"detail": "Service unavailable", "error_code": error_code},
+            status_code=503,
+        )
     refreshed = DemoResult(
         ok=True,
         request_id=result.request_id,

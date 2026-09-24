@@ -18,8 +18,14 @@ import {
   isSpeechRecognitionAvailable,
   isServerSpeechRecordingAvailable,
   isConversationTerminalWebSocketEvent,
+  settlePendingConversationTurnAfterSocketClose,
   splitAssistantThinkingFromAnswer,
   shouldShowConversationLoginLanding,
+  conversationAuthRefreshFailureState,
+  clearConversationAuthRefreshNotice,
+  extractConversationAskUserPrompt,
+  buildConversationAskUserReply,
+  conversationPublicErrorMessage,
 } from "../lib/enterprise-conversation-test";
 
 test("ordinary conversation test page sends required context and resource ids over start_turn only", () => {
@@ -245,6 +251,136 @@ test("websocket error events release the ordinary conversation composer", () => 
   assert.equal(isConversationTerminalWebSocketEvent("progress"), false);
 });
 
+test("ordinary conversation page settles pending assistant turn when websocket closes without done", () => {
+  const turns = settlePendingConversationTurnAfterSocketClose(
+    [
+      { id: "u-1", role: "user", content: "讲讲这个题目" },
+      {
+        id: "a-1",
+        role: "assistant",
+        content: "",
+        status: "pending",
+        statusMessage: "正在输出",
+      },
+    ],
+    "a-1",
+  );
+
+  assert.deepEqual(turns[1], {
+    id: "a-1",
+    role: "assistant",
+    content: "连接已中断，请重新发送。",
+    status: "failed",
+    statusMessage: undefined,
+  });
+});
+
+test("ordinary conversation page extracts ask_user reply cards from safe tool result metadata", () => {
+  const prompt = extractConversationAskUserPrompt({
+    type: "tool_result",
+    metadata: {
+      tool_metadata: {
+        ask_user: {
+          intro: "为了继续讲解，请补充：",
+          questions: [
+            {
+              id: "goal",
+              header: "目标",
+              prompt: "你希望先解决什么？",
+              options: [
+                { label: "先讲概念", description: "适合入门" },
+                { label: "直接做题" },
+              ],
+            },
+            {
+              id: "focus",
+              prompt: "还想覆盖哪些？",
+              options: [{ label: "公式" }, { label: "例题" }],
+              multi_select: true,
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(prompt, {
+    intro: "为了继续讲解，请补充：",
+    questions: [
+      {
+        id: "goal",
+        header: "目标",
+        prompt: "你希望先解决什么？",
+        options: [
+          { label: "先讲概念", description: "适合入门" },
+          { label: "直接做题", description: "" },
+        ],
+        multiSelect: false,
+        allowFreeText: true,
+        placeholder: "",
+      },
+      {
+        id: "focus",
+        header: "",
+        prompt: "还想覆盖哪些？",
+        options: [
+          { label: "公式", description: "" },
+          { label: "例题", description: "" },
+        ],
+        multiSelect: true,
+        allowFreeText: true,
+        placeholder: "",
+      },
+    ],
+  });
+});
+
+test("ordinary conversation page builds submit_user_reply answers for ask_user turns", () => {
+  const reply = buildConversationAskUserReply(
+    {
+      intro: "请补充",
+      questions: [
+        {
+          id: "goal",
+          header: "目标",
+          prompt: "你希望先解决什么？",
+          options: [],
+          multiSelect: false,
+          allowFreeText: true,
+          placeholder: "",
+        },
+        {
+          id: "focus",
+          header: "",
+          prompt: "还想覆盖哪些？",
+          options: [],
+          multiSelect: true,
+          allowFreeText: true,
+          placeholder: "",
+        },
+      ],
+    },
+    { goal: "先讲概念", focus: "公式、例题" },
+  );
+
+  assert.deepEqual(reply.answers, [
+    { questionId: "goal", text: "先讲概念" },
+    { questionId: "focus", text: "公式、例题" },
+  ]);
+  assert.equal(reply.text, "你希望先解决什么？：先讲概念\n还想覆盖哪些？：公式、例题");
+});
+
+test("ordinary conversation page explains active turns instead of showing service unavailable", () => {
+  assert.equal(
+    conversationPublicErrorMessage("session_active_turn", "Service unavailable"),
+    "上一轮还在等待你的补充，请先回答页面里的追问，或点击“新建对话”重新开始。",
+  );
+  assert.equal(
+    conversationPublicErrorMessage("turn_authorization_expired", "Turn authorization is no longer valid"),
+    "登录状态已刷新或过期，请重新发送这一轮。",
+  );
+});
+
 test("stale demo sessions return users to the ordinary login landing", () => {
   assert.equal(
     shouldShowConversationLoginLanding({
@@ -310,6 +446,32 @@ test("ordinary conversation websocket refreshes short lived demo tokens during l
       leewaySeconds: 45,
     }),
     null,
+  );
+});
+
+test("ordinary conversation page treats one auth refresh failure as transient", () => {
+  const firstFailure = conversationAuthRefreshFailureState({
+    consecutiveFailures: 0,
+  });
+
+  assert.deepEqual(firstFailure, {
+    consecutiveFailures: 1,
+    notice: "",
+  });
+
+  const secondFailure = conversationAuthRefreshFailureState(firstFailure);
+  assert.deepEqual(secondFailure, {
+    consecutiveFailures: 2,
+    notice: "登录状态刷新暂时失败，正在重试。",
+  });
+
+  assert.equal(
+    clearConversationAuthRefreshNotice("登录状态刷新暂时失败，正在重试。"),
+    "",
+  );
+  assert.equal(
+    clearConversationAuthRefreshNotice("文件还在上传中，完成后再发送。"),
+    "文件还在上传中，完成后再发送。",
   );
 });
 
