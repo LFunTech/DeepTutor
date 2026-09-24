@@ -1127,3 +1127,25 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.15` tag。
+
+### 2026-09-24 test-cn pipeline #25 apt 外网源超时与第十三次修复
+
+`deploy/test-cn/v1.4.0-rc.16` 触发 Woodpecker pipeline `#25` 后，release gate、metadata 和 secret preflight 继续通过。Kaniko 已完成前端构建并进入 `python-base` 阶段，但 `apt-get update` 仍使用默认 Debian 外网源：
+
+```text
+Get:1 http://deb.debian.org/debian bookworm InRelease
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease
+Fetched 9379 kB in 9min 29s
+```
+
+随后 build step 被 killed，未进入后续 pre-deploy/deploy。根因：前序修复只覆盖 base image、npm 和 PyPI，Dockerfile 内的 apt 源仍是默认外网源；在当前 Woodpecker agent 网络下 apt 下载过慢，会消耗 Kaniko build 时间窗口。同时 PyPI 源应使用已明确的内网镜像 `https://mirror.f123.pub/repository/pypi/`，而不是公网 PyPI/TUNA PyPI。
+
+修复：
+
+- Dockerfile 增加可覆盖的 `APT_DEBIAN_MIRROR` / `APT_SECURITY_MIRROR` build args，并在 `python-base` 与 `production` 两个会执行 `apt-get` 的阶段改写 `/etc/apt/sources.list.d/debian.sources` 或 `/etc/apt/sources.list` 后再 `apt-get update`。
+- Woodpecker Kaniko build args 显式使用 Tsinghua Debian 镜像：`http://mirrors.tuna.tsinghua.edu.cn/debian` 与 `http://mirrors.tuna.tsinghua.edu.cn/debian-security`。
+- Woodpecker PyPI build arg 改为内网 `https://mirror.f123.pub/repository/pypi/`。
+- Dockerfile 增加 Rustup/Cargo 镜像 build args；CI 中使用 Tsinghua `rustup` 和 Cargo sparse index，避免后续 Rust 依赖构建继续访问默认源。
+- 新增/更新测试覆盖 apt/PyPI/Rustup/Cargo 镜像 build args，并禁止回退到 `PIP_TRUSTED_HOST` 或旧公网 PyPI 源。
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.16` tag。

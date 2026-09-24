@@ -21,8 +21,13 @@
 # do not depend on direct access to index.docker.io.
 ARG NODE_IMAGE=node:22-slim
 ARG PYTHON_IMAGE=python:3.11-slim
+ARG APT_DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG RUSTUP_DIST_SERVER=https://static.rust-lang.org
+ARG RUSTUP_UPDATE_ROOT=https://static.rust-lang.org/rustup
+ARG CARGO_REGISTRY_MIRROR=sparse+https://index.crates.io/
 
 # Run on the build platform natively (not under QEMU emulation).
 # The output is platform-independent static assets (JS/HTML/CSS),
@@ -71,7 +76,12 @@ FROM ${NODE_IMAGE} AS node-runtime
 # ============================================
 FROM ${PYTHON_IMAGE} AS python-base
 
+ARG APT_DEBIAN_MIRROR
+ARG APT_SECURITY_MIRROR
 ARG PIP_INDEX_URL
+ARG RUSTUP_DIST_SERVER
+ARG RUSTUP_UPDATE_ROOT
+ARG CARGO_REGISTRY_MIRROR
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -79,14 +89,39 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONIOENCODING=utf-8 \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    RUSTUP_DIST_SERVER=${RUSTUP_DIST_SERVER} \
+    RUSTUP_UPDATE_ROOT=${RUSTUP_UPDATE_ROOT} \
+    CARGO_HOME=/root/.cargo
 
 WORKDIR /app
 
 # Install system dependencies
 # Note: libgl1 and libglib2.0-0 are required for OpenCV (used by mineru)
 # Rust is required for building tiktoken and other packages without pre-built wheels
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i \
+            -e "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i \
+            -e "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            /etc/apt/sources.list; \
+    fi; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-ci-retries; \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     build-essential \
@@ -98,6 +133,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /root/.cargo \
+    && printf '[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n\n[registries.mirror]\nindex = "%s"\n' "${CARGO_REGISTRY_MIRROR}" "${CARGO_REGISTRY_MIRROR}" > /root/.cargo/config.toml \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Add Rust to PATH
@@ -114,6 +151,8 @@ RUN pip install --index-url "${PIP_INDEX_URL}" --upgrade pip && \
 # ============================================
 FROM ${PYTHON_IMAGE} AS production
 
+ARG APT_DEBIAN_MIRROR
+ARG APT_SECURITY_MIRROR
 ARG PIP_INDEX_URL
 
 # Labels
@@ -146,7 +185,29 @@ WORKDIR /app
 #       installs with `pip install git+…`, which shells out to git. It is needed
 #       in *this* image and not in the runner: installing is a privileged
 #       main-app action, running is the runner's (Dockerfile.runner).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i \
+            -e "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i \
+            -e "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            -e "s|https://deb.debian.org/debian|${APT_DEBIAN_MIRROR}|g" \
+            /etc/apt/sources.list; \
+    fi; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-ci-retries; \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     bash \

@@ -773,8 +773,17 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert '--build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm"' in pipeline
     assert '--build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim"' in pipeline
     assert "--context=dir:///woodpecker/src" in pipeline
+    assert '--build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian"' in pipeline
+    assert '--build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security"' in pipeline
     assert '--build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/"' in pipeline
-    assert '--build-arg PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"' in pipeline
+    assert '--build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/"' in pipeline
+    assert "--build-arg PIP_TRUSTED_HOST" not in pipeline
+    assert '--build-arg RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"' in pipeline
+    assert '--build-arg RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"' in pipeline
+    assert (
+        '--build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"'
+        in pipeline
+    )
     assert "--cache-copy-layers" in pipeline
     assert "--single-snapshot" not in pipeline
     assert "--snapshot-mode=redo" not in pipeline
@@ -868,13 +877,30 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     dockerfile = dockerfile_path.read_text(encoding="utf8")
     assert "ARG NODE_IMAGE=node:22-slim" in dockerfile
     assert "ARG PYTHON_IMAGE=python:3.11-slim" in dockerfile
+    assert "ARG APT_DEBIAN_MIRROR=http://deb.debian.org/debian" in dockerfile
+    assert "ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security" in dockerfile
     assert "ARG NPM_REGISTRY=https://registry.npmjs.org/" in dockerfile
     assert "ARG PIP_INDEX_URL=https://pypi.org/simple" in dockerfile
+    assert "ARG PIP_TRUSTED_HOST" not in dockerfile
+    assert "ARG RUSTUP_DIST_SERVER=https://static.rust-lang.org" in dockerfile
+    assert "ARG RUSTUP_UPDATE_ROOT=https://static.rust-lang.org/rustup" in dockerfile
+    assert "ARG CARGO_REGISTRY_MIRROR=sparse+https://index.crates.io/" in dockerfile
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" in dockerfile
     assert "FROM ${PYTHON_IMAGE} AS production" in dockerfile
+    assert "/etc/apt/sources.list.d/debian.sources" in dockerfile
+    assert "${APT_DEBIAN_MIRROR}" in dockerfile
+    assert "${APT_SECURITY_MIRROR}" in dockerfile
+    assert "Acquire::Retries" in dockerfile
     assert 'npm config set registry "${NPM_REGISTRY}"' in dockerfile
     assert "npm ci --legacy-peer-deps --no-audit --no-fund" in dockerfile
     assert 'rm -rf node_modules "${HOME}/.npm"' in dockerfile
+    assert "RUSTUP_DIST_SERVER=${RUSTUP_DIST_SERVER}" in dockerfile
+    assert "RUSTUP_UPDATE_ROOT=${RUSTUP_UPDATE_ROOT}" in dockerfile
+    assert "CARGO_HOME=/root/.cargo" in dockerfile
+    assert 'registry = "%s"' in dockerfile
+    assert "[registries.mirror]" in dockerfile
+    assert 'index = "%s"' in dockerfile
+    assert "${CARGO_REGISTRY_MIRROR}" in dockerfile
     assert 'pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt' in dockerfile
 
     dockerignore = dockerignore_path.read_text(encoding="utf8")
