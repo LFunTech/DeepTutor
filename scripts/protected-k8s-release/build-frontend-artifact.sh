@@ -53,6 +53,12 @@ resolve_next_artifacts() {
   done
   return 1
 }
+if ! resolve_next_artifacts; then
+  echo "Next standalone output not present after npm run build; retrying with direct next build..."
+  cd "${repo_root}/web"
+  node ./node_modules/next/dist/bin/next build --webpack
+  cd "${repo_root}"
+fi
 for attempt in $(seq 0 180); do
   if resolve_next_artifacts; then
     break

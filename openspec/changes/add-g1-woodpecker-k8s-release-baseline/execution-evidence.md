@@ -1289,3 +1289,26 @@ web/.next
 - 保留 bounded wait 与目录诊断，下一轮可验证 standalone 是否产生；过期 #33 已停止以释放 runner 资源。
 
 下一次触发使用新 commit 和新 tag；不移动已失败/已停止的 `rc.23` tag。
+
+### 2026-09-24 test-cn pipeline #34 前端直接 Next build 兜底
+
+`deploy/test-cn/v1.4.0-rc.25` 触发 Woodpecker pipeline `#34`（`rc.24` tag 已推送但未被 Woodpecker webhook 创建 pipeline，因此使用下一不可变 tag）。release gate、metadata、secret preflight 通过；并行 compile steps 启动。
+
+前端 step 在限制 worker/heap 后仍表现为 `npm run build` 过早返回，日志停在：
+
+```text
+Creating an optimized production build ...
+Using tsconfig file: tsconfig.deeptutor-build-133.json
+Waiting for Next standalone output ...
+```
+
+这说明问题不只是 worker 数；更像是 `web/scripts/build.mjs` 在该 Woodpecker Node 容器内对内部 `next build` 子进程状态传播不稳定。本地同 Node 22 版本运行 wrapper 可完整产出 standalone，说明代码本身可构建。
+
+修复：
+
+- 保留 `npm run build`（继续执行仓库 wrapper 中的 pdfjs asset copy、tsconfig 保护和普通路径）。
+- 若 wrapper 返回后没有 standalone，立即以 `node ./node_modules/next/dist/bin/next build --webpack` 直接运行 Next build 作为 CI fallback，再进入 bounded wait。
+- 保留 `DEEPTUTOR_NEXT_BUILD_CPUS=1` 与 2048MiB heap 限制，避免 fallback 也按宿主 CPU 过度并发。
+- 过期 #34 已停止以释放 runner 资源。
+
+下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.25` tag。
