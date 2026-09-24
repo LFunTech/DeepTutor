@@ -983,7 +983,9 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "DEEPTUTOR_NEXT_BUILD_CPUS" in frontend_artifact_script
     assert "CIRCLE_NODE_TOTAL" in frontend_artifact_script
     assert "npm ci --legacy-peer-deps --no-audit --no-fund" in frontend_artifact_script
+    assert "node ./scripts/copy-pdfjs-assets.mjs" in frontend_artifact_script
     assert "node ./node_modules/next/dist/bin/next build --webpack" in frontend_artifact_script
+    assert "npm run build" not in frontend_artifact_script
     assert "Waiting for Next standalone output" in frontend_artifact_script
     assert "web/.next/standalone web/.next-deeptutor/standalone" in frontend_artifact_script
     assert ".deeptutor-build/frontend" in frontend_artifact_script

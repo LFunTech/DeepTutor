@@ -37,7 +37,8 @@ npm config set fetch-retry-mintimeout 20000
 npm config set fetch-retry-maxtimeout 120000
 npm ci --legacy-peer-deps --no-audit --no-fund
 printf 'NEXT_PUBLIC_APP_VERSION=\n' > .env.local
-npm run build
+node ./scripts/copy-pdfjs-assets.mjs
+node ./node_modules/next/dist/bin/next build --webpack
 
 cd "${repo_root}"
 standalone_source=""
@@ -53,12 +54,6 @@ resolve_next_artifacts() {
   done
   return 1
 }
-if ! resolve_next_artifacts; then
-  echo "Next standalone output not present after npm run build; retrying with direct next build..."
-  cd "${repo_root}/web"
-  node ./node_modules/next/dist/bin/next build --webpack
-  cd "${repo_root}"
-fi
 for attempt in $(seq 0 180); do
   if resolve_next_artifacts; then
     break

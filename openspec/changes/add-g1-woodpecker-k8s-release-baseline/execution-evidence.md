@@ -1312,3 +1312,35 @@ Waiting for Next standalone output ...
 - 过期 #34 已停止以释放 runner 资源。
 
 下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.25` tag。
+
+### 2026-09-25 test-cn pipeline #35 直接 Next build 复现与脚本简化
+
+`deploy/test-cn/v1.4.0-rc.26` 触发 Woodpecker pipeline `#35` 后，release gate、metadata、secret preflight 通过；并行 compile steps 启动。
+
+前端 step 进入新增 fallback，但仍未生成 standalone：
+
+```text
+Next standalone output not present after npm run build; retrying with direct next build...
+Creating an optimized production build ...
+Waiting for Next standalone output ...
+Next standalone output not found; searched .next, .next and .next-deeptutor
+web/.next
+```
+
+同时，Python deps step 已越过 apt、Rustup，并进入 Python/Rust dependency build 阶段，说明并行拆分后 Python side 的镜像源和 proxy 修复方向有效。
+
+为定位前端问题，使用同类 Linux Node 镜像 `docker-hub.f123.pub/base/node:22-bookworm` 在本地容器中复现：
+
+- `node ./scripts/build.mjs` 在 macOS bind mount 上会卡在 `copyPdfjsAssets` 删除/覆盖 pdfjs wasm 目录，属于本地挂载权限/目录语义问题，不作为 CI 根因。
+- 直接运行 `node ./node_modules/next/dist/bin/next build --webpack`，并设置 `DEEPTUTOR_NEXT_DIST_DIR=.next-linux-probe-direct`、`CIRCLE_NODE_TOTAL=2`、`NODE_OPTIONS=--max-old-space-size=2048`，能在 Linux Node 镜像内完成编译、TypeScript、page generation、trace collection，并产出 `.next-linux-probe-direct/standalone/server.js`。
+
+结论：在 CI artifact 脚本中继续通过 `npm run build` wrapper 会引入额外不确定性；前端 compile step 应直接调用 Next build，同时单独执行 wrapper 中必要的 pdfjs asset copy。
+
+修复：
+
+- `build-frontend-artifact.sh` 改为 `npm ci` 后执行 `node ./scripts/copy-pdfjs-assets.mjs`，再直接执行 `node ./node_modules/next/dist/bin/next build --webpack`。
+- 保留 `DEEPTUTOR_NEXT_BUILD_CPUS=1`、2048MiB heap 和 bounded artifact wait。
+- 测试契约更新为禁止前端 artifact 脚本再使用 `npm run build`。
+- 过期 #35 已停止以释放 runner 资源。
+
+下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.26` tag。
