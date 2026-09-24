@@ -44,13 +44,13 @@ steps:
     commands:
       - mkdir -p "$EVIDENCE_DIR/gate"
       - |
-        test -n "${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
-          test -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
+        test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
+          test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
             echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
             exit 2
           }
         }
-        if [ -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
+        if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
           trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
         else
           trusted_metadata_file="$EVIDENCE_DIR/gate/trusted-trigger-metadata.json"
@@ -68,13 +68,13 @@ steps:
     commands:
       - mkdir -p "$EVIDENCE_DIR/metadata"
       - |
-        test -n "${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
-          test -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
+        test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
+          test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
             echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
             exit 2
           }
         }
-        if [ -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
+        if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
           trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
         else
           trusted_metadata_file="$EVIDENCE_DIR/metadata/trusted-trigger-metadata.json"

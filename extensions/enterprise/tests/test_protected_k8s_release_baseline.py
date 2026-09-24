@@ -691,6 +691,9 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "--approved" not in pipeline
     assert "--protected-ref" not in pipeline
     assert "trusted metadata" in pipeline.lower()
+    assert "$${TRUSTED_TRIGGER_METADATA_JSON:-}" in pipeline
+    assert "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" in pipeline
+    assert 'test -n "${TRUSTED_TRIGGER_METADATA_JSON:-}"' not in pipeline
     assert "deploy/prod/**" not in pipeline
     assert "event: tag" in pipeline
     for env_id in ("test-cn", "pre-cn", "prod-cn-east", "prod-overseas-a"):

@@ -741,3 +741,29 @@ PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_rel
 ```
 
 下一次触发必须使用新 tag，例如 `deploy/test-cn/v1.4.0-rc.2`；不移动已失败的 `rc.1` tag。
+
+### 2026-09-24 test-cn pipeline #3 失败与二次修复
+
+在重新写入非空 repo secrets 后，重新触发 `deploy/test-cn/v1.4.0-rc.2` 生成 Woodpecker pipeline `#3`，仍在 `validate-release-trigger` 失败。
+
+失败表现：日志仍显示 `test -n ""`。进一步对照 Woodpecker Secrets 文档后确认真正根因：Woodpecker 会在 pipeline 启动前预处理 `${VAR}` 表达式；在 commands 中使用 secret 环境变量必须写成 `$${VAR}`，否则 `${TRUSTED_TRIGGER_METADATA_JSON:-}` 会被预处理为空字符串。
+
+修复：
+
+- `.woodpecker/protected-k8s-release.yml` 的 `validate-release-trigger` 和 `prepare-release-metadata` 中，将运行时 secret 判断从 `${TRUSTED_TRIGGER_METADATA_JSON:-}` / `${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}` 改为 `$${TRUSTED_TRIGGER_METADATA_JSON:-}` / `$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}`。
+- 保留 shell 本地变量与普通 `$VAR` 形式，不额外泄露 secret。
+
+验证：
+
+```bash
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven -q
+# 1 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败 tag。
