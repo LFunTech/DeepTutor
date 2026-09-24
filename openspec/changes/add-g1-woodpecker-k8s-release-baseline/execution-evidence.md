@@ -1408,3 +1408,34 @@ acquire release-lock and migration-lock for test-cn/test-cn-v1-4-0-rc-28
 - 同步修正原生 K8s runtime 端口：容器暴露 backend `8001` 和 frontend `3782`；readinessProbe 使用 `backend-http`，Service/Ingress 走 `frontend-http`，NetworkPolicy 允许 `3782` 与 `8001`，与 runtime image 的 supervisord 启动脚本保持一致。
 
 下一次触发使用新 commit 和新 tag；不移动已失败/运行中的 `rc.28` tag。
+
+### 2026-09-25 test-cn pipeline #38 三路并行构建跑通，deploy 阻断于环境 migrator DSN
+
+`deploy/test-cn/v1.4.0-rc.29` 触发 Woodpecker pipeline `#38`，使用 commit `c1357855` 的三路 artifact-image DAG：
+
+- `compile-frontend-test-cn`、`compile-python-deps-test-cn`、`build-runtime-base-test-cn` 和 `secret-preflight-test-cn` 均在 `prepare-release-metadata` 后同一时间启动（`Started=1790271375`）。
+- `compile-frontend-test-cn` 成功，`Stopped=1790271503`。
+- `compile-python-deps-test-cn` 成功，`Stopped=1790271504`。
+- `build-runtime-base-test-cn` 成功，`Stopped=1790271668`。
+- `secret-preflight-test-cn` 成功，`Stopped=1790271515`。
+- `build-runtime-image-test-cn` 从 `runtime-base`、`frontend-build`、`python-deps` 三个 artifact images 装配最终 runtime，成功，`Started=1790271668`，`Stopped=1790272085`。
+- `pre-deploy-check-test-cn` 成功，`Stopped=1790272091`。
+
+与 #37 相比，runtime final stage 不再出现多个 heredoc/sed/chmod 之后的 full filesystem snapshot 链；剩余耗时主要为从 artifact images 保存/复制 `.next`、`site-packages`、`/usr/local/bin` 和应用源码，这是最终装配必须成本。
+
+随后 `deploy-test-cn` 创建 `dt-migrate-test-cn-v1-4-0-rc-29` migration Job。Job 失败，脱敏日志为：
+
+```text
+acquire release-lock and migration-lock for test-cn/test-cn-v1-4-0-rc-29
+企业操作失败（PostgresConfigurationError）；检查配置、权限和运行状态
+```
+
+只在内存中比较 K8s Secret 与 `.secrets/woodpecker-secrets/test.secrets` 的 DSN 值，不输出明文，结论为：
+
+- K8s `deeptutor-migrator-secrets` 中 `DEEPTUTOR_POSTGRES_DATABASE_URL` 与 `DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL` 相同。
+- `.secrets/woodpecker-secrets/test.secrets` 中 `DT_TEST_CN_PG_MIGRATOR_DSN` 与上述两个 K8s DSN 相同。
+- 使用该 DSN 只读查询当前账号权限：当前账号不是 superuser，且没有 `CREATEROLE` 或 `CREATEDB`，不能由流水线/agent 安全派生独立 migrator role。
+
+结论：#38 已验证并行构建/推送/ digest pre-check 链路；剩余 deploy 阻断项是 test-cn 环境未提供与 runtime DSN 分离的 migrator DSN。根据 G1 要求，不能在代码中绕过 `postgres_migration_not_separate`，需要环境侧预置独立 migrator role/DSN，并同步更新 K8s `deeptutor-migrator-secrets` 与 Woodpecker `DT_TEST_CN_PG_MIGRATOR_DSN` 后再触发下一 tag。
+
+为避免 Woodpecker deploy step 等待 `kubectl wait` 到 900s 超时，已停止 #38；不移动已触发的 `rc.29` tag。
