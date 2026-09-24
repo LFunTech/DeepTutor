@@ -33,16 +33,10 @@ ARG NPM_REGISTRY
 
 WORKDIR /app/web
 
-# Copy package files first for better caching
+# Copy package files first, then source and version metadata.  The install and
+# build run in a single layer so Kaniko does not have to snapshot root
+# node_modules; standalone output is preserved and transient deps are removed.
 COPY web/package.json web/package-lock.json* ./
-
-# Install dependencies with generous timeout for CI environments
-RUN npm config set registry "${NPM_REGISTRY}" && \
-    npm config set fetch-timeout 600000 && \
-    npm config set fetch-retries 5 && \
-    npm ci --legacy-peer-deps
-
-# Copy frontend source code
 COPY web/ ./
 
 # Provide the single source of truth for the app version so next.config.js
@@ -54,11 +48,15 @@ COPY deeptutor/__version__.py /app/deeptutor/__version__.py
 # into the bundle: `apiUrl`/`wsUrl` in web/lib/api.ts are pass-throughs and
 # the actual backend host is read at request time by web/proxy.ts from
 # DEEPTUTOR_API_BASE_URL (exported by the entrypoint on every start).
-RUN printf 'NEXT_PUBLIC_APP_VERSION=\n' > .env.local
-
-# Build Next.js for production with standalone output
-# This allows runtime environment variable injection
-RUN npm run build
+# Build Next.js for production with standalone output; this allows runtime
+# environment variable injection.
+RUN npm config set registry "${NPM_REGISTRY}" && \
+    npm config set fetch-timeout 600000 && \
+    npm config set fetch-retries 5 && \
+    npm ci --legacy-peer-deps --no-audit --no-fund && \
+    printf 'NEXT_PUBLIC_APP_VERSION=\n' > .env.local && \
+    npm run build && \
+    rm -rf node_modules "${HOME}/.npm"
 
 # ============================================
 # Stage 1b: Node Runtime for Target Platform

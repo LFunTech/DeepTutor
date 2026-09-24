@@ -873,6 +873,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" in dockerfile
     assert "FROM ${PYTHON_IMAGE} AS production" in dockerfile
     assert 'npm config set registry "${NPM_REGISTRY}"' in dockerfile
+    assert "npm ci --legacy-peer-deps --no-audit --no-fund" in dockerfile
+    assert 'rm -rf node_modules "${HOME}/.npm"' in dockerfile
     assert 'pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt' in dockerfile
 
     dockerignore = dockerignore_path.read_text(encoding="utf8")

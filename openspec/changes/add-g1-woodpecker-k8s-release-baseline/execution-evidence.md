@@ -1096,3 +1096,34 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.14` tag。
+
+### 2026-09-24 test-cn pipeline #23 Kaniko npm layer快照失败与第十二次修复
+
+`deploy/test-cn/v1.4.0-rc.15` 触发 Woodpecker pipeline `#23` 后，npm registry mirror 生效，`npm ci` 从约 4 分钟降到约 2 分钟，但 build step 仍失败在 npm layer 之后的 Kaniko 全文件系统快照：
+
+```text
+added 950 packages in 2m
+INFO[0151] Taking snapshot of full filesystem...
+```
+
+根因：即使移除了 `--single-snapshot`，Dockerfile 中独立的 `RUN npm ci ...` 仍要求 Kaniko 对包含完整 root `node_modules` 的层做快照。该层文件数量过大，容易被 Woodpecker/agent 资源或超时策略中断。最终 production image 只需要 Next standalone 输出、static 与 public，并不需要保留 builder 阶段根目录 `node_modules`。
+
+修复：重排 frontend-builder 阶段：先复制 package 与 web source，再在单个 `RUN` 中完成 npm registry 配置、`npm ci --legacy-peer-deps --no-audit --no-fund`、`.env.local` 写入、`npm run build`，最后 `rm -rf node_modules "${HOME}/.npm"`。这样 Kaniko 对该 RUN 做最终快照时保留 `.next/standalone` 等产物，但不再快照庞大的根 `node_modules`。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.15` tag。
