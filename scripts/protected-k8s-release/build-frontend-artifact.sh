@@ -12,6 +12,24 @@ mkdir -p "${artifact_dir}"
 cd "${repo_root}/web"
 export NEXT_TELEMETRY_DISABLED="${NEXT_TELEMETRY_DISABLED:-1}"
 next_dist_dir="${DEEPTUTOR_NEXT_DIST_DIR:-.next}"
+if [ -n "${DEEPTUTOR_NEXT_BUILD_CPUS:-}" ]; then
+  case "${DEEPTUTOR_NEXT_BUILD_CPUS}" in
+    ''|*[!0-9]*)
+      echo "DEEPTUTOR_NEXT_BUILD_CPUS must be a positive integer" >&2
+      exit 2
+      ;;
+    *)
+      if [ "${DEEPTUTOR_NEXT_BUILD_CPUS}" -lt 1 ]; then
+        echo "DEEPTUTOR_NEXT_BUILD_CPUS must be >= 1" >&2
+        exit 2
+      fi
+      # Next derives its default worker count from CIRCLE_NODE_TOTAL - 1.
+      # Exporting this keeps CI builds from fanning out to every host CPU in a
+      # memory-limited Woodpecker container.
+      export CIRCLE_NODE_TOTAL="$((DEEPTUTOR_NEXT_BUILD_CPUS + 1))"
+      ;;
+  esac
+fi
 npm config set registry "${npm_registry}"
 npm config set fetch-timeout 600000
 npm config set fetch-retries 5

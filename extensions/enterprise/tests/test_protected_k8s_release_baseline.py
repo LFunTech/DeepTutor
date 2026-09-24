@@ -783,6 +783,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert '--build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim"' in pipeline
     assert "--context=dir:///woodpecker/src" in pipeline
     assert "--dockerfile=Dockerfile.protected-runtime" in pipeline
+    assert "NODE_OPTIONS: --max-old-space-size=2048" in pipeline
+    assert 'DEEPTUTOR_NEXT_BUILD_CPUS: "1"' in pipeline
     assert '--build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian"' in pipeline
     assert '--build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security"' in pipeline
     assert "DEEPTUTOR_NPM_REGISTRY: https://mirror.f123.pub/repository/npm/" in pipeline
@@ -978,6 +980,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     frontend_artifact_script = frontend_artifact_script_path.read_text(encoding="utf8")
     assert "DEEPTUTOR_NPM_REGISTRY" in frontend_artifact_script
     assert "DEEPTUTOR_NEXT_DIST_DIR" in frontend_artifact_script
+    assert "DEEPTUTOR_NEXT_BUILD_CPUS" in frontend_artifact_script
+    assert "CIRCLE_NODE_TOTAL" in frontend_artifact_script
     assert "npm ci --legacy-peer-deps --no-audit --no-fund" in frontend_artifact_script
     assert "Waiting for Next standalone output" in frontend_artifact_script
     assert "web/.next/standalone web/.next-deeptutor/standalone" in frontend_artifact_script

@@ -1267,3 +1267,25 @@ Next standalone output not found; searched .next, .next and .next-deeptutor
 - 找不到 artifact 时输出 `.next*` 候选目录，便于下一轮区分“构建未完成”“输出目录不同”或“standalone 未生成”。
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.22` tag。
+
+### 2026-09-24 test-cn pipeline #33 前端构建 worker/内存限制修正
+
+`deploy/test-cn/v1.4.0-rc.23` 触发 Woodpecker pipeline `#33` 后，并行 compile DAG 再次生效。`compile-python-deps-test-cn` 已继续通过 apt mirror 下载/安装阶段，旧 apt proxy 问题未复现。
+
+前端 step 在增加 bounded wait 后仍未生成 standalone；诊断输出显示 `web/.next` 存在，但未出现 `standalone` 目录：
+
+```text
+Waiting for Next standalone output (170s elapsed)...
+Next standalone output not found; searched .next, .next and .next-deeptutor
+web/.next
+```
+
+流水线日志仍停在 webpack production build 初始阶段，未进入本地可见的 `Compiled successfully`、TypeScript、page data 或 trace collection 阶段。根因判断为前端编译在 Woodpecker Node 容器中按宿主 CPU 数默认扇出过多 worker（Next 16 默认约 `cpus - 1`，当前日志/本地表现为 17 workers），叠加 `NODE_OPTIONS=--max-old-space-size=4096` 对内存受限容器不友好，导致 build 子进程未产出 standalone。
+
+修复：
+
+- 前端 compile step 的 `NODE_OPTIONS` 从 4096MiB 下调到 2048MiB，参考 Study Mate 的 Node build 配置，避免单进程声明过大 heap。
+- 新增 `DEEPTUTOR_NEXT_BUILD_CPUS=1`，artifact 脚本据此导出 `CIRCLE_NODE_TOTAL=2`，利用 Next 默认 `CIRCLE_NODE_TOTAL - 1` 逻辑将生产构建 worker 数限制为 1，避免在 Woodpecker 容器内按宿主核心数过度并发。
+- 保留 bounded wait 与目录诊断，下一轮可验证 standalone 是否产生；过期 #33 已停止以释放 runner 资源。
+
+下一次触发使用新 commit 和新 tag；不移动已失败/已停止的 `rc.23` tag。

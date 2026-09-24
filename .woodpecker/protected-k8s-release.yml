@@ -85,7 +85,8 @@ steps:
       - event: tag
         ref: refs/tags/deploy/test-cn/**
     environment:
-      NODE_OPTIONS: --max-old-space-size=4096
+      NODE_OPTIONS: --max-old-space-size=2048
+      DEEPTUTOR_NEXT_BUILD_CPUS: "1"
       DEEPTUTOR_NPM_REGISTRY: https://mirror.f123.pub/repository/npm/
     commands:
       - . ./.deeptutor-release.env
@@ -245,7 +246,8 @@ steps:
       - event: tag
         ref: refs/tags/deploy/pre-cn/**
     environment:
-      NODE_OPTIONS: --max-old-space-size=4096
+      NODE_OPTIONS: --max-old-space-size=2048
+      DEEPTUTOR_NEXT_BUILD_CPUS: "1"
       DEEPTUTOR_NPM_REGISTRY: https://mirror.f123.pub/repository/npm/
     commands:
       - . ./.deeptutor-release.env
@@ -405,7 +407,8 @@ steps:
       - event: tag
         ref: refs/tags/deploy/prod-cn-east/**
     environment:
-      NODE_OPTIONS: --max-old-space-size=4096
+      NODE_OPTIONS: --max-old-space-size=2048
+      DEEPTUTOR_NEXT_BUILD_CPUS: "1"
       DEEPTUTOR_NPM_REGISTRY: https://mirror.f123.pub/repository/npm/
     commands:
       - . ./.deeptutor-release.env
@@ -565,7 +568,8 @@ steps:
       - event: tag
         ref: refs/tags/deploy/prod-overseas-a/**
     environment:
-      NODE_OPTIONS: --max-old-space-size=4096
+      NODE_OPTIONS: --max-old-space-size=2048
+      DEEPTUTOR_NEXT_BUILD_CPUS: "1"
       DEEPTUTOR_NPM_REGISTRY: https://mirror.f123.pub/repository/npm/
     commands:
       - . ./.deeptutor-release.env
