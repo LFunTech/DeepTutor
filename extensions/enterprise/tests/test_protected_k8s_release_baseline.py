@@ -977,11 +977,15 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
 
     frontend_artifact_script = frontend_artifact_script_path.read_text(encoding="utf8")
     assert "DEEPTUTOR_NPM_REGISTRY" in frontend_artifact_script
+    assert "DEEPTUTOR_NEXT_DIST_DIR" in frontend_artifact_script
     assert "npm ci --legacy-peer-deps --no-audit --no-fund" in frontend_artifact_script
-    assert "web/.next/standalone" in frontend_artifact_script
+    assert "web/.next/standalone web/.next-deeptutor/standalone" in frontend_artifact_script
     assert ".deeptutor-build/frontend" in frontend_artifact_script
 
     python_artifact_script = python_artifact_script_path.read_text(encoding="utf8")
+    assert "unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY" in python_artifact_script
+    assert 'Acquire::http::Proxy "false"' in python_artifact_script
+    assert "APT::Update::Error-Mode=any" in python_artifact_script
     assert "DEEPTUTOR_PIP_INDEX_URL" in python_artifact_script
     assert "https://pypi.org/simple" in python_artifact_script
     assert 'python -m pip install --index-url "${pip_index_url}" --prefix "${artifact_dir}"' in python_artifact_script

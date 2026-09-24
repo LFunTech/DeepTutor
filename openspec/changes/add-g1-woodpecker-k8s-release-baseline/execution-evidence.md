@@ -1216,3 +1216,31 @@ ERROR: No matching distribution found for PyYAML>=6.0
 - 更新测试契约，覆盖并行步骤、runtime assembler Dockerfile、镜像源、artifact 目录和 Kaniko 仅装配路径。
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.20` tag。
+
+### 2026-09-24 test-cn pipeline #30 并行步骤首跑结果与第十五次修复
+
+`deploy/test-cn/v1.4.0-rc.21` 触发 Woodpecker pipeline `#30` 后，release gate、metadata、secret preflight 通过；`compile-frontend-test-cn` 与 `compile-python-deps-test-cn` 在同一时间启动，确认拆分后的 Woodpecker DAG 可以并行执行。
+
+并行首跑暴露两个步骤内问题：
+
+1. 前端 step 完成 `npm ci` 后运行 Next build，但 artifact 脚本只查找 `web/.next/standalone`。当前仓库存在可由 `DEEPTUTOR_NEXT_DIST_DIR` 或历史 launcher 路径产生的 `.next-deeptutor` 输出模式，脚本缺少对实际 dist dir 的兜底，失败于：
+
+   ```text
+   cp: cannot stat 'web/.next/standalone': No such file or directory
+   ```
+
+2. Python deps step 独立运行在 Python 容器内，没有继承 Kaniko build step 里的 proxy 清理。apt 访问 Tsinghua mirror 时走到了不可用代理/端口，`apt-get update` 只给 warning 并继续，随后 install 阶段找不到包：
+
+   ```text
+   Err:1 http://mirrors.tuna.tsinghua.edu.cn/debian bookworm InRelease
+     Connection failed
+   E: Unable to locate package curl
+   ```
+
+修复：
+
+- 前端 artifact 脚本按 `DEEPTUTOR_NEXT_DIST_DIR` 定位 standalone/static，并兜底检查 `.next` 与 `.next-deeptutor`，找不到时输出候选目录用于下一轮诊断。
+- Python artifact 脚本在 apt 前清理 `SOCKS_PROXY`/`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`，并写入 apt no-proxy 配置。
+- `apt-get update` 改为 `APT::Update::Error-Mode=any`，mirror 失败时直接在 update 阶段 fail closed，避免继续到误导性的 “Unable to locate package”。
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.21` tag。

@@ -14,6 +14,8 @@ cd "${repo_root}"
 rm -rf "${artifact_dir}"
 mkdir -p "${artifact_dir}"
 
+unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+
 if [ -f /etc/apt/sources.list.d/debian.sources ]; then
   sed -i \
     -e "s|http://security.debian.org/debian-security|${apt_security_mirror}|g" \
@@ -35,9 +37,10 @@ if [ -f /etc/apt/sources.list ]; then
     /etc/apt/sources.list
 fi
 printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-ci-retries
+printf 'Acquire::http::Proxy "false";\nAcquire::https::Proxy "false";\n' > /etc/apt/apt.conf.d/81-ci-no-proxy
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
+apt-get update -o APT::Update::Error-Mode=any
 apt-get install -y --no-install-recommends \
   curl \
   git \

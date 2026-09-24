@@ -11,6 +11,7 @@ mkdir -p "${artifact_dir}"
 
 cd "${repo_root}/web"
 export NEXT_TELEMETRY_DISABLED="${NEXT_TELEMETRY_DISABLED:-1}"
+next_dist_dir="${DEEPTUTOR_NEXT_DIST_DIR:-.next}"
 npm config set registry "${npm_registry}"
 npm config set fetch-timeout 600000
 npm config set fetch-retries 5
@@ -21,8 +22,24 @@ printf 'NEXT_PUBLIC_APP_VERSION=\n' > .env.local
 npm run build
 
 cd "${repo_root}"
-cp -a web/.next/standalone "${artifact_dir}/standalone"
-cp -a web/.next/static "${artifact_dir}/static"
+standalone_source="web/${next_dist_dir}/standalone"
+static_source="web/${next_dist_dir}/static"
+if [ ! -d "${standalone_source}" ]; then
+  for candidate in web/.next/standalone web/.next-deeptutor/standalone; do
+    if [ -d "${candidate}" ]; then
+      standalone_source="${candidate}"
+      static_source="$(dirname "${candidate}")/static"
+      break
+    fi
+  done
+fi
+if [ ! -d "${standalone_source}" ]; then
+  echo "Next standalone output not found; searched ${next_dist_dir}, .next and .next-deeptutor" >&2
+  find web -maxdepth 3 -type d -name standalone -print >&2 || true
+  exit 2
+fi
+cp -a "${standalone_source}" "${artifact_dir}/standalone"
+cp -a "${static_source}" "${artifact_dir}/static"
 if [ -d web/public ]; then
   cp -a web/public "${artifact_dir}/public"
 else
