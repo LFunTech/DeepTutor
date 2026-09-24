@@ -1344,3 +1344,29 @@ web/.next
 - 过期 #35 已停止以释放 runner 资源。
 
 下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.26` tag。
+
+### 2026-09-25 test-cn pipeline #36 workspace artifact 前端构建失败与 artifact-image 架构修正
+
+`deploy/test-cn/v1.4.0-rc.27` 触发 Woodpecker pipeline `#36` 后，release gate、metadata、secret preflight 均通过；`compile-frontend-test-cn` 与 `compile-python-deps-test-cn` 在同一时间启动，继续证明拆分后的 DAG 可以并行执行。
+
+已验证：`compile-python-deps-test-cn` 完整成功。日志确认 apt 使用 Tsinghua Debian mirror，pip 使用内网 PEP 503 simple endpoint `https://mirror.f123.pub/repository/pypi/simple/`，Rustup 使用 Tsinghua mirror，Cargo 使用内网 `sparse+https://mirror.f123.pub/repository/rust/`。该结果证明 Python dependency 编译侧的 mirror/secrets/proxy 修复有效。
+
+前端 step 仍未产出 standalone：`npm ci` 成功，直接 Next build 输出停留在 webpack production build 初始阶段后返回，bounded wait 仅看到 `web/.next`，没有 `web/.next/standalone`：
+
+```text
+Creating an optimized production build ...
+Waiting for Next standalone output (170s elapsed)...
+Next standalone output not found; searched .next, .next and .next-deeptutor
+web/.next
+```
+
+经过 #31、#33、#34、#35、#36 多轮修复后，继续在 Woodpecker command container 中把 Next standalone 写入 workspace artifact 已经表现出架构性不稳定：问题不在 mirror，也不在 Python side，而在前端构建产物从 Node command step 到 Kaniko runtime context 的路径。为避免继续叠加脚本级 workaround，本次改为 artifact-image 架构：
+
+- `compile-frontend-<env>` 改用 Kaniko 构建 `Dockerfile --target=frontend-builder`，通过内部 npm mirror 产出并推送 `$DEEPTUTOR_REGISTRY_REPOSITORY/frontend-build:$DEEPTUTOR_IMAGE_TAG`。
+- `compile-python-deps-<env>` 改用 Kaniko 构建 `Dockerfile --target=python-base --skip-unused-stages`，通过 Tsinghua apt、内网 PyPI simple、Tsinghua Rustup 和内网 Cargo mirror 产出并推送 `$DEEPTUTOR_REGISTRY_REPOSITORY/python-deps:$DEEPTUTOR_IMAGE_TAG`。
+- `build-runtime-image-<env>` 保持依赖两个 compile steps，但不再读取 `.deeptutor-build/**` workspace artifact；它通过 `FRONTEND_ARTIFACT_IMAGE` 和 `PYTHON_DEPS_IMAGE` build args 引用两个中间镜像。
+- `Dockerfile.protected-runtime` 新增外部 artifact stages，只从 `frontend-artifact` 复制 `.next/standalone`、`.next/static`、`public`，从 `python-deps` 复制 `/usr/local/lib/python3.11/site-packages` 与 `/usr/local/bin`；最终 runtime stage 仍不包含 frontend-builder/python-base 编译逻辑，也不执行 npm/pip/Rust 编译。
+- 删除不再使用的 workspace artifact scripts，并将 `.deeptutor-build/` 明确加入 `.dockerignore`（同时撤销 re-include），避免本地残留 artifact 被错误带入 Kaniko context。
+- 更新测试契约，覆盖 `--target=frontend-builder`、`--target=python-base --skip-unused-stages`、`frontend-build`/`python-deps` artifact images、runtime external stages 以及镜像源 build args。
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.27` tag。

@@ -2,17 +2,24 @@
 # DeepTutor protected release runtime assembler
 # ============================================
 # This Dockerfile is used by Woodpecker protected K8s releases after the
-# frontend bundle and Python dependency prefix have already been compiled in
-# parallel workspace steps. Keeping npm/pip/rust compilation outside Kaniko
-# avoids large builder-layer snapshots while preserving the same production
-# runtime layout as Dockerfile.
+# frontend bundle and Python dependency tree have already been compiled in
+# parallel artifact-image steps. It only assembles the final runtime image,
+# preserving the same production runtime layout as Dockerfile without running
+# npm, pip, rustup, or cargo in this final stage.
 # ============================================
 
 ARG NODE_IMAGE=node:22-slim
 ARG PYTHON_IMAGE=python:3.11-slim
+ARG FRONTEND_ARTIFACT_IMAGE
+ARG PYTHON_DEPS_IMAGE
 ARG APT_DEBIAN_MIRROR=http://deb.debian.org/debian
 ARG APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
 ARG PIP_INDEX_URL=https://pypi.org/simple
+
+# The two external stages are immutable images pushed by the parallel compile
+# steps in the same release pipeline.
+FROM ${FRONTEND_ARTIFACT_IMAGE} AS frontend-artifact
+FROM ${PYTHON_DEPS_IMAGE} AS python-deps
 
 # Provides the platform-matched node binary and npm/npx wrappers for runtime.
 FROM ${NODE_IMAGE} AS node-runtime
@@ -95,17 +102,16 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && node --version && npm --version
 
-# Copy Python packages produced by the parallel compile-python-deps step.
-# The artifact is installed with `pip --prefix .deeptutor-build/python-prefix`,
-# so copying the prefix root into /usr/local preserves bin/ and lib/.
-COPY .deeptutor-build/python-prefix/ /usr/local/
+# Copy Python packages produced by the parallel compile-python-deps image.
+COPY --from=python-deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=python-deps /usr/local/bin /usr/local/bin
 
-# Copy frontend artifacts produced by the parallel compile-frontend step.
+# Copy frontend artifacts produced by the parallel compile-frontend image.
 # The standalone output contains a self-contained server.js + minimal node_modules;
 # static assets and public/ must be copied alongside standalone manually.
-COPY .deeptutor-build/frontend/standalone/ ./web/
-COPY .deeptutor-build/frontend/static/ ./web/.next/static/
-COPY .deeptutor-build/frontend/public/ ./web/public/
+COPY --from=frontend-artifact /app/web/.next/standalone/ ./web/
+COPY --from=frontend-artifact /app/web/.next/static/ ./web/.next/static/
+COPY --from=frontend-artifact /app/web/public/ ./web/public/
 
 # Copy application source code
 COPY deeptutor/ ./deeptutor/

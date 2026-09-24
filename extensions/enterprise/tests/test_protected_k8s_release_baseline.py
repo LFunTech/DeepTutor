@@ -743,12 +743,6 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     dockerignore_path = root / ".dockerignore"
     dockerfile_path = root / "Dockerfile"
     protected_runtime_dockerfile_path = root / "Dockerfile.protected-runtime"
-    frontend_artifact_script_path = (
-        root / "scripts/protected-k8s-release/build-frontend-artifact.sh"
-    )
-    python_artifact_script_path = (
-        root / "scripts/protected-k8s-release/build-python-prefix-artifact.sh"
-    )
 
     registry_text = registry_path.read_text(encoding="utf8")
     assert "registry.example" not in registry_text
@@ -769,8 +763,6 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "docker-hub.f123.pub/woodpeckerci/plugin-git:2.8.1" in pipeline
     assert "docker-hub.f123.pub/devops/kaniko:v1.14.0-debug" in pipeline
     assert "docker-hub.f123.pub/base/ci-tools:alpine-3.22.4" in pipeline
-    assert "docker-hub.f123.pub/base/node:22-bookworm" in pipeline
-    assert "docker-hub.f123.pub/base/python:3.11-slim" in pipeline
     assert "pydantic>=2,<3" not in pipeline
     assert "pip install" not in pipeline
     assert "variables:" not in pipeline
@@ -782,37 +774,39 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert '--build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm"' in pipeline
     assert '--build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim"' in pipeline
     assert "--context=dir:///woodpecker/src" in pipeline
+    assert "--dockerfile=Dockerfile --target=frontend-builder" in pipeline
+    assert "--dockerfile=Dockerfile --target=python-base --skip-unused-stages" in pipeline
     assert "--dockerfile=Dockerfile.protected-runtime" in pipeline
-    assert "NODE_OPTIONS: --max-old-space-size=2048" in pipeline
-    assert 'DEEPTUTOR_NEXT_BUILD_CPUS: "1"' in pipeline
-    assert '--build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian"' in pipeline
-    assert '--build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security"' in pipeline
-    assert "DEEPTUTOR_NPM_REGISTRY: https://mirror.f123.pub/repository/npm/" in pipeline
+    assert "/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
+    assert "/python-deps:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
     assert (
-        "DEEPTUTOR_PIP_INDEX_URL: https://mirror.f123.pub/repository/pypi/simple/"
+        '--build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}"'
         in pipeline
     )
+    assert (
+        '--build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}"'
+        in pipeline
+    )
+    assert '--build-arg APT_DEBIAN_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian"' in pipeline
+    assert '--build-arg APT_SECURITY_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/debian-security"' in pipeline
+    assert '--build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/"' in pipeline
     assert (
         '--build-arg PIP_INDEX_URL="https://mirror.f123.pub/repository/pypi/simple/"'
         in pipeline
     )
-    assert "--build-arg NPM_REGISTRY" not in pipeline
     assert "--build-arg PIP_TRUSTED_HOST" not in pipeline
     assert (
-        "DEEPTUTOR_RUSTUP_DIST_SERVER: https://mirrors.tuna.tsinghua.edu.cn/rustup"
+        '--build-arg RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"'
         in pipeline
     )
     assert (
-        "DEEPTUTOR_RUSTUP_UPDATE_ROOT: https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
+        '--build-arg RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"'
         in pipeline
     )
     assert (
-        "DEEPTUTOR_CARGO_REGISTRY_MIRROR: sparse+https://mirror.f123.pub/repository/rust/"
+        '--build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirror.f123.pub/repository/rust/"'
         in pipeline
     )
-    assert "--build-arg RUSTUP_DIST_SERVER" not in pipeline
-    assert "--build-arg RUSTUP_UPDATE_ROOT" not in pipeline
-    assert "--build-arg CARGO_REGISTRY_MIRROR" not in pipeline
     assert "--cache-copy-layers" in pipeline
     assert "--single-snapshot" not in pipeline
     assert "--snapshot-mode=redo" not in pipeline
@@ -889,8 +883,6 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
         "k8s_dir": k8s_dir,
         "evidence_template": evidence_template,
         "protected_runtime_dockerfile": protected_runtime_dockerfile_path,
-        "frontend_artifact_script": frontend_artifact_script_path,
-        "python_artifact_script": python_artifact_script_path,
     }
     for label, artifact_path in active_artifacts.items():
         assert "g1" not in str(artifact_path).lower(), label
@@ -907,8 +899,6 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
         "protected_runtime_dockerfile": protected_runtime_dockerfile_path.read_text(
             encoding="utf8"
         ),
-        "frontend_artifact_script": frontend_artifact_script_path.read_text(encoding="utf8"),
-        "python_artifact_script": python_artifact_script_path.read_text(encoding="utf8"),
     }.items():
         lowered = artifact_text.lower()
         assert "g1" not in lowered, label
@@ -959,46 +949,49 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     ) < python_build_run.find("apt-get purge -y --auto-remove")
 
     dockerignore = dockerignore_path.read_text(encoding="utf8")
-    for required in (".secrets/", ".codegraph/", ".superpowers/", ".worktrees/", "**/.env", "**/.env.*"):
+    for required in (
+        ".secrets/",
+        ".codegraph/",
+        ".superpowers/",
+        ".worktrees/",
+        ".deeptutor-build/",
+        "**/.env",
+        "**/.env.*",
+    ):
         assert required in dockerignore
-    assert "!.deeptutor-build/" in dockerignore
-    assert "!.deeptutor-build/**" in dockerignore
+    assert "!.deeptutor-build/" not in dockerignore
+    assert "!.deeptutor-build/**" not in dockerignore
 
     protected_runtime_dockerfile = protected_runtime_dockerfile_path.read_text(encoding="utf8")
+    assert "ARG FRONTEND_ARTIFACT_IMAGE" in protected_runtime_dockerfile
+    assert "ARG PYTHON_DEPS_IMAGE" in protected_runtime_dockerfile
+    assert "FROM ${FRONTEND_ARTIFACT_IMAGE} AS frontend-artifact" in protected_runtime_dockerfile
+    assert "FROM ${PYTHON_DEPS_IMAGE} AS python-deps" in protected_runtime_dockerfile
     assert "FROM ${NODE_IMAGE} AS node-runtime" in protected_runtime_dockerfile
     assert "FROM ${PYTHON_IMAGE} AS production" in protected_runtime_dockerfile
-    assert "COPY .deeptutor-build/python-prefix/ /usr/local/" in protected_runtime_dockerfile
-    assert "COPY .deeptutor-build/frontend/standalone/ ./web/" in protected_runtime_dockerfile
-    assert "COPY .deeptutor-build/frontend/static/ ./web/.next/static/" in protected_runtime_dockerfile
-    assert "COPY .deeptutor-build/frontend/public/ ./web/public/" in protected_runtime_dockerfile
+    assert (
+        "COPY --from=python-deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages"
+        in protected_runtime_dockerfile
+    )
+    assert "COPY --from=python-deps /usr/local/bin /usr/local/bin" in protected_runtime_dockerfile
+    assert (
+        "COPY --from=frontend-artifact /app/web/.next/standalone/ ./web/"
+        in protected_runtime_dockerfile
+    )
+    assert (
+        "COPY --from=frontend-artifact /app/web/.next/static/ ./web/.next/static/"
+        in protected_runtime_dockerfile
+    )
+    assert (
+        "COPY --from=frontend-artifact /app/web/public/ ./web/public/"
+        in protected_runtime_dockerfile
+    )
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" not in protected_runtime_dockerfile
     assert "python-base" not in protected_runtime_dockerfile
+    assert ".deeptutor-build" not in protected_runtime_dockerfile
     assert "npm ci --legacy-peer-deps" not in protected_runtime_dockerfile
     assert "RUN pip install" not in protected_runtime_dockerfile
     assert "rustup.rs" not in protected_runtime_dockerfile
-
-    frontend_artifact_script = frontend_artifact_script_path.read_text(encoding="utf8")
-    assert "DEEPTUTOR_NPM_REGISTRY" in frontend_artifact_script
-    assert "DEEPTUTOR_NEXT_DIST_DIR" in frontend_artifact_script
-    assert "DEEPTUTOR_NEXT_BUILD_CPUS" in frontend_artifact_script
-    assert "CIRCLE_NODE_TOTAL" in frontend_artifact_script
-    assert "npm ci --legacy-peer-deps --no-audit --no-fund" in frontend_artifact_script
-    assert "node ./scripts/copy-pdfjs-assets.mjs" in frontend_artifact_script
-    assert "node ./node_modules/next/dist/bin/next build --webpack" in frontend_artifact_script
-    assert "npm run build" not in frontend_artifact_script
-    assert "Waiting for Next standalone output" in frontend_artifact_script
-    assert "web/.next/standalone web/.next-deeptutor/standalone" in frontend_artifact_script
-    assert ".deeptutor-build/frontend" in frontend_artifact_script
-
-    python_artifact_script = python_artifact_script_path.read_text(encoding="utf8")
-    assert "unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY" in python_artifact_script
-    assert 'Acquire::http::Proxy "false"' in python_artifact_script
-    assert "APT::Update::Error-Mode=any" in python_artifact_script
-    assert "DEEPTUTOR_PIP_INDEX_URL" in python_artifact_script
-    assert "https://pypi.org/simple" in python_artifact_script
-    assert 'python -m pip install --index-url "${pip_index_url}" --prefix "${artifact_dir}"' in python_artifact_script
-    assert "DEEPTUTOR_CARGO_REGISTRY_MIRROR" in python_artifact_script
-    assert ".deeptutor-build/python-prefix" in python_artifact_script
 
 
 def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution():

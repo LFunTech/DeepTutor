@@ -145,6 +145,7 @@ logs/
 .cache/
 cache/
 **/cache/
+.deeptutor-build/
 tmp/
 temp/
 *.tmp
@@ -155,13 +156,3 @@ temp/
 # ============================================
 LICENSE
 Communication.md
-
-# ============================================
-# Protected release prebuilt artifacts
-# ============================================
-# These are produced by Woodpecker compile steps immediately before Kaniko
-# assembles Dockerfile.protected-runtime. They must be re-included after the
-# broad node_modules/.next ignore rules above because Next standalone carries a
-# minimal runtime node_modules tree.
-!.deeptutor-build/
-!.deeptutor-build/**
