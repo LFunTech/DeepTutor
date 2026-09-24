@@ -1180,3 +1180,39 @@ Fetched 9379 kB in 9min 29s
 - 更新测试，确保 `python-base` 只有一个 build RUN，且顺序为 apt/rust setup → pip install → purge/cleanup。
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.19` tag。
+
+### 2026-09-24 test-cn pipeline #29 PyPI simple endpoint 与并行编译拆分
+
+`deploy/test-cn/v1.4.0-rc.20` 触发 Woodpecker pipeline `#29` 后，release gate、metadata 和 secret preflight 均通过。build step 已确认：
+
+- Kaniko build args 使用 Tsinghua apt mirror；
+- PyPI 已切换到内网 `https://mirror.f123.pub/repository/pypi/`；
+- Cargo mirror 已切换到内网 `sparse+https://mirror.f123.pub/repository/rust/`；
+- `python-base` 大层清理逻辑生效，apt 与 Rustup 均已完成。
+
+新的失败点发生在 pip 解析 PyPI index：
+
+```text
+Looking in indexes: https://mirror.f123.pub/repository/pypi/
+ERROR: Could not find a version that satisfies the requirement PyYAML>=6.0 (from versions: none)
+ERROR: No matching distribution found for PyYAML>=6.0
+```
+
+根因：内部 Nexus PyPI repository 的根路径返回仓库 HTML 页面，pip 需要使用 PEP 503 simple API endpoint；实测 `https://mirror.f123.pub/repository/pypi/simple/pyyaml/` 返回 package link 列表，而 `/repository/pypi/PyYAML/` 不是 pip index。
+
+同时，Kaniko 仍承担 npm build 与 pip/Rust dependency build；这些步骤即使通过镜像源优化，也会让最终 build step 串行等待并继续承担大文件系统 snapshot 风险。按照 Study Mate 流水线模式和当前发布需求，本次将构建拆成可并行步骤：
+
+- `compile-frontend-<env>`：使用 `docker-hub.f123.pub/base/node:22-bookworm`，通过内部 npm mirror 构建 Next standalone/static/public artifacts 到 `.deeptutor-build/frontend/`。
+- `compile-python-deps-<env>`：使用 `docker-hub.f123.pub/base/python:3.11-slim`，通过 Tsinghua apt、内网 PyPI simple endpoint、Tsinghua rustup 和内网 Cargo mirror 构建 Python prefix 到 `.deeptutor-build/python-prefix/`。
+- `build-runtime-image-<env>`：依赖两个 compile steps，只用 `Dockerfile.protected-runtime` 将 artifacts、runtime apt deps、Node runtime 与应用源码装配为最终镜像并推送 digest；不再在 Kaniko 内执行 npm/pip/Rust 编译。
+
+修复：
+
+- 新增 `scripts/protected-k8s-release/build-frontend-artifact.sh` 与 `build-python-prefix-artifact.sh`，分别产出前端和 Python dependency artifacts。
+- 新增 `Dockerfile.protected-runtime`，只做 runtime image 装配，不含 frontend-builder/python-base 编译阶段。
+- Woodpecker 每个环境新增 `compile-frontend-*` 与 `compile-python-deps-*` 两个并行步骤，`build-runtime-image-*` 改为依赖这两个步骤。
+- `.dockerignore` 对 `.deeptutor-build/**` 增加显式 re-include，确保 Next standalone 中的最小 `node_modules` 不会被全局 ignore 规则排除。
+- PyPI index 统一改为 `https://mirror.f123.pub/repository/pypi/simple/`，避免 pip 读取仓库根页面导致 package 为空。
+- 更新测试契约，覆盖并行步骤、runtime assembler Dockerfile、镜像源、artifact 目录和 Kaniko 仅装配路径。
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.20` tag。

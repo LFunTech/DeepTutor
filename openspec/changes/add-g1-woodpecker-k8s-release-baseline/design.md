@@ -162,6 +162,8 @@ Pipeline MUST 从受信提交构建一次，并将 frontend/backend 镜像推送
 
 旧构建覆盖、新 tag 指向旧 digest、tag 格式错误、tag 未保护/未授权、tag moved/reused、缺失/歧义 `target_env_id`、环境不匹配、缺失必需 secret、权限过大 secret、跨环境 Secret ref、未批准 ref 或过期批准都必须拒绝。
 
+Woodpecker 构建可以把前端 bundle 与 Python dependency prefix 拆成同一 tag run 内的并行 compile steps，再由 Kaniko 只装配最终 runtime image、推送并解析 digest。这样仍满足“同一受信提交构建一次并部署 digest”的契约，同时避免 Kaniko 在 npm、pip/Rust 编译阶段对大 builder layer 做 snapshot。CI 中 apt 使用 Tsinghua Debian mirror，npm/PyPI/Cargo 使用目标网络可达的内部 mirror；PyPI 必须指向 PEP 503 simple endpoint（例如 `.../pypi/simple/`）。
+
 ## 决策 3：迁移和 rollout 由发布步骤编排
 
 应用 PG migration、固定租户 bootstrap、默认 policy/profile 初始化由独立 Job 或等价发布步骤执行：
