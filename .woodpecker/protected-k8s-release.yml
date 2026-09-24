@@ -1,0 +1,572 @@
+# Protected K8s release pipeline for semantic deployment tags.
+# The release trigger must be backed by trusted metadata from the protected-tag / approval verifier.
+
+labels:
+  platform: linux/amd64
+
+workspace:
+  base: /woodpecker
+  path: src
+
+clone:
+  - name: git
+    image: docker-hub.f123.pub/woodpeckerci/plugin-git:2.8.1
+    settings:
+      partial: false
+      depth: 1
+      tags: false
+      lfs: false
+      recursive: false
+      ref: ${CI_COMMIT_REF}
+
+when:
+  - event: tag
+    ref:
+      include:
+        - refs/tags/deploy/test-cn/**
+        - refs/tags/deploy/pre-cn/**
+        - refs/tags/deploy/prod-cn-east/**
+        - refs/tags/deploy/prod-overseas-a/**
+
+variables:
+  REGISTRY_FILE: extensions/enterprise/protected-k8s-release-environments.example.json
+  RELEASE_ENV_FILE: .deeptutor-release.env
+  IMAGE_ENV_FILE: .deeptutor-image.env
+  EVIDENCE_DIR: release-evidence
+  CI_TOOLS_IMAGE: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+
+steps:
+  - name: validate-release-trigger
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    environment:
+      TRUSTED_TRIGGER_METADATA_JSON:
+        from_secret: DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON
+    commands:
+      - mkdir -p "$EVIDENCE_DIR/gate"
+      - |
+        test -n "${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
+          test -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
+            echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
+            exit 2
+          }
+        }
+        if [ -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
+          trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
+        else
+          trusted_metadata_file="$EVIDENCE_DIR/gate/trusted-trigger-metadata.json"
+          printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
+        fi
+        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli trigger --registry "$REGISTRY_FILE" --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output "$EVIDENCE_DIR/gate"
+      - test "$(python -c 'import json; print(json.load(open("release-evidence/gate/trigger-gate.json"))["ready"])')" = "True"
+
+  - name: prepare-release-metadata
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [validate-release-trigger]
+    environment:
+      TRUSTED_TRIGGER_METADATA_JSON:
+        from_secret: DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON
+    commands:
+      - mkdir -p "$EVIDENCE_DIR/metadata"
+      - |
+        test -n "${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
+          test -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
+            echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
+            exit 2
+          }
+        }
+        if [ -n "${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
+          trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
+        else
+          trusted_metadata_file="$EVIDENCE_DIR/metadata/trusted-trigger-metadata.json"
+          printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
+        fi
+        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli prepare-metadata --registry "$REGISTRY_FILE" --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output-env-file "$RELEASE_ENV_FILE" --output "$EVIDENCE_DIR/metadata"
+      - test -s "$RELEASE_ENV_FILE"
+
+
+  - name: build-runtime-image-test-cn
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/test-cn/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DOCKER_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DOCKER_PASSWORD
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
+      - |
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        auth="$$(python -c 'import base64, os; print(base64.b64encode((os.environ["REGISTRY_PUSH_USERNAME"] + ":" + os.environ["REGISTRY_PUSH_TOKEN"]).encode()).decode())')"
+        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$${registry_host}" "$${auth}" > /kaniko/.docker/config.json
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+
+
+  - name: pre-deploy-check-test-cn
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [build-runtime-image-test-cn]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/test-cn/**
+    environment:
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DOCKER_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DOCKER_PASSWORD
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
+        manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"
+        headers="$$(mktemp)"
+        curl --fail --silent --show-error --head --user "$${REGISTRY_PUSH_USERNAME}:$${REGISTRY_PUSH_TOKEN}" -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' "$${manifest_url}" > "$${headers}"
+        digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
+        test -n "$${digest}"
+        case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
+        test -s "$IMAGE_ENV_FILE"
+
+
+  - name: secret-preflight-test-cn
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/test-cn/**
+    environment:
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DOCKER_PASSWORD
+      KUBE_DEPLOY_TOKEN:
+        from_secret: kubeconfig_test
+      SECRETSTORE_ROLE:
+        from_secret: DT_TEST_CN_SECRETSTORE_ROLE
+      PG_MIGRATOR_DSN:
+        from_secret: DT_TEST_CN_PG_MIGRATOR_DSN
+      APP_DB_SECRET_REF:
+        from_secret: DT_TEST_CN_APP_DB_SECRET_REF
+      OBJECTSTORE_SECRET_REF:
+        from_secret: DT_TEST_CN_OBJECTSTORE_SECRET_REF
+      LIGHTRAG_API_SECRET_REF:
+        from_secret: DT_TEST_CN_LIGHTRAG_API_SECRET_REF
+      EDUPLUS2_CLIENT_SECRET_REF:
+        from_secret: DT_TEST_CN_EDUPLUS2_CLIENT_SECRET_REF
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_TEST_CN_EVIDENCE_STORE_WRITE_TOKEN
+      VCS_TAG_VERIFY_TOKEN:
+        from_secret: DT_TEST_CN_VCS_TAG_VERIFY_TOKEN
+      SECRET_PREFLIGHT_METADATA_JSON:
+        from_secret: DT_TEST_CN_SECRET_PREFLIGHT_METADATA_JSON
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
+      - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
+
+
+  - name: deploy-test-cn
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [pre-deploy-check-test-cn, secret-preflight-test-cn]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/test-cn/**
+    environment:
+      DEEPTUTOR_DEPLOY_APPROVED: "yes"
+      KUBECONFIG:
+        from_secret: kubeconfig_test
+      KUBE_DEPLOY_TOKEN:
+        from_secret: kubeconfig_test
+      PG_MIGRATOR_DSN:
+        from_secret: DT_TEST_CN_PG_MIGRATOR_DSN
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_TEST_CN_EVIDENCE_STORE_WRITE_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - . ./.deeptutor-image.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
+      - export KUBECONFIG_DATA="$${KUBECONFIG}"
+      - deploy/kubernetes/protected-k8s-release/deploy.sh
+      - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"
+
+
+  - name: build-runtime-image-pre-cn
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/pre-cn/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DT_PRE_CN_REGISTRY_PUSH_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PRE_CN_REGISTRY_PUSH_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
+      - |
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        auth="$$(python -c 'import base64, os; print(base64.b64encode((os.environ["REGISTRY_PUSH_USERNAME"] + ":" + os.environ["REGISTRY_PUSH_TOKEN"]).encode()).decode())')"
+        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$${registry_host}" "$${auth}" > /kaniko/.docker/config.json
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+
+
+  - name: pre-deploy-check-pre-cn
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [build-runtime-image-pre-cn]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/pre-cn/**
+    environment:
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DT_PRE_CN_REGISTRY_PUSH_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PRE_CN_REGISTRY_PUSH_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
+        manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"
+        headers="$$(mktemp)"
+        curl --fail --silent --show-error --head --user "$${REGISTRY_PUSH_USERNAME}:$${REGISTRY_PUSH_TOKEN}" -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' "$${manifest_url}" > "$${headers}"
+        digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
+        test -n "$${digest}"
+        case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
+        test -s "$IMAGE_ENV_FILE"
+
+
+  - name: secret-preflight-pre-cn
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/pre-cn/**
+    environment:
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PRE_CN_REGISTRY_PUSH_TOKEN
+      KUBE_DEPLOY_TOKEN:
+        from_secret: DT_PRE_CN_KUBE_DEPLOY_TOKEN
+      SECRETSTORE_ROLE:
+        from_secret: DT_PRE_CN_SECRETSTORE_ROLE
+      PG_MIGRATOR_DSN:
+        from_secret: DT_PRE_CN_PG_MIGRATOR_DSN
+      APP_DB_SECRET_REF:
+        from_secret: DT_PRE_CN_APP_DB_SECRET_REF
+      OBJECTSTORE_SECRET_REF:
+        from_secret: DT_PRE_CN_OBJECTSTORE_SECRET_REF
+      LIGHTRAG_API_SECRET_REF:
+        from_secret: DT_PRE_CN_LIGHTRAG_API_SECRET_REF
+      EDUPLUS2_CLIENT_SECRET_REF:
+        from_secret: DT_PRE_CN_EDUPLUS2_CLIENT_SECRET_REF
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_PRE_CN_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_PRE_CN_EVIDENCE_STORE_WRITE_TOKEN
+      VCS_TAG_VERIFY_TOKEN:
+        from_secret: DT_PRE_CN_VCS_TAG_VERIFY_TOKEN
+      SECRET_PREFLIGHT_METADATA_JSON:
+        from_secret: DT_PRE_CN_SECRET_PREFLIGHT_METADATA_JSON
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
+      - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
+
+
+  - name: deploy-pre-cn
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [pre-deploy-check-pre-cn, secret-preflight-pre-cn]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/pre-cn/**
+    environment:
+      DEEPTUTOR_DEPLOY_APPROVED: "yes"
+      KUBECONFIG:
+        from_secret: DT_PRE_CN_KUBECONFIG
+      KUBE_DEPLOY_TOKEN:
+        from_secret: DT_PRE_CN_KUBE_DEPLOY_TOKEN
+      PG_MIGRATOR_DSN:
+        from_secret: DT_PRE_CN_PG_MIGRATOR_DSN
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_PRE_CN_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_PRE_CN_EVIDENCE_STORE_WRITE_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - . ./.deeptutor-image.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
+      - export KUBECONFIG_DATA="$${KUBECONFIG}"
+      - deploy/kubernetes/protected-k8s-release/deploy.sh
+      - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"
+
+
+  - name: build-runtime-image-prod-cn-east
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-cn-east/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
+      - |
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        auth="$$(python -c 'import base64, os; print(base64.b64encode((os.environ["REGISTRY_PUSH_USERNAME"] + ":" + os.environ["REGISTRY_PUSH_TOKEN"]).encode()).decode())')"
+        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$${registry_host}" "$${auth}" > /kaniko/.docker/config.json
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+
+
+  - name: pre-deploy-check-prod-cn-east
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [build-runtime-image-prod-cn-east]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-cn-east/**
+    environment:
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
+        manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"
+        headers="$$(mktemp)"
+        curl --fail --silent --show-error --head --user "$${REGISTRY_PUSH_USERNAME}:$${REGISTRY_PUSH_TOKEN}" -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' "$${manifest_url}" > "$${headers}"
+        digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
+        test -n "$${digest}"
+        case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
+        test -s "$IMAGE_ENV_FILE"
+
+
+  - name: secret-preflight-prod-cn-east
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-cn-east/**
+    environment:
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN
+      KUBE_DEPLOY_TOKEN:
+        from_secret: DT_PROD_CN_EAST_KUBE_DEPLOY_TOKEN
+      SECRETSTORE_ROLE:
+        from_secret: DT_PROD_CN_EAST_SECRETSTORE_ROLE
+      PG_MIGRATOR_DSN:
+        from_secret: DT_PROD_CN_EAST_PG_MIGRATOR_DSN
+      APP_DB_SECRET_REF:
+        from_secret: DT_PROD_CN_EAST_APP_DB_SECRET_REF
+      OBJECTSTORE_SECRET_REF:
+        from_secret: DT_PROD_CN_EAST_OBJECTSTORE_SECRET_REF
+      LIGHTRAG_API_SECRET_REF:
+        from_secret: DT_PROD_CN_EAST_LIGHTRAG_API_SECRET_REF
+      EDUPLUS2_CLIENT_SECRET_REF:
+        from_secret: DT_PROD_CN_EAST_EDUPLUS2_CLIENT_SECRET_REF
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_PROD_CN_EAST_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_PROD_CN_EAST_EVIDENCE_STORE_WRITE_TOKEN
+      VCS_TAG_VERIFY_TOKEN:
+        from_secret: DT_PROD_CN_EAST_VCS_TAG_VERIFY_TOKEN
+      SECRET_PREFLIGHT_METADATA_JSON:
+        from_secret: DT_PROD_CN_EAST_SECRET_PREFLIGHT_METADATA_JSON
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
+      - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
+
+
+  - name: deploy-prod-cn-east
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [pre-deploy-check-prod-cn-east, secret-preflight-prod-cn-east]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-cn-east/**
+    environment:
+      DEEPTUTOR_DEPLOY_APPROVED: "yes"
+      KUBECONFIG:
+        from_secret: DT_PROD_CN_EAST_KUBECONFIG
+      KUBE_DEPLOY_TOKEN:
+        from_secret: DT_PROD_CN_EAST_KUBE_DEPLOY_TOKEN
+      PG_MIGRATOR_DSN:
+        from_secret: DT_PROD_CN_EAST_PG_MIGRATOR_DSN
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_PROD_CN_EAST_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_PROD_CN_EAST_EVIDENCE_STORE_WRITE_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - . ./.deeptutor-image.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
+      - export KUBECONFIG_DATA="$${KUBECONFIG}"
+      - deploy/kubernetes/protected-k8s-release/deploy.sh
+      - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"
+
+
+  - name: build-runtime-image-prod-overseas-a
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-overseas-a/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
+      - |
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        auth="$$(python -c 'import base64, os; print(base64.b64encode((os.environ["REGISTRY_PUSH_USERNAME"] + ":" + os.environ["REGISTRY_PUSH_TOKEN"]).encode()).decode())')"
+        printf '{"auths":{"%s":{"auth":"%s"}}}\n' "$${registry_host}" "$${auth}" > /kaniko/.docker/config.json
+        /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
+
+
+  - name: pre-deploy-check-prod-overseas-a
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [build-runtime-image-prod-overseas-a]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-overseas-a/**
+    environment:
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
+        manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"
+        headers="$$(mktemp)"
+        curl --fail --silent --show-error --head --user "$${REGISTRY_PUSH_USERNAME}:$${REGISTRY_PUSH_TOKEN}" -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' "$${manifest_url}" > "$${headers}"
+        digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
+        test -n "$${digest}"
+        case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
+        printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > "$IMAGE_ENV_FILE"
+        test -s "$IMAGE_ENV_FILE"
+
+
+  - name: secret-preflight-prod-overseas-a
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-overseas-a/**
+    environment:
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN
+      KUBE_DEPLOY_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_KUBE_DEPLOY_TOKEN
+      SECRETSTORE_ROLE:
+        from_secret: DT_PROD_OVERSEAS_A_SECRETSTORE_ROLE
+      PG_MIGRATOR_DSN:
+        from_secret: DT_PROD_OVERSEAS_A_PG_MIGRATOR_DSN
+      APP_DB_SECRET_REF:
+        from_secret: DT_PROD_OVERSEAS_A_APP_DB_SECRET_REF
+      OBJECTSTORE_SECRET_REF:
+        from_secret: DT_PROD_OVERSEAS_A_OBJECTSTORE_SECRET_REF
+      LIGHTRAG_API_SECRET_REF:
+        from_secret: DT_PROD_OVERSEAS_A_LIGHTRAG_API_SECRET_REF
+      EDUPLUS2_CLIENT_SECRET_REF:
+        from_secret: DT_PROD_OVERSEAS_A_EDUPLUS2_CLIENT_SECRET_REF
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_PROD_OVERSEAS_A_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_EVIDENCE_STORE_WRITE_TOKEN
+      VCS_TAG_VERIFY_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_VCS_TAG_VERIFY_TOKEN
+      SECRET_PREFLIGHT_METADATA_JSON:
+        from_secret: DT_PROD_OVERSEAS_A_SECRET_PREFLIGHT_METADATA_JSON
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
+      - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
+
+
+  - name: deploy-prod-overseas-a
+    image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
+    depends_on: [pre-deploy-check-prod-overseas-a, secret-preflight-prod-overseas-a]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-overseas-a/**
+    environment:
+      DEEPTUTOR_DEPLOY_APPROVED: "yes"
+      KUBECONFIG:
+        from_secret: DT_PROD_OVERSEAS_A_KUBECONFIG
+      KUBE_DEPLOY_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_KUBE_DEPLOY_TOKEN
+      PG_MIGRATOR_DSN:
+        from_secret: DT_PROD_OVERSEAS_A_PG_MIGRATOR_DSN
+      SMOKE_TOKEN_ISSUER_SECRET:
+        from_secret: DT_PROD_OVERSEAS_A_SMOKE_TOKEN_ISSUER_SECRET
+      EVIDENCE_STORE_WRITE_TOKEN:
+        from_secret: DT_PROD_OVERSEAS_A_EVIDENCE_STORE_WRITE_TOKEN
+    commands:
+      - . ./.deeptutor-release.env
+      - . ./.deeptutor-image.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
+      - export KUBECONFIG_DATA="$${KUBECONFIG}"
+      - deploy/kubernetes/protected-k8s-release/deploy.sh
+      - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
+      - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
+      - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"

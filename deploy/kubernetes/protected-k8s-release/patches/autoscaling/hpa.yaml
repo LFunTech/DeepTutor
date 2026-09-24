@@ -1,0 +1,21 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: deeptutor-backend
+  labels:
+    app.kubernetes.io/name: deeptutor-backend
+    app.kubernetes.io/part-of: deeptutor-protected-k8s-release
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: deeptutor-backend
+  minReplicas: ${DEEPTUTOR_HPA_MIN_REPLICAS}
+  maxReplicas: ${DEEPTUTOR_HPA_MAX_REPLICAS}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: ${DEEPTUTOR_HPA_TARGET_CPU_UTILIZATION_PERCENTAGE}

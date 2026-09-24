@@ -352,6 +352,8 @@ class SocketAuthentication:
     async def validate_start_turn(self, ws, payload):
         if self.enterprise.deployment.production is None:
             return
+        if any(field in payload for field in ("tenant", "tenant_id", "tenantId")):
+            raise ValueError("tenant override is not allowed")
         if payload.get("attachments"):
             raise ValueError(
                 "production websocket input accepts DeepTutor resource references only"

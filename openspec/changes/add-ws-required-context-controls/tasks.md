@@ -28,7 +28,7 @@
 
 ## 4. 权限、安全与负例
 
-- [ ] 4.1 覆盖未授权 KB、私有 KB、缺失 KB、未 ready KB、缺失 skill、未授权 skill、MCP tool 不存在、MCP tool 未授权、provider 不支持媒体类型等 fail-closed 场景。
+- [x] 4.1 覆盖未授权 KB、私有 KB、缺失 KB、未 ready KB、缺失 skill、未授权 skill、MCP tool 不存在、MCP tool 未授权、provider 不支持媒体类型等 fail-closed 场景。
 - [x] 4.2 覆盖自动模式和 best-effort 模式，确认不可用上下文不会被描述为已强制使用。
 - [x] 4.3 覆盖 token refresh 身份不匹配、跨 owner/session `resource_ids`、未完成资源上传、raw URL/base64/binary WS payload 等已有资源边界负例。
 

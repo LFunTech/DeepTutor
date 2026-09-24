@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "dt-migrate-${DEEPTUTOR_RELEASE_ID}"
+  labels:
+    app.kubernetes.io/part-of: deeptutor-protected-k8s-release
+    deeptutor.ai/release-lock: required
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: deeptutor-protected-k8s-release
+    spec:
+      restartPolicy: Never
+      serviceAccountName: deeptutor-migrator
+      containers:
+        - name: migrate-bootstrap
+          image: "${DEEPTUTOR_RUNTIME_IMAGE_DIGEST}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DEEPTUTOR_TARGET_ENV_ID
+              value: "${DEEPTUTOR_TARGET_ENV_ID}"
+            - name: DEEPTUTOR_RELEASE_ID
+              value: "${DEEPTUTOR_RELEASE_ID}"
+            - name: DEEPTUTOR_RELEASE_LOCK_REF
+              value: "${DEEPTUTOR_RELEASE_LOCK_REF}"
+            - name: DEEPTUTOR_MIGRATION_LOCK_REF
+              value: "${DEEPTUTOR_MIGRATION_LOCK_REF}"
+            - name: DEEPTUTOR_SCHEMA_HISTORY_CHECK
+              value: schema_history
+          envFrom:
+            - secretRef:
+                name: deeptutor-migrator-secrets
+          command:
+            - /bin/sh
+            - -ceu
+            - |
+              echo "acquire release-lock and migration-lock for ${DEEPTUTOR_TARGET_ENV_ID}/${DEEPTUTOR_RELEASE_ID}"
+              deeptutor-enterprise --config /etc/deeptutor/deployment.json schema plan --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+              deeptutor-enterprise --config /etc/deeptutor/deployment.json schema apply --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+              deeptutor-enterprise --config /etc/deeptutor/deployment.json schema verify --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+              echo "verify schema_history drift before rollout"
+              if [ -n "${DEEPTUTOR_BOOTSTRAP_ADMIN_USERNAME:-}" ]; then
+                : "${DEEPTUTOR_BOOTSTRAP_ADMIN_PASSWORD:?must be set when bootstrap admin is configured}"
+                deeptutor-enterprise --config /etc/deeptutor/deployment.json bootstrap --username "${DEEPTUTOR_BOOTSTRAP_ADMIN_USERNAME}" --password-env DEEPTUTOR_BOOTSTRAP_ADMIN_PASSWORD
+              fi
+          volumeMounts:
+            - name: deployment-config
+              mountPath: /etc/deeptutor
+              readOnly: true
+      volumes:
+        - name: deployment-config
+          configMap:
+            name: deeptutor-deployment-config

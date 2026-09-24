@@ -33,6 +33,65 @@ def _optional_url_env(name: str) -> tuple[str, bool]:
     return ("" if disabled else value), disabled
 
 
+def _build_enterprise_runtime_coordination():
+    """按部署环境变量构建企业组合根的 turn coordination。
+
+    单副本默认继续使用 memory coordination，且每个 scope 保持独立 coordinator；
+    多副本/HPA 场景由发布契约注入 Redis 配置，让所有 Pod 共享 turn lease、
+    fencing token、事件流和命令流。企业入口不能读取本地 runtime settings 文件，
+    否则会重新引入本地 `data/` 权威。
+    """
+
+    from deeptutor.runtime.coordination import (
+        CoordinationSettings,
+        MemoryCoordinator,
+        RedisCoordinator,
+    )
+
+    settings = CoordinationSettings.from_runtime_settings(
+        {
+            "backend_workers": (
+                os.environ.get("DEEPTUTOR_BACKEND_WORKERS")
+                or os.environ.get("BACKEND_WORKERS")
+                or 1
+            )
+        },
+        {
+            "turn_coordination": {
+                "backend": os.environ.get("DEEPTUTOR_TURN_COORDINATION_BACKEND", "memory"),
+                "redis_url": os.environ.get("DEEPTUTOR_REDIS_URL", ""),
+                "key_prefix": os.environ.get("DEEPTUTOR_REDIS_KEY_PREFIX", "deeptutor"),
+            }
+        },
+    )
+    if settings.backend == "redis":
+        return (
+            settings,
+            RedisCoordinator(
+                settings.redis_url,
+                key_prefix=settings.key_prefix,
+                lease_ttl_seconds=settings.lease_ttl_seconds,
+                stream_retention_seconds=settings.stream_retention_seconds,
+            ),
+            None,
+        )
+
+    def memory_factory():
+        return MemoryCoordinator(lease_ttl_seconds=settings.lease_ttl_seconds)
+
+    return settings, memory_factory(), memory_factory
+
+
+def _requires_singleton_executor_lease(coordination_settings) -> bool:
+    """是否需要沿用单执行者 PG advisory lock。
+
+    Redis coordination 表示 backend Pod 之间通过共享 turn lease、fencing token、
+    事件流和命令流协同；继续持有全局 `ExecutorLease` 会把多副本退化成单副本。
+    """
+
+    return getattr(coordination_settings, "backend", "memory") != "redis"
+
+
 class _ControlledBootstrapIdentity(IdentityService):
     """日常实例不持有 bootstrap 明文；显式调用时使用短期 core service。"""
 
@@ -262,7 +321,6 @@ class Enterprise:
         from deeptutor.core.providers import ApplicationProviders, provider_context
         from deeptutor.runtime.bootstrap.builtin_capabilities import BUILTIN_CAPABILITY_SPECS
         from deeptutor.runtime.capability_catalog import CapabilityCatalog
-        from deeptutor.runtime.coordination import CoordinationSettings, MemoryCoordinator
         from deeptutor.runtime.registry.capability_registry import CapabilityRegistry
         from deeptutor.runtime.request_contracts import CAPABILITY_CONFIG_MODELS
 
@@ -284,8 +342,6 @@ class Enterprise:
                 ).fetchone()
                 if not tenant:
                     raise RuntimeError("fixed tenant is not initialized or available")
-            await self.lease.acquire()
-            self.db.execution_guard = self.lease.check
             self.store_provider = StoreProvider(self)
             self.providers = ApplicationProviders(
                 store=self.store_provider,
@@ -309,15 +365,28 @@ class Enterprise:
                     factory=chat_factory,
                     config_model=CAPABILITY_CONFIG_MODELS["chat"],
                 )
+                (
+                    coordination_settings,
+                    coordinator,
+                    coordinator_factory,
+                ) = _build_enterprise_runtime_coordination()
+                requires_singleton_lease = _requires_singleton_executor_lease(
+                    coordination_settings
+                )
+                if requires_singleton_lease:
+                    await self.lease.acquire()
+                    self.db.execution_guard = self.lease.check
+                else:
+                    self.db.execution_guard = self._runtime_coordination_guard
                 self.container = ApplicationContainer(
-                    settings=CoordinationSettings(),
-                    coordinator=MemoryCoordinator(),
+                    settings=coordination_settings,
+                    coordinator=coordinator,
                     worker_id=self.lease.execution_id,
                     store_provider=self.store_provider,
                     turn_environment=TurnEnvironment(self),
                     capability_registry=registry,
                     load_plugins=False,
-                    coordinator_factory=MemoryCoordinator,
+                    coordinator_factory=coordinator_factory,
                     turn_service_factory=lambda *args: GuardedTurns(self, *args),
                     object_store_provider=self.object_store,
                 )
@@ -329,11 +398,16 @@ class Enterprise:
                 )
                 await self.container.start()
                 await self.recover()
-            self._monitor = asyncio.create_task(self._watch_executor())
+            if requires_singleton_lease:
+                self._monitor = asyncio.create_task(self._watch_executor())
         except BaseException:
             await self.lease.close()
             await self.db.__aexit__()
             raise
+
+    async def _runtime_coordination_guard(self):
+        if self.container is not None and not await self.container.coordinator.health():
+            raise RuntimeError("turn coordination backend is unavailable")
 
     async def _watch_executor(self):
         while True:
@@ -345,7 +419,12 @@ class Enterprise:
                 return
 
     async def authorize(self):
-        await self.lease.check()
+        if self.container is None or _requires_singleton_executor_lease(
+            self.container.settings
+        ):
+            await self.lease.check()
+        else:
+            await self._runtime_coordination_guard()
         token = current_token()
         identity = await self.identity.authenticate(token)
         try:
@@ -367,6 +446,17 @@ class Enterprise:
                     (str(self.deployment.tenant_id),),
                 )
             ).fetchall()
+        if self.container is not None and not _requires_singleton_executor_lease(
+            self.container.settings
+        ):
+            from deeptutor.runtime.coordination import TurnRecoveryService
+
+            for user in users:
+                store = PostgresSessionStore(
+                    self.db, TenantScope(str(self.deployment.tenant_id), user["id"])
+                )
+                await TurnRecoveryService(self.container.coordinator, store).recover_once()
+            return
         for user in users:
             store = PostgresSessionStore(
                 self.db, TenantScope(str(self.deployment.tenant_id), user["id"])

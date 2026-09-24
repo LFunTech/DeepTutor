@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deeptutor-backend
+  labels:
+    app.kubernetes.io/name: deeptutor-backend
+    app.kubernetes.io/part-of: deeptutor-protected-k8s-release
+spec:
+  replicas: ${DEEPTUTOR_BACKEND_EXECUTOR_REPLICAS}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: deeptutor-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: deeptutor-backend
+        app.kubernetes.io/part-of: deeptutor-protected-k8s-release
+    spec:
+      serviceAccountName: deeptutor-runtime
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: backend
+          image: "${DEEPTUTOR_RUNTIME_IMAGE_DIGEST}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DEEPTUTOR_RUNTIME_MODE
+              value: kubernetes
+            - name: DEEPTUTOR_EXECUTION_MODE
+              value: "${DEEPTUTOR_EXECUTION_MODE}"
+            - name: DEEPTUTOR_RELEASE_LOCK_REQUIRED
+              value: "true"
+            - name: DEEPTUTOR_RELEASE_ID
+              value: "${DEEPTUTOR_RELEASE_ID}"
+            - name: DEEPTUTOR_TARGET_ENV_ID
+              value: "${DEEPTUTOR_TARGET_ENV_ID}"
+            - name: DEEPTUTOR_TURN_COORDINATION_BACKEND
+              value: "${DEEPTUTOR_TURN_COORDINATION_BACKEND}"
+            - name: DEEPTUTOR_REDIS_KEY_PREFIX
+              value: "${DEEPTUTOR_REDIS_KEY_PREFIX}"
+          envFrom:
+            - secretRef:
+                name: deeptutor-runtime-secrets
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deeptutor-backend
+spec:
+  selector:
+    app.kubernetes.io/name: deeptutor-backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: deeptutor-backend
+spec:
+  tls:
+    - hosts: ["${DEEPTUTOR_INGRESS_HOST}"]
+      secretName: "${DEEPTUTOR_TLS_SECRET_NAME}"
+  rules:
+    - host: "${DEEPTUTOR_INGRESS_HOST}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: deeptutor-backend
+                port:
+                  name: http

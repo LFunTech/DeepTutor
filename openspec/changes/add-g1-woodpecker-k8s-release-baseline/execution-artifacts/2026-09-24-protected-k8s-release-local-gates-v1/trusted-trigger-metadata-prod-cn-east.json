@@ -1,0 +1,9 @@
+{
+  "actor": "release-manager",
+  "approval_id": "approval-123",
+  "approved": true,
+  "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "protected_ref": true,
+  "tag_object_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "trust_source": "local-test-vcs-protected-tag-api"
+}

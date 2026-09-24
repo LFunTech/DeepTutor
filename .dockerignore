@@ -51,6 +51,8 @@ MANIFEST
 # Virtual environments
 .env
 *.env
+**/.env
+**/.env.*
 env/
 venv/
 ENV/
@@ -120,6 +122,10 @@ run_code_workspace/
 develop/
 .claude/
 .agents/
+.codegraph/
+.secrets/
+.superpowers/
+.worktrees/
 .playwright-cli/
 site/
 scripts/extract_numbered_items.sh

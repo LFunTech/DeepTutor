@@ -1104,3 +1104,59 @@ openspec validate --all --strict
   tests/agents/chat/test_required_context.py
 # All checks passed
 ```
+
+## 2026-09-24 任务 4.1 required context fail-closed 负例闭环
+
+本轮补齐 `4.1` 未完成的独立负例 fixture，并把 provider 不支持媒体类型时的企业运行态错误收敛为稳定 `ContextResolutionError(error_code="required_context_unavailable")`，避免 WebSocket/审计只能看到普通 `ValueError`。
+
+覆盖矩阵：
+
+| 场景 | 覆盖位置 | 期望结果 |
+| --- | --- | --- |
+| 未授权 KB | `tests/agents/chat/test_required_context.py::test_required_knowledge_base_unauthorized_fails_with_authorization_code` | 模型调用前抛 `ContextResolutionError(error_code="context_authorization_failed")`，记录 unavailable KB。 |
+| 私有 KB | `extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_required_kb_unavailable_cases_fail_closed[private-kb-*]` | 其他 owner 的 KB 对当前用户按不可见处理，模型调用前 `knowledge_base_unavailable`，不泄露存在性。 |
+| 缺失 KB | `tests/agents/chat/test_required_context.py::test_required_knowledge_base_missing_fails_closed_before_model_call` 与企业 `missing-kb` 参数化用例 | 模型调用前 `knowledge_base_unavailable`。 |
+| 未 ready KB | `tests/agents/chat/test_required_context.py::test_required_knowledge_base_not_ready_fails_closed_before_model_call` 与企业 `warming-kb` 参数化用例 | 模型调用前 `knowledge_base_unavailable`。 |
+| 缺失 skill | `tests/agents/chat/test_required_context.py::test_configured_turn_runtime_required_missing_skill_fails_closed` | configured turn 不进入模型执行，终态 `failure_code="skill_unavailable"`。 |
+| 未授权/不可用 skill | `tests/agents/chat/test_required_context.py::test_configured_turn_runtime_required_unavailable_skill_fails_closed` | configured turn 不进入模型执行，能力摘要中 skill 状态为 `unavailable`。 |
+| MCP tool 不存在 | `tests/agents/chat/test_required_context.py::test_required_mcp_tool_missing_fails_closed_before_model_call` 与企业 required MCP 用例 | 模型调用前 `mcp_tool_unavailable`。 |
+| MCP tool 存在但未授权 | `tests/agents/chat/test_required_context.py::test_required_mcp_tool_present_but_ungranted_fails_closed_before_model_call` | provider view 按 grant 过滤后为空，模型调用前 `mcp_tool_unavailable`，记录脱敏 unavailable。 |
+| provider 不支持媒体类型/能力 | `extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_rejects_non_image_resources_before_llm` 与 `...rejects_image_when_model_lacks_vision_before_llm` | 非图片资源和无 vision 模型均在模型调用前 fail closed；无 vision 场景返回稳定 `required_context_unavailable`。 |
+
+TDD RED/GREEN 记录：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src ./.venv/bin/python -m pytest -q \
+  tests/agents/chat/test_required_context.py::test_required_mcp_tool_present_but_ungranted_fails_closed_before_model_call \
+  tests/agents/chat/test_required_context.py::test_configured_turn_runtime_required_unavailable_skill_fails_closed \
+  extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_rejects_image_when_model_lacks_vision_before_llm \
+  extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_required_kb_unavailable_cases_fail_closed \
+  -o asyncio_mode=auto
+# RED：模型不支持图片资源时仍抛普通 ValueError: Configured model does not support image resources。
+# GREEN：6 passed；实现改为 ContextResolutionError(error_code="required_context_unavailable")。
+```
+
+最终 targeted 验证：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src ./.venv/bin/python -m pytest -q \
+  tests/agents/chat/test_required_context.py \
+  extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_rejects_non_image_resources_before_llm \
+  extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_rejects_image_when_model_lacks_vision_before_llm \
+  extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_required_mcp_fails_closed \
+  extensions/enterprise/tests/test_application.py::test_enterprise_turn_environment_required_kb_unavailable_cases_fail_closed \
+  -o asyncio_mode=auto
+# 22 passed
+
+./.venv/bin/python -m ruff check \
+  extensions/enterprise/src/deeptutor_enterprise/runtime.py \
+  extensions/enterprise/tests/test_application.py \
+  tests/agents/chat/test_required_context.py
+# All checks passed!
+
+openspec validate add-ws-required-context-controls --strict
+# Change 'add-ws-required-context-controls' is valid
+
+openspec validate --all --strict
+# Totals: 15 passed, 0 failed (15 items)
+```

@@ -1,0 +1,1 @@
+no forbidden runtime-artifact naming or unsafe dynamic-secret patterns found

@@ -1,0 +1,9 @@
+{
+  "protected_ref": true,
+  "approved": true,
+  "approval_id": "approval-local-study-mate-shape-review",
+  "actor": "release-manager",
+  "tag_object_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "trust_source": "local-fixture-for-source-shape-only"
+}

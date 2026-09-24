@@ -101,6 +101,32 @@ def test_required_mcp_tool_missing_fails_closed_before_model_call(monkeypatch) -
     assert ctx.metadata["context_resolution"]["unavailable"][0]["kind"] == "mcp_tool"
 
 
+def test_required_mcp_tool_present_but_ungranted_fails_closed_before_model_call(
+    monkeypatch,
+) -> None:
+    pipe = _pipe(monkeypatch, [FakeMCPTool("lightrag.query")])
+    monkeypatch.setattr("deeptutor.multi_user.tool_access.allowed_mcp_tools", lambda: set())
+    ctx = UnifiedContext(
+        session_id="session-1",
+        metadata={"context_policy": "required", "mcp_tools": ["lightrag.query"]},
+    )
+
+    with pytest.raises(ContextResolutionError) as exc:
+        asyncio.run(pipe._prepare_deferred_tools(ctx))
+
+    assert exc.value.error_code == "mcp_tool_unavailable"
+    unavailable = ctx.metadata["context_resolution"]["unavailable"]
+    assert unavailable == [
+        {
+            "kind": "mcp_tool",
+            "name": "lightrag.query",
+            "id_hash": unavailable[0]["id_hash"],
+            "status": "unavailable",
+            "code": "mcp_tool_unavailable",
+        }
+    ]
+
+
 def test_best_effort_mcp_tool_missing_is_recorded_without_failing(monkeypatch) -> None:
     pipe = _pipe(monkeypatch, [FakeMCPTool("lightrag.query")])
     ctx = UnifiedContext(
@@ -448,6 +474,84 @@ def test_configured_turn_runtime_required_missing_skill_fails_closed(monkeypatch
     skill_rows = [item for item in usage["items"] if item["kind"] == "skill"]
     assert skill_rows == [
         {"kind": "skill", "label": "missing-skill", "status": "unavailable", "count": 0}
+    ]
+
+
+def test_configured_turn_runtime_required_unavailable_skill_fails_closed(monkeypatch) -> None:
+    from deeptutor.services.session._turn_runtime_shared import _TurnExecution
+    from deeptutor.services.session.turns.configured import ConfiguredTurnRuntime
+    from deeptutor.services.session.turns.environment import PreparedTurnEnvironment
+
+    class Store:
+        def __init__(self) -> None:
+            self.finalized: dict[str, Any] | None = None
+
+        async def update_session_preferences(self, *_args, **_kwargs):
+            return None
+
+        async def append_turn_event(self, turn_id, event):
+            return {"turn_id": turn_id, **event}
+
+        async def finalize_turn(self, turn_id, **kwargs):
+            self.finalized = {"turn_id": turn_id, **kwargs}
+            return {"events": kwargs["events"]}
+
+    class Environment:
+        async def authorize_request(self, action, *, session_id=None, turn_id=None):
+            return None
+
+    class Runtime(ConfiguredTurnRuntime):
+        def __init__(self) -> None:
+            self.store = Store()
+            self.turn_environment = Environment()
+            self._lock = asyncio.Lock()
+            self._executions = {}
+            self._reply_queues = {}
+            self.turn_engine = SimpleNamespace(
+                execute=lambda _context: (_ for _ in ()).throw(
+                    AssertionError("unavailable required skills must fail before the model")
+                )
+            )
+
+    runtime = Runtime()
+    payload = {
+        "content": "请按指定 skill 作答",
+        "capability": "chat",
+        "tools": [],
+        "skills": ["blocked-skill"],
+        "context_policy": "required",
+        "language": "zh",
+        "llm_selection": {"profile_id": "chat", "model_id": "primary"},
+    }
+    execution = _TurnExecution(
+        turn_id="turn-1",
+        session_id="session-1",
+        capability="chat",
+        payload=payload,
+        prepared_environment=PreparedTurnEnvironment(
+            payload=payload,
+            llm_config=SimpleNamespace(model="test-model", max_tokens=128),
+            chat_params={"temperature": 0.2},
+            allowed_tools=(),
+        ),
+    )
+    runtime._executions[execution.turn_id] = execution
+    monkeypatch.setattr(
+        "deeptutor.services.skill.runtime.get_runtime_skill_service",
+        lambda: SimpleNamespace(
+            summary_entries=lambda: [SimpleNamespace(name="blocked-skill", available=False)]
+        ),
+    )
+
+    asyncio.run(runtime._run_configured_turn(execution))
+
+    assert runtime.store.finalized is not None
+    assert runtime.store.finalized["status"] == "failed"
+    assert runtime.store.finalized["failure_code"] == "skill_unavailable"
+    done_event = runtime.store.finalized["events"][-1]
+    usage = done_event["metadata"]["capability_usage"]
+    assert [item for item in usage["items"] if item["kind"] == "skill"] == [
+        {"kind": "skill", "label": "blocked-skill", "status": "unavailable", "count": 0}
     ]
 
 

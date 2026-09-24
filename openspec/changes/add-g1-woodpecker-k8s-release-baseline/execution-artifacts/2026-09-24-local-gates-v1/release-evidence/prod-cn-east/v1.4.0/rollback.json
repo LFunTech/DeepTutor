@@ -1,0 +1,9 @@
+{
+  "action": "maintenance_forward_fix",
+  "approval_id_hash": "06a7a3124841",
+  "failure_code": "not-run-local-gate",
+  "requires_smoke_after_rollback": false,
+  "rollback_policy": "maintenance-forward-fix",
+  "target_env_id": "prod-cn-east",
+  "write_state": "stopped"
+}

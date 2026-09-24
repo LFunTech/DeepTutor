@@ -1,0 +1,8 @@
+{
+  "exit_code": null,
+  "release_id": "local-gate-only-v3",
+  "schema_version": null,
+  "unverified": [
+    "real_migration_job_not_run"
+  ]
+}

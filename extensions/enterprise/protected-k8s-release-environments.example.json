@@ -1,0 +1,150 @@
+{
+  "registry_version": "2026-09-protected-k8s-release-example",
+  "canonical_tag_regex": "^deploy/(?P<env_id>[a-z][a-z0-9-]{1,40})/(?P<version>v[0-9]+\\.[0-9]+\\.[0-9]+(-(rc|hotfix)\\.[0-9]+)?)$",
+  "environments": [
+    {
+      "env_id": "test-cn",
+      "env_class": "test",
+      "prod_group": null,
+      "verification_status": "unverified",
+      "tag_pattern": "deploy/test-cn/v*",
+      "allowed_ref": "refs/tags/deploy/test-cn/**",
+      "woodpecker": {
+        "server_url": "https://woodpecker-test-cn.example.internal",
+        "server_version": "3.18.2",
+        "agent_version": "3.18.2",
+        "agent_backend": "kubernetes",
+        "protected_refs": ["refs/tags/deploy/test-cn/**"],
+        "approval_policy": {"required": false, "approvers": [], "window": "not-required"},
+        "secret_resolution_mode": "secret-extension",
+        "secrets": [
+          {"logical_name": "REGISTRY_PUSH_TOKEN", "ref": "woodpecker:DT_TEST_CN_REGISTRY_PUSH_TOKEN", "purpose": "registry_push", "scope_env_id": "test-cn", "permission_summary": "push only registry.example/deeptutor/test-cn", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "KUBE_DEPLOY_TOKEN", "ref": "woodpecker:DT_TEST_CN_KUBE_DEPLOY_TOKEN", "purpose": "k8s_deploy", "scope_env_id": "test-cn", "permission_summary": "namespace deploy only deeptutor-test-cn", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SECRETSTORE_ROLE", "ref": "woodpecker:DT_TEST_CN_SECRETSTORE_ROLE", "purpose": "secret_store", "scope_env_id": "test-cn", "permission_summary": "bind refs only external-secret/test-cn/*", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "PG_MIGRATOR_DSN", "ref": "woodpecker:DT_TEST_CN_PG_MIGRATOR_DSN", "purpose": "pg_migrator", "scope_env_id": "test-cn", "permission_summary": "migration role only test-cn schema", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "APP_DB_SECRET_REF", "ref": "woodpecker:DT_TEST_CN_APP_DB_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "test-cn", "permission_summary": "reference only runtime db secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "OBJECTSTORE_SECRET_REF", "ref": "woodpecker:DT_TEST_CN_OBJECTSTORE_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "test-cn", "permission_summary": "reference only object store secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "LIGHTRAG_API_SECRET_REF", "ref": "woodpecker:DT_TEST_CN_LIGHTRAG_API_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "test-cn", "permission_summary": "reference only lightrag api secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EDUPLUS2_CLIENT_SECRET_REF", "ref": "woodpecker:DT_TEST_CN_EDUPLUS2_CLIENT_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "test-cn", "permission_summary": "reference only smoke client secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SMOKE_TOKEN_ISSUER_SECRET", "ref": "woodpecker:DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET", "purpose": "smoke_credentials", "scope_env_id": "test-cn", "permission_summary": "short ttl smoke tokens only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EVIDENCE_STORE_WRITE_TOKEN", "ref": "woodpecker:DT_TEST_CN_EVIDENCE_STORE_WRITE_TOKEN", "purpose": "evidence_store", "scope_env_id": "test-cn", "permission_summary": "write release-evidence/test-cn only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "VCS_TAG_VERIFY_TOKEN", "ref": "woodpecker:DT_TEST_CN_VCS_TAG_VERIFY_TOKEN", "purpose": "tag_approval_verify", "scope_env_id": "test-cn", "permission_summary": "read tag protection metadata only", "rotation_state": "current", "least_privilege": true, "required": true}
+        ]
+      },
+      "registry": {"repository": "registry.example/deeptutor/test-cn", "credentials_ref": "woodpecker:DT_TEST_CN_REGISTRY_PUSH_TOKEN", "immutable_tags": true},
+      "kubernetes": {"cluster_ref": "k8s:test-cn", "namespace": "deeptutor-test-cn", "ingress_host": "deeptutor-test-cn.example.internal", "tls_secret_ref": "k8s:test-cn/deeptutor-tls", "secret_store_ref": "external-secret:test-cn/platform", "rbac_ref": "k8s:test-cn/rbac/deeptutor-release", "network_policy_ref": "k8s:test-cn/networkpolicy/default-deny", "service_account": "deeptutor-release", "backend_executor_replicas": 1, "rollout_strategy": "single-executor-drain"},
+      "data_plane": {"pg_secret_ref": "external-secret:test-cn/pg-runtime", "object_store_ref": "external-secret:test-cn/objectstore", "lightrag_ref": "external-secret:test-cn/lightrag", "eduplus2_smoke_ref": "external-secret:test-cn/eduplus2-smoke"},
+      "release_control": {"release_lock_ref": "postgres:test-cn/release_locks", "migration_lock_ref": "postgres:test-cn/migration_locks", "maintenance_mode_ref": "postgres:test-cn/maintenance_state"},
+      "rollback_policy": {"compatible_strategy": "previous-digest-if-compatible", "incompatible_strategy": "maintenance-forward-fix", "previous_release_ref": "object-store:release-evidence/test-cn/latest-successful", "requires_smoke_after_rollback": true},
+      "evidence": {"store_ref": "object-store:deeptutor-release-evidence", "prefix": "release-evidence/test-cn", "retention_days": 180, "write_scope": "release-evidence/test-cn/*", "read_scope": "release-evidence/test-cn/*"}
+    },
+    {
+      "env_id": "pre-cn",
+      "env_class": "pre",
+      "prod_group": null,
+      "verification_status": "unverified",
+      "tag_pattern": "deploy/pre-cn/v*",
+      "allowed_ref": "refs/tags/deploy/pre-cn/**",
+      "woodpecker": {
+        "server_url": "https://woodpecker-pre-cn.example.internal",
+        "server_version": "3.18.2",
+        "agent_version": "3.18.2",
+        "agent_backend": "kubernetes",
+        "protected_refs": ["refs/tags/deploy/pre-cn/**"],
+        "approval_policy": {"required": false, "approvers": [], "window": "not-required"},
+        "secret_resolution_mode": "secret-extension",
+        "secrets": [
+          {"logical_name": "REGISTRY_PUSH_TOKEN", "ref": "woodpecker:DT_PRE_CN_REGISTRY_PUSH_TOKEN", "purpose": "registry_push", "scope_env_id": "pre-cn", "permission_summary": "push only registry.example/deeptutor/pre-cn", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "KUBE_DEPLOY_TOKEN", "ref": "woodpecker:DT_PRE_CN_KUBE_DEPLOY_TOKEN", "purpose": "k8s_deploy", "scope_env_id": "pre-cn", "permission_summary": "namespace deploy only deeptutor-pre-cn", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SECRETSTORE_ROLE", "ref": "woodpecker:DT_PRE_CN_SECRETSTORE_ROLE", "purpose": "secret_store", "scope_env_id": "pre-cn", "permission_summary": "bind refs only external-secret/pre-cn/*", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "PG_MIGRATOR_DSN", "ref": "woodpecker:DT_PRE_CN_PG_MIGRATOR_DSN", "purpose": "pg_migrator", "scope_env_id": "pre-cn", "permission_summary": "migration role only pre-cn schema", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "APP_DB_SECRET_REF", "ref": "woodpecker:DT_PRE_CN_APP_DB_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "pre-cn", "permission_summary": "reference only runtime db secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "OBJECTSTORE_SECRET_REF", "ref": "woodpecker:DT_PRE_CN_OBJECTSTORE_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "pre-cn", "permission_summary": "reference only object store secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "LIGHTRAG_API_SECRET_REF", "ref": "woodpecker:DT_PRE_CN_LIGHTRAG_API_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "pre-cn", "permission_summary": "reference only lightrag api secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EDUPLUS2_CLIENT_SECRET_REF", "ref": "woodpecker:DT_PRE_CN_EDUPLUS2_CLIENT_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "pre-cn", "permission_summary": "reference only smoke client secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SMOKE_TOKEN_ISSUER_SECRET", "ref": "woodpecker:DT_PRE_CN_SMOKE_TOKEN_ISSUER_SECRET", "purpose": "smoke_credentials", "scope_env_id": "pre-cn", "permission_summary": "short ttl smoke tokens only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EVIDENCE_STORE_WRITE_TOKEN", "ref": "woodpecker:DT_PRE_CN_EVIDENCE_STORE_WRITE_TOKEN", "purpose": "evidence_store", "scope_env_id": "pre-cn", "permission_summary": "write release-evidence/pre-cn only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "VCS_TAG_VERIFY_TOKEN", "ref": "woodpecker:DT_PRE_CN_VCS_TAG_VERIFY_TOKEN", "purpose": "tag_approval_verify", "scope_env_id": "pre-cn", "permission_summary": "read tag protection metadata only", "rotation_state": "current", "least_privilege": true, "required": true}
+        ]
+      },
+      "registry": {"repository": "registry.example/deeptutor/pre-cn", "credentials_ref": "woodpecker:DT_PRE_CN_REGISTRY_PUSH_TOKEN", "immutable_tags": true},
+      "kubernetes": {"cluster_ref": "k8s:pre-cn", "namespace": "deeptutor-pre-cn", "ingress_host": "deeptutor-pre-cn.example.internal", "tls_secret_ref": "k8s:pre-cn/deeptutor-tls", "secret_store_ref": "external-secret:pre-cn/platform", "rbac_ref": "k8s:pre-cn/rbac/deeptutor-release", "network_policy_ref": "k8s:pre-cn/networkpolicy/default-deny", "service_account": "deeptutor-release", "backend_executor_replicas": 1, "rollout_strategy": "single-executor-drain"},
+      "data_plane": {"pg_secret_ref": "external-secret:pre-cn/pg-runtime", "object_store_ref": "external-secret:pre-cn/objectstore", "lightrag_ref": "external-secret:pre-cn/lightrag", "eduplus2_smoke_ref": "external-secret:pre-cn/eduplus2-smoke"},
+      "release_control": {"release_lock_ref": "postgres:pre-cn/release_locks", "migration_lock_ref": "postgres:pre-cn/migration_locks", "maintenance_mode_ref": "postgres:pre-cn/maintenance_state"},
+      "rollback_policy": {"compatible_strategy": "previous-digest-if-compatible", "incompatible_strategy": "maintenance-forward-fix", "previous_release_ref": "object-store:release-evidence/pre-cn/latest-successful", "requires_smoke_after_rollback": true},
+      "evidence": {"store_ref": "object-store:deeptutor-release-evidence", "prefix": "release-evidence/pre-cn", "retention_days": 365, "write_scope": "release-evidence/pre-cn/*", "read_scope": "release-evidence/pre-cn/*"}
+    },
+    {
+      "env_id": "prod-cn-east",
+      "env_class": "prod",
+      "prod_group": "cn",
+      "verification_status": "unverified",
+      "tag_pattern": "deploy/prod-cn-east/v*",
+      "allowed_ref": "refs/tags/deploy/prod-cn-east/**",
+      "woodpecker": {
+        "server_url": "https://woodpecker-prod-cn-east.example.internal",
+        "server_version": "3.18.2",
+        "agent_version": "3.18.2",
+        "agent_backend": "kubernetes",
+        "protected_refs": ["refs/tags/deploy/prod-cn-east/**"],
+        "approval_policy": {"required": true, "approvers": ["release-manager"], "window": "PT2H"},
+        "secret_resolution_mode": "secret-extension",
+        "secrets": [
+          {"logical_name": "REGISTRY_PUSH_TOKEN", "ref": "woodpecker:DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN", "purpose": "registry_push", "scope_env_id": "prod-cn-east", "permission_summary": "push only registry.example/deeptutor/prod-cn-east", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "KUBE_DEPLOY_TOKEN", "ref": "woodpecker:DT_PROD_CN_EAST_KUBE_DEPLOY_TOKEN", "purpose": "k8s_deploy", "scope_env_id": "prod-cn-east", "permission_summary": "namespace deploy only deeptutor-prod-cn-east", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SECRETSTORE_ROLE", "ref": "woodpecker:DT_PROD_CN_EAST_SECRETSTORE_ROLE", "purpose": "secret_store", "scope_env_id": "prod-cn-east", "permission_summary": "bind refs only external-secret/prod-cn-east/*", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "PG_MIGRATOR_DSN", "ref": "woodpecker:DT_PROD_CN_EAST_PG_MIGRATOR_DSN", "purpose": "pg_migrator", "scope_env_id": "prod-cn-east", "permission_summary": "migration role only prod-cn-east schema", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "APP_DB_SECRET_REF", "ref": "woodpecker:DT_PROD_CN_EAST_APP_DB_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-cn-east", "permission_summary": "reference only runtime db secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "OBJECTSTORE_SECRET_REF", "ref": "woodpecker:DT_PROD_CN_EAST_OBJECTSTORE_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-cn-east", "permission_summary": "reference only object store secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "LIGHTRAG_API_SECRET_REF", "ref": "woodpecker:DT_PROD_CN_EAST_LIGHTRAG_API_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-cn-east", "permission_summary": "reference only lightrag api secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EDUPLUS2_CLIENT_SECRET_REF", "ref": "woodpecker:DT_PROD_CN_EAST_EDUPLUS2_CLIENT_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-cn-east", "permission_summary": "reference only smoke client secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SMOKE_TOKEN_ISSUER_SECRET", "ref": "woodpecker:DT_PROD_CN_EAST_SMOKE_TOKEN_ISSUER_SECRET", "purpose": "smoke_credentials", "scope_env_id": "prod-cn-east", "permission_summary": "short ttl smoke tokens only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EVIDENCE_STORE_WRITE_TOKEN", "ref": "woodpecker:DT_PROD_CN_EAST_EVIDENCE_STORE_WRITE_TOKEN", "purpose": "evidence_store", "scope_env_id": "prod-cn-east", "permission_summary": "write release-evidence/prod-cn-east only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "VCS_TAG_VERIFY_TOKEN", "ref": "woodpecker:DT_PROD_CN_EAST_VCS_TAG_VERIFY_TOKEN", "purpose": "tag_approval_verify", "scope_env_id": "prod-cn-east", "permission_summary": "read tag protection metadata only", "rotation_state": "current", "least_privilege": true, "required": true}
+        ]
+      },
+      "registry": {"repository": "registry.example/deeptutor/prod-cn-east", "credentials_ref": "woodpecker:DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN", "immutable_tags": true},
+      "kubernetes": {"cluster_ref": "k8s:prod-cn-east", "namespace": "deeptutor-prod-cn-east", "ingress_host": "deeptutor-prod-cn-east.example.internal", "tls_secret_ref": "k8s:prod-cn-east/deeptutor-tls", "secret_store_ref": "external-secret:prod-cn-east/platform", "rbac_ref": "k8s:prod-cn-east/rbac/deeptutor-release", "network_policy_ref": "k8s:prod-cn-east/networkpolicy/default-deny", "service_account": "deeptutor-release", "backend_executor_replicas": 1, "rollout_strategy": "single-executor-drain"},
+      "data_plane": {"pg_secret_ref": "external-secret:prod-cn-east/pg-runtime", "object_store_ref": "external-secret:prod-cn-east/objectstore", "lightrag_ref": "external-secret:prod-cn-east/lightrag", "eduplus2_smoke_ref": "external-secret:prod-cn-east/eduplus2-smoke"},
+      "release_control": {"release_lock_ref": "postgres:prod-cn-east/release_locks", "migration_lock_ref": "postgres:prod-cn-east/migration_locks", "maintenance_mode_ref": "postgres:prod-cn-east/maintenance_state"},
+      "rollback_policy": {"compatible_strategy": "previous-digest-if-compatible", "incompatible_strategy": "maintenance-forward-fix", "previous_release_ref": "object-store:release-evidence/prod-cn-east/latest-successful", "requires_smoke_after_rollback": true},
+      "evidence": {"store_ref": "object-store:deeptutor-release-evidence", "prefix": "release-evidence/prod-cn-east", "retention_days": 1095, "write_scope": "release-evidence/prod-cn-east/*", "read_scope": "release-evidence/prod-cn-east/*"}
+    },
+    {
+      "env_id": "prod-overseas-a",
+      "env_class": "prod",
+      "prod_group": "overseas",
+      "verification_status": "unverified",
+      "tag_pattern": "deploy/prod-overseas-a/v*",
+      "allowed_ref": "refs/tags/deploy/prod-overseas-a/**",
+      "woodpecker": {
+        "server_url": "https://woodpecker-prod-overseas-a.example.internal",
+        "server_version": "3.18.2",
+        "agent_version": "3.18.2",
+        "agent_backend": "kubernetes",
+        "protected_refs": ["refs/tags/deploy/prod-overseas-a/**"],
+        "approval_policy": {"required": true, "approvers": ["release-manager"], "window": "PT2H"},
+        "secret_resolution_mode": "secret-extension",
+        "secrets": [
+          {"logical_name": "REGISTRY_PUSH_TOKEN", "ref": "woodpecker:DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN", "purpose": "registry_push", "scope_env_id": "prod-overseas-a", "permission_summary": "push only registry.example/deeptutor/prod-overseas-a", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "KUBE_DEPLOY_TOKEN", "ref": "woodpecker:DT_PROD_OVERSEAS_A_KUBE_DEPLOY_TOKEN", "purpose": "k8s_deploy", "scope_env_id": "prod-overseas-a", "permission_summary": "namespace deploy only deeptutor-prod-overseas-a", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SECRETSTORE_ROLE", "ref": "woodpecker:DT_PROD_OVERSEAS_A_SECRETSTORE_ROLE", "purpose": "secret_store", "scope_env_id": "prod-overseas-a", "permission_summary": "bind refs only external-secret/prod-overseas-a/*", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "PG_MIGRATOR_DSN", "ref": "woodpecker:DT_PROD_OVERSEAS_A_PG_MIGRATOR_DSN", "purpose": "pg_migrator", "scope_env_id": "prod-overseas-a", "permission_summary": "migration role only prod-overseas-a schema", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "APP_DB_SECRET_REF", "ref": "woodpecker:DT_PROD_OVERSEAS_A_APP_DB_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-overseas-a", "permission_summary": "reference only runtime db secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "OBJECTSTORE_SECRET_REF", "ref": "woodpecker:DT_PROD_OVERSEAS_A_OBJECTSTORE_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-overseas-a", "permission_summary": "reference only object store secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "LIGHTRAG_API_SECRET_REF", "ref": "woodpecker:DT_PROD_OVERSEAS_A_LIGHTRAG_API_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-overseas-a", "permission_summary": "reference only lightrag api secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EDUPLUS2_CLIENT_SECRET_REF", "ref": "woodpecker:DT_PROD_OVERSEAS_A_EDUPLUS2_CLIENT_SECRET_REF", "purpose": "runtime_secret_ref", "scope_env_id": "prod-overseas-a", "permission_summary": "reference only smoke client secret", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "SMOKE_TOKEN_ISSUER_SECRET", "ref": "woodpecker:DT_PROD_OVERSEAS_A_SMOKE_TOKEN_ISSUER_SECRET", "purpose": "smoke_credentials", "scope_env_id": "prod-overseas-a", "permission_summary": "short ttl smoke tokens only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "EVIDENCE_STORE_WRITE_TOKEN", "ref": "woodpecker:DT_PROD_OVERSEAS_A_EVIDENCE_STORE_WRITE_TOKEN", "purpose": "evidence_store", "scope_env_id": "prod-overseas-a", "permission_summary": "write release-evidence/prod-overseas-a only", "rotation_state": "current", "least_privilege": true, "required": true},
+          {"logical_name": "VCS_TAG_VERIFY_TOKEN", "ref": "woodpecker:DT_PROD_OVERSEAS_A_VCS_TAG_VERIFY_TOKEN", "purpose": "tag_approval_verify", "scope_env_id": "prod-overseas-a", "permission_summary": "read tag protection metadata only", "rotation_state": "current", "least_privilege": true, "required": true}
+        ]
+      },
+      "registry": {"repository": "registry.example/deeptutor/prod-overseas-a", "credentials_ref": "woodpecker:DT_PROD_OVERSEAS_A_REGISTRY_PUSH_TOKEN", "immutable_tags": true},
+      "kubernetes": {"cluster_ref": "k8s:prod-overseas-a", "namespace": "deeptutor-prod-overseas-a", "ingress_host": "deeptutor-prod-overseas-a.example.internal", "tls_secret_ref": "k8s:prod-overseas-a/deeptutor-tls", "secret_store_ref": "external-secret:prod-overseas-a/platform", "rbac_ref": "k8s:prod-overseas-a/rbac/deeptutor-release", "network_policy_ref": "k8s:prod-overseas-a/networkpolicy/default-deny", "service_account": "deeptutor-release", "backend_executor_replicas": 1, "rollout_strategy": "single-executor-drain"},
+      "data_plane": {"pg_secret_ref": "external-secret:prod-overseas-a/pg-runtime", "object_store_ref": "external-secret:prod-overseas-a/objectstore", "lightrag_ref": "external-secret:prod-overseas-a/lightrag", "eduplus2_smoke_ref": "external-secret:prod-overseas-a/eduplus2-smoke"},
+      "release_control": {"release_lock_ref": "postgres:prod-overseas-a/release_locks", "migration_lock_ref": "postgres:prod-overseas-a/migration_locks", "maintenance_mode_ref": "postgres:prod-overseas-a/maintenance_state"},
+      "rollback_policy": {"compatible_strategy": "previous-digest-if-compatible", "incompatible_strategy": "maintenance-forward-fix", "previous_release_ref": "object-store:release-evidence/prod-overseas-a/latest-successful", "requires_smoke_after_rollback": true},
+      "evidence": {"store_ref": "object-store:deeptutor-release-evidence", "prefix": "release-evidence/prod-overseas-a", "retention_days": 1095, "write_scope": "release-evidence/prod-overseas-a/*", "read_scope": "release-evidence/prod-overseas-a/*"}
+    }
+  ]
+}

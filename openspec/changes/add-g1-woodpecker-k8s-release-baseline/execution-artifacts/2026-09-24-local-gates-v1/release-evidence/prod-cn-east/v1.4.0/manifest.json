@@ -1,0 +1,48 @@
+{
+  "build": {
+    "run_id": "local-gate-only",
+    "scan_summary": {
+      "sbom": "not-run-local-gate",
+      "vulnerabilities": "not-run-local-gate"
+    }
+  },
+  "enterprise_package_version": "0.1.0",
+  "env_class": "prod",
+  "evidence_prefix": "release-evidence/prod-cn-east/v1.4.0",
+  "images": {
+    "backend": "registry.example/deeptutor/prod-cn-east/backend@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "frontend": "registry.example/deeptutor/prod-cn-east/frontend@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "kubernetes": {
+    "backend_executor_replicas": 1,
+    "cluster_ref": {
+      "id_hash": "f6a9b470b53c",
+      "kind": "k8s"
+    },
+    "namespace_hash": "47e93b20c543",
+    "rollout_strategy": "single-executor-drain"
+  },
+  "prod_group": "cn",
+  "registry": {
+    "immutable_tags": true,
+    "repository_hash": "5776c1d3a3fe"
+  },
+  "release_control": {
+    "migration_lock_ref": {
+      "id_hash": "e09217b0786b",
+      "kind": "postgres"
+    },
+    "release_lock_ref": {
+      "id_hash": "0c94f73a7166",
+      "kind": "postgres"
+    }
+  },
+  "schema": "deeptutor.g1-release-manifest.v1",
+  "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "tag": "deploy/prod-cn-east/v1.4.0",
+  "tag_creator_hash": "0b38809e383a",
+  "tag_object_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "target_env_id": "prod-cn-east",
+  "upstream_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "version": "v1.4.0"
+}

@@ -110,8 +110,8 @@ Secret 仅通过 Secret 引用注入所需步骤，限定事件/插件，PR 不�
 3. **迁移**：分别使用企业包的应用 PG 迁移制品和 LightRAG 侧的独立检索迁移/初始化制品，后者管理检索 schema/图/数据库权限与低权运行初始化，不从 DeepTutor 企业包导入图迁移；由匹配候选版本的独立 Job 执行，独立 DB 角色、数据库锁、超时及历史记录，schema 已到目标版本时幂等跳过。必须核实并控制所选服务锁定版本的启动建表/迁移行为，不能让 LightRAG 运行进程用高权账号自行抢跑迁移。HugeGraph 服务/graph/graphspace/身份与专属 schema 按版本化维护流程预置，运行 `HUGEGRAPH_AUTO_CREATE_SCHEMA=false` 并验证低权读取 schema 和业务路径；不兼容定义阻断且不自动删除，迁移锁与结果对账覆盖 PG 和图，不能假设两者事务原子。失败立即停止部署并保存脱敏证据，不能逐 Pod 跑迁移、靠 `|| true` 放行或对非幂等外部副作用盲目重试。
 4. **兼容窗口**：可兼容旧应用的扩展迁移可先执行；不兼容变更必须先停接新 turn、排空所有执行者并进入批准的维护窗口，再迁移。迁移后的应用/对象格式兼容范围决定能否回退，不以“Job 成功”推断旧实例能继续写。
 5. **应用发布**：按固定清单和 digest 更新配置/前后端/启用的执行组件，检查配置引用、readiness、rollout 超时及实际镜像。只管理本应用声明资源，不使用广泛 prune、删除 PVC/bucket 或重装依赖。
-6. **单执行模式**：必须先排空并确认旧执行进程终止，再启新执行者，显式无 surge/重叠的更新顺序和单 worker 限制，接受维护中断。`replicas: 1` 本身不能证明发布期没有两个执行者；frontend 与无执行权的组件独立判断。
-7. **多执行者模式**：实际滚动更新/扩缩容导致竞争执行或目标要求 HA 时，先校验本版本/拓扑适用的 G-H 证据；未通过拒绝该发布配置，不因流水线能改 replicas 就视为安全。
+6. **单副本执行模式**：适用于 `backend_executor_replicas=1` 的环境；必须先排空并确认旧执行进程终止，再启新执行者，显式无 surge/重叠的更新顺序和单 worker 限制，接受维护中断。`replicas: 1` 本身不能证明发布期没有两个执行者；frontend 与无执行权的组件独立判断。
+7. **多副本企业执行模式**：`backend_executor_replicas>1` 或 HPA 仅在环境契约显式声明 `rolling-replicated-agent` 且运行时协调为 Redis 时允许。发布前必须确认共享 PG、S3/ObjectStore、SecretStore、LightRAG 绑定、Redis turn lease、fencing token、共享事件/命令流和 worker-lost recovery 均可用；否则 fail closed。运行时在 Redis coordination 模式下不得再持有单执行者 `ExecutorLease` 阻断其他 Pod，启动恢复只能处理 Redis 已过期的 turn lease，不能批量失败其他 Pod 正在执行的 turn。多副本用于企业高并发，不应被 G1 schema 禁止，但也不能只靠改 K8s replicas 宣称一致性成立。
 
 ## 业务 smoke、失败处理与回退
 
@@ -153,3 +153,27 @@ smoke 通过真实 Ingress/TLS 路径验证企业启动器下的前端、认证�
 7. 现有与新增必要检查均为强制，失败/缺失/未执行不放行。完整故障/容量门禁可引用受保护、适用版本/拓扑的演练记录，但不得用过期记录替代当前受影响范围回归。
 
 实现时用与目标 server 匹配的工具校验 `.woodpecker/`，再进行实际事件/权限/集群联调；配置语法验证只证明可解析，不证明可部署。[官方 Linter 文档](https://woodpecker-ci.org/docs/usage/linter)
+
+## 2026-09-24 protected K8s release baseline implementation slice
+
+本轮在 `add-g1-woodpecker-k8s-release-baseline` proposal 下新增本地门禁实现。Proposal id 仍保留历史里程碑语义，但实际 Woodpecker/K8s 流水线、脚本、模块和目录均使用语义化名称 `protected-k8s-release`，避免以 `g1`/`m1` 之类编号命名运行制品。目标是让真实 Woodpecker/K8s 接入前已有可测试的发布契约和 fail-closed 工具，而不是宣称已经完成生产发布。
+
+新增入口：
+
+- 环境 registry 示例：`extensions/enterprise/protected-k8s-release-environments.example.json`。
+- 发布门禁库：`extensions/enterprise/src/deeptutor_enterprise/protected_k8s_release.py`。
+- CLI：`python -m deeptutor_enterprise.protected_k8s_release_cli {matrix,trigger,prepare-metadata,preflight,scan-evidence}`。
+- Woodpecker 示例：`.woodpecker/protected-k8s-release.yml`，参考 Study Mate 的 pinned clone / Kaniko / pre-deploy check 结构，按环境静态声明 `from_secret` 并用 `when.ref` 过滤，不使用 shell 动态拼接 secret 名称。
+- Secret preflight 状态脚本：`scripts/protected-k8s-release/collect-secret-preflight-status.sh`，只输出存在性、环境归属、最小权限和轮换状态，不输出 secret 值；缺少可信 metadata 时默认 fail closed。
+- K8s release source：`deploy/kubernetes/protected-k8s-release/`。
+- Evidence 模板：`docs/enterprise/protected-k8s-release-evidence-template.md`。
+
+关键约束：
+
+1. 环境选择只能来自受保护 deployment tag：`deploy/<env_id>/v<major>.<minor>.<patch>[-rc.<n>|-hotfix.<n>]`。
+2. `env_id` 必须精确匹配 registry；`prod`/`production`/`latest`/`stable` 不是合法生产别名。
+3. 每个生产环境独立审批、部署、smoke、回退和留证；一个生产环境通过不能替代其它生产环境。
+4. Build/deploy manifest 只接受 image digest，不接受 mutable app image tag。
+5. Evidence path 必须包含 `target_env_id`，上传前必须运行泄露扫描。
+
+未完成真实验收：真实 Woodpecker tag run、registry push/digest resolve、K8s migration/deploy、Ingress/TLS smoke、LightRAG/ObjectStore/EduPlus2 test binding、rollback/maintenance 演练和真实 evidence store 权限边界仍待目标环境授权后执行。

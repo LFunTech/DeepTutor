@@ -165,15 +165,24 @@ class TurnEnvironment:
             )
             mime_type = str(handle.mime_type or "application/octet-stream").split(";", 1)[0].lower()
             if not mime_type.startswith("image/"):
-                raise ValueError("Only image resources are supported for model input")
+                raise ContextResolutionError(
+                    "Only image resources are supported for model input",
+                    error_code="required_context_unavailable",
+                )
             if int(handle.size_bytes) > MAX_INLINE_IMAGE_RESOURCE_BYTES:
-                raise ValueError("Image resource is too large for model input")
+                raise ContextResolutionError(
+                    "Image resource is too large for model input",
+                    error_code="required_context_unavailable",
+                )
             verified.append((handle, mime_type))
         if not supports_vision(
             getattr(llm_config, "binding", "openai"),
             getattr(llm_config, "model", ""),
         ):
-            raise ValueError("Configured model does not support image resources")
+            raise ContextResolutionError(
+                "Configured model does not support image resources",
+                error_code="required_context_unavailable",
+            )
         attachments = []
         for handle, mime_type in verified:
             data = await resource_store.read(handle)

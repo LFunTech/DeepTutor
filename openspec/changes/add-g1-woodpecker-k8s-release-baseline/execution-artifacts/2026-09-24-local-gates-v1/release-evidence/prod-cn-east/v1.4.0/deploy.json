@@ -1,0 +1,8 @@
+{
+  "exit_code": null,
+  "release_lock": "not-acquired",
+  "rollout": "not-run",
+  "unverified": [
+    "real_k8s_not_authorized"
+  ]
+}

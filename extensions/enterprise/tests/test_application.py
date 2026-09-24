@@ -84,7 +84,15 @@ async def app(pg_dsn, monkeypatch):
         yield application
 
 
-async def seed_externalized_kb(application, *, owner_id="admin", kb_id="kb-demo", label="示例知识库"):
+async def seed_externalized_kb(
+    application,
+    *,
+    owner_id="admin",
+    kb_id="kb-demo",
+    label="示例知识库",
+    object_state="ready",
+    metadata_status="ready",
+):
     from deeptutor_enterprise.knowledge_bases import KNOWLEDGE_BASE_DOCUMENT_KIND
     from deeptutor_enterprise.scope import TenantScope
 
@@ -93,7 +101,7 @@ async def seed_externalized_kb(application, *, owner_id="admin", kb_id="kb-demo"
     metadata = {
         "kb_label": label,
         "description": "用于测试的外部化知识库",
-        "status": "ready",
+        "status": metadata_status,
         "search_mode": "mix",
     }
     async with enterprise.db.transaction(
@@ -103,7 +111,7 @@ async def seed_externalized_kb(application, *, owner_id="admin", kb_id="kb-demo"
             "INSERT INTO enterprise.resource_objects"
             "(tenant_id,owner_id,id,resource_kind,resource_id,bucket,object_key,"
             "content_hash,size_bytes,mime_type,state,retention,metadata,created_by) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'ready','retained',%s::jsonb,%s)",
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'retained',%s::jsonb,%s)",
             (
                 str(enterprise.deployment.tenant_id),
                 owner_id,
@@ -115,6 +123,7 @@ async def seed_externalized_kb(application, *, owner_id="admin", kb_id="kb-demo"
                 digest,
                 64,
                 "text/plain",
+                object_state,
                 json.dumps(metadata),
                 owner_id,
             ),
@@ -207,6 +216,161 @@ async def test_m1_does_not_expose_tms_or_oms_surfaces(app):
             assert anonymous.status_code in (401, 404, 405), (path, anonymous.status_code)
             assert authorized.status_code in (401, 404, 405), (path, authorized.status_code)
             assert forged_ops.status_code in (401, 404, 405), (path, forged_ops.status_code)
+
+
+async def test_m1_fixed_tenant_rejects_b2_escape_attempts(app):
+    """B2 未开放时，固定租户 runtime 必须拒绝多租户/治理逃逸尝试。"""
+
+    from deeptutor_enterprise.api.application import SocketAuthentication
+    from deeptutor_enterprise.context import identity_context
+    from deeptutor_enterprise.runtime import TurnEnvironment
+    from deeptutor_enterprise.scope import TenantScope
+
+    from deeptutor.services.session.required_context import ContextResolutionError
+
+    enterprise = app.state.enterprise
+    admin_token = await enterprise.identity.login("admin", "long-password-1", client="b2-boundary")
+    admin_identity = await enterprise.identity.authenticate(admin_token)
+    other_user = await enterprise.identity.create_user(
+        admin_token, "b2-private-owner", "long-password-2"
+    )
+    other_token = await enterprise.identity.login(
+        "b2-private-owner", "long-password-2", client="b2-boundary"
+    )
+
+    auth = SocketAuthentication(enterprise)
+    with identity_context(admin_identity, admin_token):
+        for field in ("tenant_id", "tenant", "tenantId"):
+            with pytest.raises(ValueError, match="tenant"):
+                await auth.validate_start_turn(
+                    None,
+                    {
+                        "content": "固定租户下不得从 body 覆盖 tenant",
+                        "attachments": [],
+                        "resource_ids": [],
+                        field: "forged-tenant",
+                    },
+                )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://school.example",
+        headers={"Authorization": "Bearer " + admin_token},
+    ) as client:
+        forged_upload = await client.post(
+            "/api/v1/resources/upload-intents",
+            json={
+                "modality": "image",
+                "mime_type": "image/png",
+                "size_bytes": 12,
+                "sha256": "f" * 64,
+                "purpose": "chat_turn",
+                "tenant_id": "forged-tenant",
+            },
+        )
+        assert forged_upload.status_code == 422
+
+        for method, path in [
+            ("POST", "/api/v1/tms/apps"),
+            ("PATCH", "/api/v1/tms/apps/app-1"),
+            ("PUT", "/api/v1/tms/clients/client-1"),
+        ]:
+            response = await client.request(
+                method,
+                path,
+                json={"tenant_id": "forged-tenant", "status": "active"},
+            )
+            assert response.status_code in (401, 404, 405), (method, path, response.status_code)
+
+    foreign_tenant = str(uuid.uuid4())
+    foreign_resource_id = "res_cross_tenant_b2"
+    async with enterprise.db.transaction(
+        TenantScope(foreign_tenant, admin_identity.user_id)
+    ) as c:
+        await c.execute(
+            "INSERT INTO enterprise.tenants"
+            "(id,external_eligibility,local_enabled,provisioning_status,"
+            "auth_epoch,bootstrap_completed) "
+            "VALUES(%s,'not_required',true,'ready','epoch-foreign',true)",
+            (foreign_tenant,),
+        )
+        await c.execute(
+            "INSERT INTO enterprise.users(tenant_id,id,username,role) "
+            "VALUES(%s,%s,'foreign-admin','tenant_admin')",
+            (foreign_tenant, admin_identity.user_id),
+        )
+        await c.execute(
+            "INSERT INTO enterprise.resource_objects"
+            "(tenant_id,owner_id,id,resource_kind,resource_id,bucket,object_key,"
+            "content_hash,size_bytes,mime_type,state,retention,metadata,created_by) "
+            "VALUES(%s,%s,%s,'turn_input',%s,'deeptutor-test',%s,%s,7,"
+            "'image/png','ready','retained',%s::jsonb,%s)",
+            (
+                foreign_tenant,
+                admin_identity.user_id,
+                uuid.uuid4(),
+                foreign_resource_id,
+                f"foreign/{foreign_resource_id}.png",
+                "d" * 64,
+                json.dumps({"purpose": "chat_turn"}),
+                admin_identity.user_id,
+            ),
+        )
+
+    def object_store_must_not_be_consulted(_key: str):
+        raise AssertionError("cross-tenant resource existence must not be probed")
+
+    enterprise.object_store.head_object = object_store_must_not_be_consulted
+    with identity_context(admin_identity, admin_token):
+        with pytest.raises(ValueError, match="invalid resource reference"):
+            await auth.validate_start_turn(
+                None,
+                {
+                    "content": "不能引用其它 tenant 的 resource_id",
+                    "attachments": [],
+                    "resource_ids": [foreign_resource_id],
+                },
+            )
+
+    private_kb_id = await seed_externalized_kb(
+        app,
+        owner_id=other_user["id"],
+        kb_id="b2-private-kb",
+        label="B2 私有知识库",
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://school.example",
+    ) as client:
+        options = await client.get(
+            "/api/v1/enterprise/conversation-test/options",
+            headers={"Authorization": "Bearer " + admin_token},
+        )
+        assert options.status_code == 200, options.text
+        assert private_kb_id not in {item["id"] for item in options.json()["knowledge_bases"]}
+
+        async with enterprise.sdk(other_token):
+            from deeptutor.services.session import get_session_store
+
+            private_session = await get_session_store().create_session(title="b2 private")
+        session_denied = await client.get(
+            "/api/sessions/" + private_session["id"],
+            headers={"Authorization": "Bearer " + admin_token},
+        )
+        assert session_denied.status_code == 404
+
+    with identity_context(admin_identity, admin_token):
+        with pytest.raises(ContextResolutionError) as exc:
+            await TurnEnvironment(enterprise).prepare_request(
+                {
+                    "content": "不得访问同租户其它 owner 的私有 KB",
+                    "capability": "chat",
+                    "knowledge_bases": [private_kb_id],
+                    "context_policy": "required",
+                    "llm_selection": {"profile_id": "chat", "model_id": "primary"},
+                }
+            )
+    assert exc.value.error_code == "knowledge_base_unavailable"
 
 
 async def test_enterprise_resource_upload_intent_and_ws_resource_ids_contract(app):
@@ -778,6 +942,77 @@ async def test_enterprise_turn_environment_rejects_non_image_resources_before_ll
             )
 
 
+async def test_enterprise_turn_environment_rejects_image_when_model_lacks_vision_before_llm(
+    app,
+):
+    """图片资源已上传也不能绕过 provider 能力矩阵；不支持 vision 时模型调用前失败。"""
+
+    from deeptutor_enterprise.context import identity_context
+    from deeptutor_enterprise.runtime import TurnEnvironment
+
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+    from deeptutor.runtime.externalized_providers import ObjectBlobRef
+    from deeptutor.services.llm.capabilities import set_catalog_capability_overrides
+    from deeptutor.services.session.required_context import ContextResolutionError
+
+    enterprise = app.state.enterprise
+    token = await enterprise.identity.login("admin", "long-password-1", client="no-vision")
+    identity = await enterprise.identity.authenticate(token)
+    image_bytes = b"\x89PNG\r\n\x1a\nresource-image"
+    blobs: dict[str, tuple[bytes, str, str]] = {}
+
+    def put_bytes(key: str, data: bytes, *, expected_sha256: str, content_type: str):
+        blobs[key] = (data, expected_sha256, content_type)
+        return ObjectBlobRef(
+            key=key,
+            size_bytes=len(data),
+            sha256=expected_sha256,
+            content_type=content_type,
+        )
+
+    def head_object(key: str):
+        data, expected_sha256, content_type = blobs[key]
+        return ObjectBlobRef(
+            key=key,
+            size_bytes=len(data),
+            sha256=expected_sha256,
+            content_type=content_type,
+        )
+
+    enterprise.object_store.put_bytes = put_bytes
+    enterprise.object_store.head_object = head_object
+    enterprise.object_store.get_bytes = lambda ref: blobs[ref.key][0]
+    set_catalog_capability_overrides([("openai", "some-model", {"vision": False})])
+    try:
+        with identity_context(identity, token):
+            resource_store = PostgresObjectResourceStore(
+                enterprise.store_provider.get(), enterprise.object_store
+            )
+            handle = await resource_store.put(
+                resource_kind="turn_input",
+                resource_id="res_image_no_vision",
+                filename="diagram.png",
+                data=image_bytes,
+                mime_type="image/png",
+                metadata={"purpose": "chat_turn"},
+            )
+            with pytest.raises(ContextResolutionError) as exc:
+                await TurnEnvironment(enterprise).prepare_request(
+                    {
+                        "content": "请分析图片",
+                        "capability": "chat",
+                        "tools": [],
+                        "resource_ids": [handle.resource_id],
+                        "context_policy": "required",
+                        "llm_selection": {"profile_id": "chat", "model_id": "primary"},
+                    }
+                )
+    finally:
+        set_catalog_capability_overrides([])
+
+    assert exc.value.error_code == "required_context_unavailable"
+
+
 async def test_enterprise_turn_environment_required_mcp_fails_closed(app):
     from deeptutor_enterprise.context import identity_context
     from deeptutor_enterprise.runtime import TurnEnvironment
@@ -800,6 +1035,62 @@ async def test_enterprise_turn_environment_required_mcp_fails_closed(app):
             )
 
     assert exc.value.error_code == "mcp_tool_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("kb_id", "seed_kwargs"),
+    [
+        ("missing-kb", None),
+        ("private-kb", {"owner_id": "__other_user__", "kb_id": "private-kb"}),
+        (
+            "warming-kb",
+            {
+                "kb_id": "warming-kb",
+                "object_state": "ready",
+                "metadata_status": "indexing",
+            },
+        ),
+    ],
+)
+async def test_enterprise_turn_environment_required_kb_unavailable_cases_fail_closed(
+    app,
+    kb_id,
+    seed_kwargs,
+):
+    """缺失、私有不可见、未 ready 的 KB 都必须在模型调用前 fail closed。"""
+
+    from deeptutor_enterprise.context import identity_context
+    from deeptutor_enterprise.runtime import TurnEnvironment
+
+    from deeptutor.services.session.required_context import ContextResolutionError
+
+    enterprise = app.state.enterprise
+    token = await enterprise.identity.login("admin", "long-password-1", client=f"kb-{kb_id}")
+    identity = await enterprise.identity.authenticate(token)
+    if seed_kwargs is not None:
+        kwargs = dict(seed_kwargs)
+        if kwargs.get("owner_id") == "__other_user__":
+            other = await enterprise.identity.create_user(
+                token, f"owner-{kb_id}", "long-password-1"
+            )
+            kwargs["owner_id"] = other["id"]
+        else:
+            kwargs.setdefault("owner_id", identity.user_id)
+        await seed_externalized_kb(app, **kwargs)
+
+    with identity_context(identity, token):
+        with pytest.raises(ContextResolutionError) as exc:
+            await TurnEnvironment(enterprise).prepare_request(
+                {
+                    "content": "请使用指定知识库",
+                    "capability": "chat",
+                    "knowledge_bases": [kb_id],
+                    "context_policy": "required",
+                    "llm_selection": {"profile_id": "chat", "model_id": "primary"},
+                }
+            )
+
+    assert exc.value.error_code == "knowledge_base_unavailable"
 
 
 async def test_enterprise_turn_environment_loads_multi_model_catalog_from_pg(

@@ -1,0 +1,258 @@
+{
+  "allowed_ref": "refs/tags/deploy/prod-cn-east/**",
+  "data_plane": {
+    "eduplus2_smoke_ref": {
+      "id_hash": "9dfd02d73ec3",
+      "kind": "external-secret"
+    },
+    "lightrag_ref": {
+      "id_hash": "3964fc45dccf",
+      "kind": "external-secret"
+    },
+    "object_store_ref": {
+      "id_hash": "8c401c2b0b63",
+      "kind": "external-secret"
+    },
+    "pg_secret_ref": {
+      "id_hash": "746465ece476",
+      "kind": "external-secret"
+    }
+  },
+  "env_class": "prod",
+  "env_id": "prod-cn-east",
+  "evidence": {
+    "prefix": "release-evidence/prod-cn-east",
+    "read_scope_hash": "d8247240526f",
+    "retention_days": 1095,
+    "store_ref": {
+      "id_hash": "8e9312dd1a20",
+      "kind": "object-store"
+    },
+    "write_scope_hash": "d8247240526f"
+  },
+  "evidence_prefix": "release-evidence/prod-cn-east",
+  "kubernetes": {
+    "backend_executor_replicas": 1,
+    "cluster_ref": {
+      "id_hash": "f6a9b470b53c",
+      "kind": "k8s"
+    },
+    "ingress": {
+      "host_hash": "7f4cd8b963c9"
+    },
+    "namespace_hash": "47e93b20c543",
+    "network_policy_ref": {
+      "id_hash": "73a415b609ed",
+      "kind": "k8s"
+    },
+    "rbac_ref": {
+      "id_hash": "f520ddf2e585",
+      "kind": "k8s"
+    },
+    "rollout_strategy": "single-executor-drain",
+    "secret_store_ref": {
+      "id_hash": "c0370a429bcb",
+      "kind": "external-secret"
+    },
+    "service_account_hash": "bd435fd914c9",
+    "tls_secret_ref": {
+      "id_hash": "84ad431282e1",
+      "kind": "k8s"
+    }
+  },
+  "prod_group": "cn",
+  "registry": {
+    "credentials_ref": {
+      "id_hash": "12e1038823e0",
+      "kind": "woodpecker"
+    },
+    "immutable_tags": true,
+    "repository_hash": "5776c1d3a3fe"
+  },
+  "release_control": {
+    "maintenance_mode_ref": {
+      "id_hash": "11ca2b9c1309",
+      "kind": "postgres"
+    },
+    "migration_lock_ref": {
+      "id_hash": "e09217b0786b",
+      "kind": "postgres"
+    },
+    "release_lock_ref": {
+      "id_hash": "0c94f73a7166",
+      "kind": "postgres"
+    }
+  },
+  "rollback_policy": {
+    "compatible_strategy": "previous-digest-if-compatible",
+    "incompatible_strategy": "maintenance-forward-fix",
+    "previous_release_ref": {
+      "id_hash": "3aca9472594b",
+      "kind": "object-store"
+    },
+    "requires_smoke_after_rollback": true
+  },
+  "tag_pattern": "deploy/prod-cn-east/v*",
+  "verification_status": "unverified",
+  "woodpecker": {
+    "agent_backend": "kubernetes",
+    "agent_version": "3.18.2",
+    "approval_required": true,
+    "approval_window": "PT2H",
+    "protected_refs": [
+      "refs/tags/deploy/prod-cn-east/**"
+    ],
+    "secret_resolution_mode": "secret-extension",
+    "secrets": [
+      {
+        "least_privilege": true,
+        "logical_name": "REGISTRY_PUSH_TOKEN",
+        "permission_hash": "11fdebd29333",
+        "purpose": "registry_push",
+        "ref": {
+          "id_hash": "12e1038823e0",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "KUBE_DEPLOY_TOKEN",
+        "permission_hash": "433ae17914c6",
+        "purpose": "k8s_deploy",
+        "ref": {
+          "id_hash": "671deee95b9c",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "SECRETSTORE_ROLE",
+        "permission_hash": "fcc73d7da48e",
+        "purpose": "secret_store",
+        "ref": {
+          "id_hash": "38d86cc1e2c9",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "PG_MIGRATOR_DSN",
+        "permission_hash": "3b62f6585495",
+        "purpose": "pg_migrator",
+        "ref": {
+          "id_hash": "6cea54a4c1e8",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "APP_DB_SECRET_REF",
+        "permission_hash": "b75bd131154b",
+        "purpose": "runtime_secret_ref",
+        "ref": {
+          "id_hash": "5103b5ba9d91",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "OBJECTSTORE_SECRET_REF",
+        "permission_hash": "0ee528598f75",
+        "purpose": "runtime_secret_ref",
+        "ref": {
+          "id_hash": "1c7c1fd21e52",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "LIGHTRAG_API_SECRET_REF",
+        "permission_hash": "03a9a7d79fbd",
+        "purpose": "runtime_secret_ref",
+        "ref": {
+          "id_hash": "1b863ef5cc2a",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "EDUPLUS2_CLIENT_SECRET_REF",
+        "permission_hash": "f7d056fc3993",
+        "purpose": "runtime_secret_ref",
+        "ref": {
+          "id_hash": "c212d2c7ec21",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "SMOKE_TOKEN_ISSUER_SECRET",
+        "permission_hash": "3f08f8f5b0d5",
+        "purpose": "smoke_credentials",
+        "ref": {
+          "id_hash": "6cab100e32aa",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "EVIDENCE_STORE_WRITE_TOKEN",
+        "permission_hash": "5a185951b238",
+        "purpose": "evidence_store",
+        "ref": {
+          "id_hash": "1dcccdaa2c76",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      },
+      {
+        "least_privilege": true,
+        "logical_name": "VCS_TAG_VERIFY_TOKEN",
+        "permission_hash": "42705f3466ba",
+        "purpose": "tag_approval_verify",
+        "ref": {
+          "id_hash": "d744420aed6a",
+          "kind": "woodpecker"
+        },
+        "required": true,
+        "rotation_state": "current",
+        "scope_env_id": "prod-cn-east"
+      }
+    ],
+    "server": {
+      "host_hash": "d3c86dcc03f3",
+      "port": null,
+      "scheme": "https"
+    },
+    "server_version": "3.18.2"
+  }
+}

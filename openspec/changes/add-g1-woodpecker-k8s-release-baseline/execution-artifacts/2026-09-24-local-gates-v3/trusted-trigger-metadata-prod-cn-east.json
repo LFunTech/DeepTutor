@@ -1,0 +1,9 @@
+{
+  "protected_ref": true,
+  "approved": true,
+  "approval_id": "approval-local-example",
+  "actor": "release-manager",
+  "tag_object_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "trust_source": "local-vcs-protected-tag-metadata-fixture"
+}

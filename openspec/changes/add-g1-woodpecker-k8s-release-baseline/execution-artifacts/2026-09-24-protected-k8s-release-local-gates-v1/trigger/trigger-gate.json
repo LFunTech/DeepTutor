@@ -1,0 +1,17 @@
+{
+  "actor_hash": "0b38809e383a",
+  "approval": {
+    "approval_id_hash": "f95dff08d3b5",
+    "approved": true
+  },
+  "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "error_codes": [],
+  "event": "tag",
+  "ready": true,
+  "ref_hash": "99f3f9e01f22",
+  "tag": "deploy/prod-cn-east/v1.4.0",
+  "tag_object_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "target_env_id": "prod-cn-east",
+  "trust_source": "local-test-vcs-protected-tag-api",
+  "version": "v1.4.0"
+}
