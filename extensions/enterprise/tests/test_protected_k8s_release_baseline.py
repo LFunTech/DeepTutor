@@ -678,7 +678,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "docker-hub.f123.pub/devops/kaniko:v1.14.0-debug" in pipeline
     assert "docker-hub.f123.pub/base/ci-tools:alpine-3.22.4" in pipeline
     assert "pydantic>=2,<3" in pipeline
-    assert "--proxy" in pipeline
+    assert "env -u SOCKS_PROXY" in pipeline
     assert ". ./.deeptutor-release.env" in pipeline
     assert "from_secret: DOCKER_USERNAME" in pipeline
     assert "from_secret: DOCKER_PASSWORD" in pipeline

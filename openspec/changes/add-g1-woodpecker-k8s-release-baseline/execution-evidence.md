@@ -813,3 +813,22 @@ PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_rel
 openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 # valid
 ```
+
+### 2026-09-24 test-cn pipeline #7 失败与五次修复
+
+`deploy/test-cn/v1.4.0-rc.6` 触发 Woodpecker pipeline `#7` 后，pip 仍报 SOCKS support 缺失。`--proxy ""` 未覆盖运行环境中的 proxy 变量。
+
+修复：pip 安装命令改为通过 `env -u` 显式清除 `SOCKS_PROXY/socks_proxy/ALL_PROXY/all_proxy/HTTPS_PROXY/https_proxy/HTTP_PROXY/http_proxy` 后再执行安装。
+
+验证：
+
+```bash
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven -q
+# 1 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
