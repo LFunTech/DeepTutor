@@ -890,3 +890,39 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.8` tag。
+
+### 2026-09-24 test-cn pipeline #12 构建镜像步骤缺少 python 与第七次修复
+
+`deploy/test-cn/v1.4.0-rc.9` 触发 Woodpecker pipeline `#12` 后，`validate-release-trigger`、`prepare-release-metadata` 和 `secret-preflight-test-cn` 均已通过，说明 release gate 的 secret 注入、tag 解析、stdlib fallback 与 test-cn secret preflight 已进入可运行状态。后续失败发生在 `build-runtime-image-test-cn`：
+
+```text
+/bin/sh: python: not found
+```
+
+根因：Kaniko debug 镜像不是 Python 工具镜像，pipeline 使用 `python -c` 生成 Docker config 的 base64 auth 字段。Study Mate 的 Woodpecker 流水线在 Kaniko 步骤中直接写入 Docker config 的 `username` / `password` 字段，不依赖 Python。
+
+修复：所有 Kaniko build 步骤改为写入：
+
+```json
+{"auths":{"<registry>":{"username":"<masked>","password":"<masked>"}}}
+```
+
+并移除 Kaniko 步骤中的 `python -c` / `base64.b64encode` 依赖。新增测试确保 pipeline 不再包含 `base64.b64encode`，并保留 `username/password` Docker config 形式。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.9` tag。
