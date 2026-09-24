@@ -1244,3 +1244,26 @@ ERROR: No matching distribution found for PyYAML>=6.0
 - `apt-get update` 改为 `APT::Update::Error-Mode=any`，mirror 失败时直接在 update 阶段 fail closed，避免继续到误导性的 “Unable to locate package”。
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.21` tag。
+
+### 2026-09-24 test-cn pipeline #31 apt proxy 修复验证与前端 standalone 等待修正
+
+`deploy/test-cn/v1.4.0-rc.22` 触发 Woodpecker pipeline `#31` 后，release gate、metadata、secret preflight 通过；`compile-frontend-test-cn` 与 `compile-python-deps-test-cn` 再次并行启动。
+
+已验证：Python deps step 的 proxy 清理和 apt no-proxy 配置生效，apt 从 Tsinghua mirror 成功获取 151MB 构建依赖，修复了 #30 的 apt index/包定位问题。
+
+新的失败点仍在前端 artifact step：`npm ci` 成功，Next build 输出停留在 webpack production build 阶段后，脚本立即检查 standalone artifact，未等到 `standalone` 目录出现即 fail closed：
+
+```text
+Creating an optimized production build ...
+Using tsconfig file: tsconfig.deeptutor-build-132.json
+Next standalone output not found; searched .next, .next and .next-deeptutor
+```
+
+本地用同一 Node 22 版本运行 `DEEPTUTOR_NEXT_DIST_DIR=.next-ci-probe npm run build` 证明 Next build 会在后续阶段生成 `standalone/server.js`；因此流水线脚本应对 Next/worker 输出存在异步落盘或日志延迟的情况做 bounded wait，而不是在 `npm run build` 返回后立即判失败。
+
+修复：
+
+- `build-frontend-artifact.sh` 在 `npm run build` 后增加最长 180 秒 bounded wait，轮询 `DEEPTUTOR_NEXT_DIST_DIR`、`.next`、`.next-deeptutor` 的 `standalone`/`static` 输出。
+- 找不到 artifact 时输出 `.next*` 候选目录，便于下一轮区分“构建未完成”“输出目录不同”或“standalone 未生成”。
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.22` tag。

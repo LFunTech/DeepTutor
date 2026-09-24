@@ -22,20 +22,35 @@ printf 'NEXT_PUBLIC_APP_VERSION=\n' > .env.local
 npm run build
 
 cd "${repo_root}"
-standalone_source="web/${next_dist_dir}/standalone"
-static_source="web/${next_dist_dir}/static"
-if [ ! -d "${standalone_source}" ]; then
-  for candidate in web/.next/standalone web/.next-deeptutor/standalone; do
+standalone_source=""
+static_source=""
+resolve_next_artifacts() {
+  local candidate
+  for candidate in "web/${next_dist_dir}/standalone" web/.next/standalone web/.next-deeptutor/standalone; do
     if [ -d "${candidate}" ]; then
       standalone_source="${candidate}"
       static_source="$(dirname "${candidate}")/static"
-      break
+      return 0
     fi
   done
-fi
-if [ ! -d "${standalone_source}" ]; then
+  return 1
+}
+for attempt in $(seq 0 180); do
+  if resolve_next_artifacts; then
+    break
+  fi
+  if [ "${attempt}" -eq 180 ]; then
+    break
+  fi
+  if [ $((attempt % 10)) -eq 0 ]; then
+    echo "Waiting for Next standalone output (${attempt}s elapsed)..."
+  fi
+  sleep 1
+done
+if [ -z "${standalone_source}" ] || [ ! -d "${standalone_source}" ]; then
   echo "Next standalone output not found; searched ${next_dist_dir}, .next and .next-deeptutor" >&2
   find web -maxdepth 3 -type d -name standalone -print >&2 || true
+  find web -maxdepth 2 -type d \( -name '.next*' -o -name 'standalone' -o -name 'static' \) -print >&2 || true
   exit 2
 fi
 cp -a "${standalone_source}" "${artifact_dir}/standalone"
