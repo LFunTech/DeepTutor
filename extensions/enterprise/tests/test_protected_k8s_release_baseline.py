@@ -742,7 +742,10 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     k8s_readme = k8s_dir / "README.md"
     dockerignore_path = root / ".dockerignore"
 
-    registry_payload = json.loads(registry_path.read_text(encoding="utf8"))
+    registry_text = registry_path.read_text(encoding="utf8")
+    assert "registry.example" not in registry_text
+    assert "docker-hub.f123.pub/lfun/deeptutor/test-cn" in registry_text
+    registry_payload = json.loads(registry_text)
     registry = EnvironmentRegistry.model_validate(registry_payload)
     assert registry.production_env_ids == ("prod-cn-east", "prod-overseas-a")
 
@@ -765,6 +768,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "extensions/enterprise/protected-k8s-release-environments.example.json" in pipeline
     assert "base64.b64encode" not in pipeline
     assert '"username":"%s","password":"%s"' in pipeline
+    assert "unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy" in pipeline
     assert ". ./.deeptutor-release.env" in pipeline
     assert "from_secret: DOCKER_USERNAME" in pipeline
     assert "from_secret: DOCKER_PASSWORD" in pipeline

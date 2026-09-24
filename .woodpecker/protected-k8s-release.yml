@@ -98,6 +98,7 @@ steps:
         test -n "$${REGISTRY_PUSH_TOKEN:-}"
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
@@ -117,6 +118,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
       - |
         set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
         registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
         manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"
@@ -219,6 +221,7 @@ steps:
         test -n "$${REGISTRY_PUSH_TOKEN:-}"
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
@@ -238,6 +241,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
       - |
         set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
         registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
         manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"
@@ -340,6 +344,7 @@ steps:
         test -n "$${REGISTRY_PUSH_TOKEN:-}"
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
@@ -359,6 +364,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
       - |
         set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
         registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
         manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"
@@ -461,6 +467,7 @@ steps:
         test -n "$${REGISTRY_PUSH_TOKEN:-}"
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context "$${CI_WORKSPACE:-.}" --dockerfile "$${CI_WORKSPACE:-.}/Dockerfile" --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-repo "$${registry_host}/lfun/cache-deeptutor" --single-snapshot --snapshot-mode=redo
 
 
@@ -480,6 +487,7 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
       - |
         set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
         registry_path="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f2-)"
         manifest_url="https://$${registry_host}/v2/$${registry_path}/runtime/manifests/$${DEEPTUTOR_IMAGE_TAG}"

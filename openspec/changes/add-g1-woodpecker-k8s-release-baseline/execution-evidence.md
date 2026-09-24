@@ -926,3 +926,41 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.9` tag。
+
+### 2026-09-24 test-cn pipeline #14 构建镜像 registry contract 与 proxy 修复
+
+`deploy/test-cn/v1.4.0-rc.10` 触发 Woodpecker pipeline `#14` 后，`validate-release-trigger`、`prepare-release-metadata`、`secret-preflight-test-cn` 均通过。`build-runtime-image-test-cn` 已越过 Python 依赖问题，但 Kaniko 在 push permission check 阶段失败：
+
+```text
+checking push permission for "registry.example/deeptutor/test-cn/runtime:deploy-test-cn-v1.4.0-rc.10"
+proxyconnect tcp: dial tcp: lookup socks5h ... no such host
+```
+
+根因有两层：
+
+1. 当前被流水线实际使用的 release registry contract 仍是 `registry.example/...` 示例域名，不能作为真实 test-cn push 目标。
+2. runner 环境存在 SOCKS/HTTP proxy 变量；Kaniko/Go 对该 proxy URL 处理失败，访问 registry 时不应继承这些代理变量。
+
+修复：
+
+- `extensions/enterprise/protected-k8s-release-environments.example.json` 中各环境 registry repository 从 `registry.example/deeptutor/<env>` 调整为实际 Woodpecker 可访问的 `docker-hub.f123.pub/lfun/deeptutor/<env>`，仍按环境隔离 repository。
+- Kaniko build 和 manifest pre-deploy check 步骤在访问 registry 前显式 `unset SOCKS_PROXY/socks_proxy/ALL_PROXY/all_proxy/HTTPS_PROXY/https_proxy/HTTP_PROXY/http_proxy`。
+- 新增测试确保 example registry 不再包含 `registry.example`，并覆盖 proxy unset 与 Docker config username/password 形式。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.10` tag。
