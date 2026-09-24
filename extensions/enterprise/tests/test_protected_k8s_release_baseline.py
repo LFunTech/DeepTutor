@@ -902,6 +902,18 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert 'index = "%s"' in dockerfile
     assert "${CARGO_REGISTRY_MIRROR}" in dockerfile
     assert 'pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt' in dockerfile
+    assert "rm -rf /root/.cargo /root/.rustup" in dockerfile
+    assert "apt-get purge -y --auto-remove" in dockerfile
+    python_build_run = dockerfile.split("FROM ${PYTHON_IMAGE} AS python-base", 1)[1].split(
+        "FROM ${PYTHON_IMAGE} AS production", 1
+    )[0]
+    assert python_build_run.count("RUN set -eux;") == 1
+    assert python_build_run.find("apt-get update") < python_build_run.find(
+        'pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt'
+    )
+    assert python_build_run.find(
+        'pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt'
+    ) < python_build_run.find("apt-get purge -y --auto-remove")
 
     dockerignore = dockerignore_path.read_text(encoding="utf8")
     for required in (".secrets/", ".codegraph/", ".superpowers/", ".worktrees/", "**/.env", "**/.env.*"):

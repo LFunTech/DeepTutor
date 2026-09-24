@@ -1161,3 +1161,22 @@ Fetched 9379 kB in 9min 29s
 - 更新测试，确保流水线不再回退到 Tsinghua crates.io sparse index，而是使用内网 Cargo mirror。
 
 下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.17` tag。
+
+### 2026-09-24 test-cn pipeline #27 python-base 大层 snapshot 与第十四次修复
+
+`deploy/test-cn/v1.4.0-rc.19` 触发 Woodpecker pipeline `#27` 后，release gate、metadata 和 secret preflight 均通过。build step 日志确认镜像源策略已经生效：
+
+- Kaniko build args 使用 Tsinghua apt、内网 PyPI `https://mirror.f123.pub/repository/pypi/` 和内网 Cargo mirror `sparse+https://mirror.f123.pub/repository/rust/`。
+- apt 从 Tsinghua 下载 151MB 用约 25s，明显改善此前 `deb.debian.org` 下仅 apt index 就 9m29s 的问题。
+- Rustup stable toolchain 安装完成，Cargo config 写入内网 mirror。
+
+新的失败点不是镜像源，而是 Kaniko 在安装完 apt build dependencies 和 Rust toolchain 后执行 `Taking snapshot of full filesystem...`，日志没有后续错误行即 step failure，属于与前端 `node_modules` 层类似的大层 snapshot/runner 资源问题。
+
+修复：
+
+- 将 `python-base` 中 requirements 复制提前。
+- 将 apt build dependencies、Rustup/Cargo 配置、pip install 合并到单个 `RUN`，避免形成单独的 apt/Rust 大层。
+- 在同一 `RUN` 的末尾删除 `/root/.cargo`、`/root/.rustup`，并 `apt-get purge --auto-remove` build-only 依赖，再清理 apt/tmp 目录，让 Kaniko snapshot 最终状态而不是完整编译环境。
+- 更新测试，确保 `python-base` 只有一个 build RUN，且顺序为 apt/rust setup → pip install → purge/cleanup。
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.19` tag。

@@ -96,7 +96,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies
+# Add Rust to PATH for Python packages that build native extensions.
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Copy requirements before installing build dependencies so the apt/Rust/pip
+# work happens in a single layer.  Kaniko snapshots the final state of each RUN:
+# keeping build-essential, rustup toolchains and Cargo caches in a standalone
+# layer makes the snapshot too large for the protected release runner.
+COPY requirements/ ./requirements/
+COPY requirements.txt ./
+
+# Install Python dependencies with temporary build dependencies.
 # Note: libgl1 and libglib2.0-0 are required for OpenCV (used by mineru)
 # Rust is required for building tiktoken and other packages without pre-built wheels
 RUN set -eux; \
@@ -121,6 +131,7 @@ RUN set -eux; \
             /etc/apt/sources.list; \
     fi; \
     printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-ci-retries; \
+    export DEBIAN_FRONTEND=noninteractive; \
     apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
@@ -135,16 +146,22 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /root/.cargo \
     && printf '[source.crates-io]\nreplace-with = "mirror"\n\n[source.mirror]\nregistry = "%s"\n\n[registries.mirror]\nindex = "%s"\n' "${CARGO_REGISTRY_MIRROR}" "${CARGO_REGISTRY_MIRROR}" > /root/.cargo/config.toml \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-# Add Rust to PATH
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-# Copy requirements and install Python dependencies
-COPY requirements/ ./requirements/
-COPY requirements.txt ./
-RUN pip install --index-url "${PIP_INDEX_URL}" --upgrade pip && \
-    pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && pip install --index-url "${PIP_INDEX_URL}" --upgrade pip \
+    && pip install --index-url "${PIP_INDEX_URL}" -r requirements.txt \
+    && rm -rf /root/.cargo /root/.rustup \
+    && apt-get purge -y --auto-remove \
+        curl \
+        git \
+        build-essential \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        pkg-config \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # ============================================
 # Stage 3: Production Image
