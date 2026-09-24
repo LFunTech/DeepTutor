@@ -1149,3 +1149,15 @@ Fetched 9379 kB in 9min 29s
 - 新增/更新测试覆盖 apt/PyPI/Rustup/Cargo 镜像 build args，并禁止回退到 `PIP_TRUSTED_HOST` 或旧公网 PyPI 源。
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.16` tag。
+
+### 2026-09-24 test-cn pipeline #26 Cargo 镜像源修正
+
+`deploy/test-cn/v1.4.0-rc.17` 触发 Woodpecker pipeline `#26` 后，release gate、metadata 和 secret preflight 均通过，build step 已使用 Tsinghua apt 与内网 PyPI build args。随后根据目标环境镜像策略调整，停止该流水线，避免旧 Cargo mirror 配置继续推进到部署阶段。
+
+修复：
+
+- 保留 apt 使用 Tsinghua Debian mirror、PyPI 使用内网 `https://mirror.f123.pub/repository/pypi/`、Rustup 使用 Tsinghua mirror。
+- 将 Woodpecker Kaniko build arg `CARGO_REGISTRY_MIRROR` 改为内网 Cargo/Rust 镜像：`sparse+https://mirror.f123.pub/repository/rust/`。
+- 更新测试，确保流水线不再回退到 Tsinghua crates.io sparse index，而是使用内网 Cargo mirror。
+
+下一次触发使用新 commit 和新 tag；不移动已停止的 `rc.17` tag。

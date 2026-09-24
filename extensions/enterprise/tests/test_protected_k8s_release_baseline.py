@@ -781,7 +781,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert '--build-arg RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"' in pipeline
     assert '--build-arg RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"' in pipeline
     assert (
-        '--build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"'
+        '--build-arg CARGO_REGISTRY_MIRROR="sparse+https://mirror.f123.pub/repository/rust/"'
         in pipeline
     )
     assert "--cache-copy-layers" in pipeline
