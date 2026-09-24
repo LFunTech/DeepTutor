@@ -1029,3 +1029,39 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 ```
 
 下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.12` tag。
+
+### 2026-09-24 test-cn pipeline #20 Kaniko 单快照超时与第十次修复
+
+`deploy/test-cn/v1.4.0-rc.13` 触发 Woodpecker pipeline `#20` 后，release gate、metadata 和 secret preflight 继续通过。Kaniko 已成功拉取内部 base image，并完成前端 `npm ci` 与 Next.js production build；失败发生在 Kaniko 对 `frontend-builder` 大文件系统执行单快照时，日志最后停在：
+
+```text
+INFO[0580] Taking snapshot of full filesystem...
+```
+
+随后步骤失败（约 14.5 分钟后停止），没有进入后续 image push/pre-deploy check。根因：pipeline 使用 `--single-snapshot --snapshot-mode=redo`，在包含完整 Node toolchain、`node_modules` 与 Next.js build 输出的阶段上会触发超大的全文件系统快照，容易超过 Woodpecker/agent 的步骤运行窗口。Study Mate 的 Kaniko 流水线未使用单快照，而是使用 `--cache-copy-layers`。
+
+修复：所有 Kaniko build 步骤改为 Study Mate 同款模式：
+
+- `--context=dir:///woodpecker/src`、`--dockerfile=Dockerfile`；
+- `--cache=true --cache-copy-layers --cache-repo ...`；
+- 移除 `--single-snapshot` 与 `--snapshot-mode=redo`。
+
+新增测试确保 pipeline 包含 `--cache-copy-layers`，且不再包含单快照参数。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败的 `rc.13` tag。

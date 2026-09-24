@@ -772,6 +772,10 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy" in pipeline
     assert '--build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm"' in pipeline
     assert '--build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim"' in pipeline
+    assert "--context=dir:///woodpecker/src" in pipeline
+    assert "--cache-copy-layers" in pipeline
+    assert "--single-snapshot" not in pipeline
+    assert "--snapshot-mode=redo" not in pipeline
     assert ". ./.deeptutor-release.env" in pipeline
     assert "from_secret: DOCKER_USERNAME" in pipeline
     assert "from_secret: DOCKER_PASSWORD" in pipeline
