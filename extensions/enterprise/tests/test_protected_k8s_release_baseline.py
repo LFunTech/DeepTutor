@@ -865,12 +865,21 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert 'image: "${DEEPTUTOR_RUNTIME_IMAGE_DIGEST}"' in backend
     assert "replicas: ${DEEPTUTOR_BACKEND_EXECUTOR_REPLICAS}" in backend
     assert "type: Recreate" in backend
+    assert "containerPort: 8001" in backend
+    assert "name: backend-http" in backend
+    assert "containerPort: 3782" in backend
+    assert "targetPort: frontend-http" in backend
     assert ":latest" not in backend
+    assert 'PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"' in migration
+    assert "python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json schema plan" in migration
+    assert "deeptutor-enterprise --config" not in migration
     assert "release-lock" in migration
     assert "schema_history" in migration
     assert " bootstrap " in migration
     assert "--password-env DEEPTUTOR_BOOTSTRAP_ADMIN_PASSWORD" in migration
     assert "NetworkPolicy" in network
+    assert "port: 3782" in network
+    assert "port: 8001" in network
     hpa = (k8s_dir / "patches/autoscaling/hpa.yaml").read_text(encoding="utf8")
     assert "HorizontalPodAutoscaler" in hpa
     assert "pre-provisioned by the target environment contract" in readme
@@ -984,6 +993,10 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "FROM ${PYTHON_DEPS_IMAGE} AS python-deps" in protected_runtime_dockerfile
     assert "COPY deploy/docker-runtime/supervisord.conf" in protected_runtime_dockerfile
     assert "COPY deploy/docker-runtime/entrypoint.sh" in protected_runtime_dockerfile
+    assert (
+        "COPY extensions/enterprise/src/deeptutor_enterprise/ ./extensions/enterprise/src/deeptutor_enterprise/"
+        in protected_runtime_dockerfile
+    )
     assert (
         "COPY --from=python-deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages"
         in protected_runtime_dockerfile

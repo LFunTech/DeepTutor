@@ -1389,3 +1389,22 @@ web/.next
 - runtime 进程配置与启动脚本迁移为受版本控制文件：`deploy/docker-runtime/supervisord.conf`、`programs.conf`、`start-backend.sh`、`start-frontend.sh`、`entrypoint.sh`、`healthcheck.py`；脚本权限在源码中固定，避免镜像最终阶段额外 `chmod`。
 
 下一次触发使用新 commit 和新 tag；不移动已触发的 `rc.28` tag。
+
+### 2026-09-25 test-cn pipeline #37 migration Job 缺少 enterprise CLI 修正
+
+`deploy/test-cn/v1.4.0-rc.28` 的 `build-runtime-image-test-cn` 最终成功并推送 runtime digest，`pre-deploy-check-test-cn` 成功解析 digest，随后 `deploy-test-cn` 创建 `dt-migrate-test-cn-v1-4-0-rc-28` migration Job。只读检查 test 集群显示该 Job `Failed`，Pod 进入 `Error`，脱敏日志为：
+
+```text
+acquire release-lock and migration-lock for test-cn/test-cn-v1-4-0-rc-28
+/bin/sh: 2: deeptutor-enterprise: not found
+```
+
+根因：protected runtime image 只复制 core `deeptutor/` 与 `deeptutor_cli/`，没有把 `extensions/enterprise/src/deeptutor_enterprise` 纳入镜像；migration Job 依赖的 `deeptutor-enterprise` console script 也未通过 package install 生成。因此部署阶段不能调用企业 schema/bootstrap CLI。
+
+修复：
+
+- `Dockerfile.protected-runtime` 复制 `extensions/enterprise/src/deeptutor_enterprise/` 到 `/app/extensions/enterprise/src/deeptutor_enterprise/`。
+- `migration-job.yaml` 改为显式设置 `PYTHONPATH=/app:/app/extensions/enterprise/src`，并用 `python -m deeptutor_enterprise.cli ...` 调用 schema plan/apply/verify/bootstrap，避免依赖未安装的 console script。
+- 同步修正原生 K8s runtime 端口：容器暴露 backend `8001` 和 frontend `3782`；readinessProbe 使用 `backend-http`，Service/Ingress 走 `frontend-http`，NetworkPolicy 允许 `3782` 与 `8001`，与 runtime image 的 supervisord 启动脚本保持一致。
+
+下一次触发使用新 commit 和新 tag；不移动已失败/运行中的 `rc.28` tag。

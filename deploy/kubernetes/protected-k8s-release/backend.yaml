@@ -45,12 +45,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: http
+              port: backend-http
             periodSeconds: 10
             failureThreshold: 3
           ports:
-            - containerPort: 8000
-              name: http
+            - containerPort: 8001
+              name: backend-http
+            - containerPort: 3782
+              name: frontend-http
           resources:
             requests:
               cpu: "500m"
@@ -69,7 +71,10 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: http
+      targetPort: frontend-http
+    - name: backend-http
+      port: 8001
+      targetPort: backend-http
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

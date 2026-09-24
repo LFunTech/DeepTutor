@@ -47,6 +47,7 @@ COPY --from=frontend-artifact --chown=deeptutor:deeptutor /app/web/public/ ./web
 # Copy application source code.
 COPY deeptutor/ ./deeptutor/
 COPY deeptutor_cli/ ./deeptutor_cli/
+COPY extensions/enterprise/src/deeptutor_enterprise/ ./extensions/enterprise/src/deeptutor_enterprise/
 COPY scripts/ ./scripts/
 COPY pyproject.toml ./
 COPY requirements/ ./requirements/

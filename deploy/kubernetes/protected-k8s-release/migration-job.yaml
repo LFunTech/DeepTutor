@@ -38,13 +38,14 @@ spec:
             - -ceu
             - |
               echo "acquire release-lock and migration-lock for ${DEEPTUTOR_TARGET_ENV_ID}/${DEEPTUTOR_RELEASE_ID}"
-              deeptutor-enterprise --config /etc/deeptutor/deployment.json schema plan --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
-              deeptutor-enterprise --config /etc/deeptutor/deployment.json schema apply --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
-              deeptutor-enterprise --config /etc/deeptutor/deployment.json schema verify --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+              export PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"
+              python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json schema plan --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+              python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json schema apply --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
+              python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json schema verify --dsn-env DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL
               echo "verify schema_history drift before rollout"
               if [ -n "${DEEPTUTOR_BOOTSTRAP_ADMIN_USERNAME:-}" ]; then
                 : "${DEEPTUTOR_BOOTSTRAP_ADMIN_PASSWORD:?must be set when bootstrap admin is configured}"
-                deeptutor-enterprise --config /etc/deeptutor/deployment.json bootstrap --username "${DEEPTUTOR_BOOTSTRAP_ADMIN_USERNAME}" --password-env DEEPTUTOR_BOOTSTRAP_ADMIN_PASSWORD
+                python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json bootstrap --username "${DEEPTUTOR_BOOTSTRAP_ADMIN_USERNAME}" --password-env DEEPTUTOR_BOOTSTRAP_ADMIN_PASSWORD
               fi
           volumeMounts:
             - name: deployment-config

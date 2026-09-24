@@ -12,7 +12,9 @@ spec:
         - namespaceSelector: {}
       ports:
         - protocol: TCP
-          port: 8000
+          port: 3782
+        - protocol: TCP
+          port: 8001
   egress:
     - ports:
         - protocol: UDP
