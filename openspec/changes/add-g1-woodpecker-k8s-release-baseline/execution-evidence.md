@@ -832,3 +832,31 @@ PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_rel
 openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 # valid
 ```
+
+### 2026-09-24 test-cn pipeline #9 卡在在线依赖安装与第六次修复
+
+`deploy/test-cn/v1.4.0-rc.7` 触发 Woodpecker pipeline `#9` 后，`validate-release-trigger` 进入 `pip install pydantic>=2,<3`，不再报 SOCKS support 错误，但持续从 PyPI 下载并出现 read timeout/大依赖下载，导致 release gate 依赖外网与包仓库可用性。为避免长时间占用 agent，已停止该流水线，最终状态为 `killed`。
+
+根因：release gate CLI 位于源码树内，但顶层导入依赖 `protected_k8s_release.py` 的 Pydantic 模型，导致最早的门禁步骤必须在线安装依赖。对受保护发布门禁而言，这会把“校验 tag 与 release contract”的 fail-closed 前置步骤耦合到外网包下载，不适合作为企业发布基线。
+
+修复：`deeptutor_enterprise.protected_k8s_release_cli` 增加 stdlib-only fallback：当 runner 镜像没有 `pydantic` 时，CLI 的 `trigger` / `prepare-metadata` / `preflight` / `scan-evidence` 使用内置的最小发布契约解析、tag 校验、secret preflight 与 evidence 扫描；本地和完整依赖环境仍继续走 Pydantic 模型校验。`.woodpecker/protected-k8s-release.yml` 移除所有在线 `pip install pydantic` 命令，release gate 不再依赖运行时下载 Python 包。
+
+新增回归验证：测试通过 `sitecustomize.py` 在子进程中屏蔽 `pydantic` 导入，执行 `prepare-metadata` 并确认可生成 `trigger-gate.json` 与 `.deeptutor-release.env`。
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/src/deeptutor_enterprise/protected_k8s_release_cli.py extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 19 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# lint passes with the known clone image allow-list warning
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# valid
+```
+
+下一次触发使用新 commit 和新 tag；不移动已失败或 killed 的既有 tag。

@@ -56,7 +56,6 @@ steps:
           trusted_metadata_file="$EVIDENCE_DIR/gate/trusted-trigger-metadata.json"
           printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
         fi
-        env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
         PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli trigger --registry "$REGISTRY_FILE" --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output "$EVIDENCE_DIR/gate"
       - test "$(python -c 'import json; print(json.load(open("release-evidence/gate/trigger-gate.json"))["ready"])')" = "True"
 
@@ -81,7 +80,6 @@ steps:
           trusted_metadata_file="$EVIDENCE_DIR/metadata/trusted-trigger-metadata.json"
           printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
         fi
-        env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
         PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli prepare-metadata --registry "$REGISTRY_FILE" --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output-env-file "$RELEASE_ENV_FILE" --output "$EVIDENCE_DIR/metadata"
       - test -s "$RELEASE_ENV_FILE"
 
@@ -175,7 +173,6 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
@@ -205,7 +202,6 @@ steps:
       - export KUBECONFIG_DATA="$${KUBECONFIG}"
       - deploy/kubernetes/protected-k8s-release/deploy.sh
       - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"
 
@@ -299,7 +295,6 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
@@ -329,7 +324,6 @@ steps:
       - export KUBECONFIG_DATA="$${KUBECONFIG}"
       - deploy/kubernetes/protected-k8s-release/deploy.sh
       - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"
 
@@ -423,7 +417,6 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
@@ -453,7 +446,6 @@ steps:
       - export KUBECONFIG_DATA="$${KUBECONFIG}"
       - deploy/kubernetes/protected-k8s-release/deploy.sh
       - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"
 
@@ -547,7 +539,6 @@ steps:
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
       - mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - scripts/protected-k8s-release/collect-secret-preflight-status.sh "$${DEEPTUTOR_TARGET_ENV_ID}" > "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli preflight --registry "$REGISTRY_FILE" --target-env-id "$${DEEPTUTOR_TARGET_ENV_ID}" --available-secrets "$${DEEPTUTOR_EVIDENCE_DIR}/preflight/available-secrets.json" --output "$${DEEPTUTOR_EVIDENCE_DIR}/preflight"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/preflight/secret-preflight.json"))["ready"])')" = "True"
 
@@ -577,6 +568,5 @@ steps:
       - export KUBECONFIG_DATA="$${KUBECONFIG}"
       - deploy/kubernetes/protected-k8s-release/deploy.sh
       - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
-      - env -u SOCKS_PROXY -u socks_proxy -u ALL_PROXY -u all_proxy -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -m pip install --no-cache-dir --break-system-packages 'pydantic>=2,<3'
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"

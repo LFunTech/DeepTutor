@@ -650,6 +650,87 @@ def test_protected_k8s_release_cli_prepares_sourceable_release_metadata(tmp_path
     assert "TOKEN" not in output_env.read_text(encoding="utf8")
 
 
+def test_protected_k8s_release_cli_runs_gate_without_pydantic_dependency(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2].parent
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps(_registry(), ensure_ascii=False), encoding="utf8")
+    metadata_path = tmp_path / "trusted-trigger-metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "protected_ref": True,
+                "approved": True,
+                "approval_id": "approval-123",
+                "actor": "release-manager",
+                "tag_object_sha": _TAG_SHA,
+                "commit_sha": _SHA_A,
+                "trust_source": "vcs-protected-tag-api",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf8",
+    )
+    (tmp_path / "sitecustomize.py").write_text(
+        """
+import builtins
+_real_import = builtins.__import__
+def _blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == 'pydantic' or name.startswith('pydantic.'):
+        raise ModuleNotFoundError("No module named 'pydantic'", name='pydantic')
+    return _real_import(name, globals, locals, fromlist, level)
+builtins.__import__ = _blocked_import
+""".lstrip(),
+        encoding="utf8",
+    )
+    output_dir = tmp_path / "metadata"
+    output_env = tmp_path / ".deeptutor-release.env"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(tmp_path), str(root / "extensions/enterprise/src")]
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "deeptutor_enterprise.protected_k8s_release_cli",
+            "prepare-metadata",
+            "--registry",
+            str(registry_path),
+            "--event",
+            "tag",
+            "--ref",
+            "refs/tags/deploy/test-cn/v1.4.0-rc.8",
+            "--tag",
+            "deploy/test-cn/v1.4.0-rc.8",
+            "--trusted-metadata",
+            str(metadata_path),
+            "--output-env-file",
+            str(output_env),
+            "--output",
+            str(output_dir),
+        ],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    captured = json.loads(result.stdout)
+    payload = json.loads(Path(captured["trigger_gate"]).read_text(encoding="utf8"))
+    env_values = _read_shell_exports(Path(captured["release_env"]))
+    assert payload["ready"] is True
+    assert payload["target_env_id"] == "test-cn"
+    assert env_values["DEEPTUTOR_TARGET_ENV_ID"] == "test-cn"
+    assert env_values["DEEPTUTOR_RELEASE_VERSION"] == "v1.4.0-rc.8"
+
+
 def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven():
     from deeptutor_enterprise.protected_k8s_release import EnvironmentRegistry
 
@@ -677,8 +758,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "docker-hub.f123.pub/woodpeckerci/plugin-git:2.8.1" in pipeline
     assert "docker-hub.f123.pub/devops/kaniko:v1.14.0-debug" in pipeline
     assert "docker-hub.f123.pub/base/ci-tools:alpine-3.22.4" in pipeline
-    assert "pydantic>=2,<3" in pipeline
-    assert "env -u SOCKS_PROXY" in pipeline
+    assert "pydantic>=2,<3" not in pipeline
+    assert "pip install" not in pipeline
     assert ". ./.deeptutor-release.env" in pipeline
     assert "from_secret: DOCKER_USERNAME" in pipeline
     assert "from_secret: DOCKER_PASSWORD" in pipeline
@@ -1080,7 +1161,8 @@ def test_protected_k8s_release_cli_trigger_requires_trusted_metadata(tmp_path, c
 
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(json.dumps(_registry(), ensure_ascii=False), encoding="utf8")
-    output_dir = tmp_path / "trigger"
+    output_dir = tmp_path / "metadata"
+    output_env = tmp_path / ".deeptutor-release.env"
 
     with pytest.raises(SystemExit):
         main(
