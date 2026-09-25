@@ -37,6 +37,15 @@ def count(dsn):
         return c.execute("SELECT count(*) FROM core_test.items").fetchone()[0]
 
 
+def test_restricted_role_sql_is_compatible_with_pg14_auth_members_catalog():
+    query = core()._RESTRICTED_ROLE_SQL
+
+    assert "m.inherit_option" not in query
+    assert "m.set_option" not in query
+    assert "to_jsonb(m)->>'inherit_option'" in query
+    assert "to_jsonb(m)->>'set_option'" in query
+
+
 def test_sync_scope_reuse_rls_rollback_and_scope_validation(restricted_dsn, pg_dsn):
     a, b = scope(), scope("bob")
     with core().SyncDatabase(restricted_dsn, resource="core", max_size=1) as db:

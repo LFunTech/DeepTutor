@@ -33,7 +33,9 @@ WITH RECURSIVE reachable(oid) AS (
     SELECT oid FROM pg_roles WHERE rolname IN (current_user, session_user)
     UNION
     SELECT m.roleid FROM pg_auth_members m JOIN reachable a ON a.oid=m.member
-    WHERE m.inherit_option OR m.set_option OR m.admin_option
+    WHERE coalesce((to_jsonb(m)->>'inherit_option')::boolean, true)
+       OR coalesce((to_jsonb(m)->>'set_option')::boolean, true)
+       OR coalesce((to_jsonb(m)->>'admin_option')::boolean, false)
 )
 SELECT EXISTS (
     SELECT 1 FROM reachable a JOIN pg_roles r ON r.oid=a.oid

@@ -1807,3 +1807,54 @@ syntax probe ok; transaction rolled back
 ```
 
 临时 probe Job 与 ConfigMap 已从 `deeptutor-test-cn` namespace 删除。下一步需要提交该兼容修复并触发 `deploy/test-cn/v1.4.0-rc.32`。
+
+### 2026-09-25 test-cn pipeline #42 schema apply/verify 通过，bootstrap 前 PG14 角色检查修正
+
+`deploy/test-cn/v1.4.0-rc.32` 触发 Woodpecker pipeline `#42`，使用 commit `5a55844f`。
+
+结果：
+
+- release trigger、metadata、并行 artifact image、secret preflight、runtime image build、pre-deploy check 均成功。
+- `deploy-test-cn` 中 migration Job `dt-migrate-test-cn-v1-4-0-rc-32` 执行：
+  - `schema plan` 列出所有 pending migrations；
+  - `schema apply` 返回 `{"schema": "apply", "success": true}`；
+  - `schema verify` 返回 `{"schema": "verify", "success": true}`。
+- 说明 #40 的 PostgreSQL 14 migration SQL 语法问题已修复，test-cn 数据库已成功初始化/验证 DeepTutor + EduPlus2 schema。
+- 新失败点发生在随后 bootstrap 阶段，类型为 `UndefinedColumn`。
+
+脱敏 traceback 通过同 image / 同 ConfigMap / 同 Secret 的临时 debug Job 获取：
+
+```text
+psycopg.errors.UndefinedColumn: column m.inherit_option does not exist
+LINE 6:     WHERE m.inherit_option OR m.set_option OR m.admin_option
+```
+
+根因：runtime `Database` 的受限角色检查直接引用了 PostgreSQL 16+ 的 `pg_auth_members.inherit_option` / `set_option` 列；test-cn PostgreSQL 为 `server_version_num=140024`，这些列不存在。
+
+实现修正：
+
+- `_RESTRICTED_ROLE_SQL` 改为通过 `to_jsonb(m)->>'inherit_option'` / `set_option` / `admin_option` 读取成员关系选项，避免直接引用不存在的 catalog 列。
+- 对 PG16+：继续按 grant option 判断可继承/可 SET/admin membership 路径。
+- 对 PG14：缺少 `inherit_option`/`set_option` 时保守视为 membership reachable，从而仍能拒绝通过成员关系到达 superuser/createdb/createrole/bypassrls 的用户。
+- 增加单元测试，禁止重新直接引用 `m.inherit_option` / `m.set_option`。
+
+Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check \
+  deeptutor/persistence/postgres/connection.py \
+  tests/persistence/postgres/test_connection.py
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  tests/persistence/postgres/test_connection.py -q
+# 57 passed
+```
+
+Kubernetes test-cn 连接探测：使用 #42 runtime image，挂载修复后的 `connection.py`，同 ConfigMap/Secret，仅打开 `Database` 连接，不执行 bootstrap 写入；临时 Job/ConfigMap 已删除。
+
+```text
+{'database_open': True, 'server_version_num': '140024', 'user': 'deeptutor'}
+```
+
+后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.33`。由于 #42 已成功完成 schema apply/verify，下一次 migration Job 应进入空 plan/verify，然后继续 bootstrap 与后续 rollout/smoke。
