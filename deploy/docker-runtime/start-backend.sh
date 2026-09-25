@@ -1,11 +1,19 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 BACKEND_PORT=${BACKEND_PORT:-8001}
 BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
 BACKEND_WORKERS=${BACKEND_WORKERS:-1}
 
+if [ -n "${DEEPTUTOR_POSTGRES_CONFIG:-}" ] && [ -f "${DEEPTUTOR_POSTGRES_CONFIG}" ]; then
+    export PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"
+    DEEPTUTOR_BACKEND_APP_MODULE=${DEEPTUTOR_BACKEND_APP_MODULE:-deeptutor_enterprise.runtime_app:app}
+else
+    DEEPTUTOR_BACKEND_APP_MODULE=${DEEPTUTOR_BACKEND_APP_MODULE:-deeptutor.api.main:app}
+fi
+
 echo "[Backend]  🚀 Starting FastAPI backend on ${BACKEND_HOST}:${BACKEND_PORT}..."
+echo "[Backend]  📦 ASGI app: ${DEEPTUTOR_BACKEND_APP_MODULE}"
 
 # Run uvicorn directly - the application's logging system already handles:
 # 1. Console output (visible in docker logs)
@@ -26,4 +34,4 @@ echo "[Backend]  🚀 Starting FastAPI backend on ${BACKEND_HOST}:${BACKEND_PORT
 # reaper so the client is the only side retiring idle connections.
 WS_MAX_SIZE=$(python -c "from deeptutor.services.config import get_ws_max_size; print(get_ws_max_size())" 2>/dev/null || echo 16777216)
 KEEP_ALIVE=$(python -c "from deeptutor.services.config import HTTP_KEEP_ALIVE_TIMEOUT; print(HTTP_KEEP_ALIVE_TIMEOUT)" 2>/dev/null || echo 300)
-exec python -m uvicorn deeptutor.api.main:app --host ${BACKEND_HOST} --port ${BACKEND_PORT} --workers ${BACKEND_WORKERS} --no-access-log --no-proxy-headers --ws-max-size ${WS_MAX_SIZE} --timeout-keep-alive ${KEEP_ALIVE}
+exec python -m uvicorn "${DEEPTUTOR_BACKEND_APP_MODULE}" --host "${BACKEND_HOST}" --port "${BACKEND_PORT}" --workers "${BACKEND_WORKERS}" --no-access-log --no-proxy-headers --ws-max-size "${WS_MAX_SIZE}" --timeout-keep-alive "${KEEP_ALIVE}"

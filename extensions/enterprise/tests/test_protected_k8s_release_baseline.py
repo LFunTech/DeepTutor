@@ -869,6 +869,12 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     network = (k8s_dir / "networkpolicy.yaml").read_text(encoding="utf8")
     deploy_script = (k8s_dir / "deploy.sh").read_text(encoding="utf8")
     status_script = (k8s_dir / "status.sh").read_text(encoding="utf8")
+    backend_start_script = (root / "deploy" / "docker-runtime" / "start-backend.sh").read_text(
+        encoding="utf8"
+    )
+    supervisor_programs = (root / "deploy" / "docker-runtime" / "programs.conf").read_text(
+        encoding="utf8"
+    )
     readme = k8s_readme.read_text(encoding="utf8")
     assert 'image: "${DEEPTUTOR_RUNTIME_IMAGE_DIGEST}"' in backend
     assert "replicas: ${DEEPTUTOR_BACKEND_EXECUTOR_REPLICAS}" in backend
@@ -883,6 +889,10 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "mountPath: /etc/deeptutor" in backend
     assert "name: deeptutor-deployment-config" in backend
     assert ":latest" not in backend
+    assert 'PYTHONPATH="/app:/app/extensions/enterprise/src' in supervisor_programs
+    assert "DEEPTUTOR_POSTGRES_CONFIG" in backend_start_script
+    assert "deeptutor_enterprise.runtime_app:app" in backend_start_script
+    assert "DEEPTUTOR_BACKEND_APP_MODULE" in backend_start_script
     assert 'PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"' in migration
     assert "python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json schema plan" in migration
     assert "deeptutor-enterprise --config" not in migration
