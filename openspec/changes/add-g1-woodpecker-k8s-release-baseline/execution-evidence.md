@@ -2063,3 +2063,5 @@ NAME                              STATUS     COMPLETIONS
 ```
 
 因此，D2.2 的 test-cn 真实入口已完成：受保护 deployment tag 解析 `target_env_id=test-cn` 与 version，完成并行构建、runtime image push/digest resolve、pre-deploy gate 和 deploy evidence。D3.2 仍不标记完成，因为完整 runtime smoke（HTTP/WS/EduPlus2/resource/ObjectStore/LightRAG/audit 经真实 Ingress/TLS）尚未全部接入并通过。
+
+Webhook token follow-up：在 #49 验证完成后再次执行 `woodpecker-cli repo repair LFunTech/DeepTutor`，仅以 SHA-256 hash 对比 hook URL，确认 hook URL hash 已变化；GitHub 当前 active hook id 为 `685416006`，events 包含 `push`，未输出新的 hook URL/access token。repair 后 `woodpecker-cli pipeline ls` 仍显示最新 release pipeline 为 #49，未误触发新的部署 run。
