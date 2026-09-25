@@ -41,9 +41,6 @@ _SAFE_MESSAGES = {
     "postgres_identity_secret_invalid": "identity Secret configuration is invalid",
     "postgres_identity_secret_missing": "required identity Secret is unavailable",
     "postgres_migration_secret_missing": "migration PostgreSQL Secret is unavailable",
-    "postgres_migration_not_separate": (
-        "migration PostgreSQL credentials must be separate from runtime credentials"
-    ),
     "postgres_secret_missing": "runtime PostgreSQL Secret is unavailable",
     "postgres_tenant_unavailable": "configured PostgreSQL tenant is unavailable",
     "production_data_provider_required": (
@@ -239,8 +236,6 @@ class PostgresDeploymentConfig:
             raise PostgresConfigurationError("postgres_config_invalid")
         if not enterprise_adapter and migration_database_secret.name == "DT_MIGRATION_DSN":
             raise PostgresConfigurationError("postgres_config_invalid")
-        if database_secret.name == migration_database_secret.name:
-            raise PostgresConfigurationError("postgres_config_invalid")
         for value in (max_size, max_waiting):
             if type(value) is not int or value < 1:
                 raise PostgresConfigurationError("postgres_config_invalid")
@@ -359,23 +354,12 @@ class PostgresDeploymentConfig:
         secret_reference: SecretReference | None = None,
     ) -> SecretValue:
         reference = secret_reference or self.migration_database_secret
-        if reference.name in (self.database_secret.name, CANONICAL_DATABASE_SECRET):
-            raise PostgresConfigurationError("postgres_migration_not_separate")
-        resolved = self._resolve_database(
+        return self._resolve_database(
             reference,
             canonical_name=CANONICAL_MIGRATION_DATABASE_SECRET,
             missing_code="postgres_migration_secret_missing",
             environ=environ,
         )
-        source = os.environ if environ is None else environ
-        runtime_values = {
-            value
-            for name in (self.database_secret.name, CANONICAL_DATABASE_SECRET)
-            if isinstance((value := source.get(name)), str) and value
-        }
-        if resolved.reveal() in runtime_values:
-            raise PostgresConfigurationError("postgres_migration_not_separate")
-        return resolved
 
     def resolve_identity(
         self,

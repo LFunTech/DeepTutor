@@ -104,23 +104,23 @@ def test_runtime_accepts_quoted_conninfo_values_containing_uri_delimiter():
     assert resolved.reveal() == dsn
 
 
-def test_migration_secret_cannot_reuse_runtime_secret_reference_or_value():
-    with pytest.raises(PostgresConfigurationError) as same_reference:
-        minimal_config(
-            migration_database_secret="env:DEEPTUTOR_DATABASE_URL",
-        )
-    assert same_reference.value.code == "postgres_config_invalid"
+def test_migration_resolution_accepts_runtime_dsn_reference_or_value_without_leaking():
+    same_reference = minimal_config(
+        migration_database_secret="env:DEEPTUTOR_DATABASE_URL",
+    )
+    env = {CANONICAL_DATABASE_SECRET: DATABASE_DSN}
 
-    config = minimal_config()
-    with pytest.raises(PostgresConfigurationError) as same_value:
-        config.resolve_migration(
-            environ={
-                CANONICAL_DATABASE_SECRET: DATABASE_DSN,
-                CANONICAL_MIGRATION_DATABASE_SECRET: DATABASE_DSN,
-            }
-        )
-    assert same_value.value.code == "postgres_migration_not_separate"
-    assert DATABASE_DSN not in str(same_value.value)
+    assert same_reference.resolve_migration(environ=env).reveal() == DATABASE_DSN
+
+    default_config = minimal_config()
+    shared_value = default_config.resolve_migration(
+        environ={
+            CANONICAL_DATABASE_SECRET: DATABASE_DSN,
+            CANONICAL_MIGRATION_DATABASE_SECRET: DATABASE_DSN,
+        }
+    )
+    assert shared_value.reveal() == DATABASE_DSN
+    assert DATABASE_DSN not in repr(shared_value)
 
 
 @pytest.mark.parametrize(

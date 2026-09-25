@@ -103,30 +103,8 @@ print(string.Template(source).safe_substitute(os.environ))
 PY
 }
 
-secret_data_b64() {
-  local secret_name="$1"
-  local key="$2"
-  kubectl -n "${namespace}" get secret "${secret_name}" -o "jsonpath={.data.${key}}" 2>/dev/null || true
-}
-
-require_separate_pg_migrator_secret() {
-  local secret_name="deeptutor-migrator-secrets"
-  local runtime_key="DEEPTUTOR_POSTGRES_DATABASE_URL"
-  local migration_key="DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL"
-  local runtime_dsn_b64
-  local migration_dsn_b64
-
-  runtime_dsn_b64="$(secret_data_b64 "${secret_name}" "${runtime_key}")"
-  migration_dsn_b64="$(secret_data_b64 "${secret_name}" "${migration_key}")"
-  if [ -n "${runtime_dsn_b64}" ] && [ -n "${migration_dsn_b64}" ] && [ "${runtime_dsn_b64}" = "${migration_dsn_b64}" ]; then
-    echo "${secret_name}:${runtime_key} and ${migration_key} runtime and migrator PostgreSQL DSN are identical; provision a separate migrator DSN before deployment" >&2
-    exit 1
-  fi
-}
-
 kubectl cluster-info >/dev/null
 kubectl -n "${namespace}" get namespace "${namespace}" >/dev/null
-require_separate_pg_migrator_secret
 
 render_manifest "${manifest_dir}/networkpolicy.yaml" | kubectl -n "${namespace}" apply -f -
 render_manifest "${manifest_dir}/migration-job.yaml" | kubectl -n "${namespace}" apply -f -

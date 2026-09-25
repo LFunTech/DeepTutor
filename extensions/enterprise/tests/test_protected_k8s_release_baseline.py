@@ -1171,7 +1171,7 @@ def test_protected_k8s_deploy_script_rejects_replicas_without_redis_before_kubec
     assert "kubectl" not in result.stderr
 
 
-def test_protected_k8s_deploy_script_fails_fast_when_runtime_and_migrator_pg_dsn_match(
+def test_protected_k8s_deploy_script_allows_shared_runtime_and_migrator_pg_dsn(
     tmp_path,
 ):
     import os
@@ -1232,13 +1232,14 @@ exit 0
         check=False,
     )
 
-    assert result.returncode == 1
-    assert "runtime and migrator PostgreSQL DSN are identical" in result.stderr
-    assert "provision a separate migrator DSN" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert "runtime and migrator PostgreSQL DSN are identical" not in result.stderr
+    assert "provision a separate migrator DSN" not in result.stderr
     assert "postgresql://" not in result.stderr
     log_text = kubectl_log.read_text(encoding="utf8")
-    assert "get secret deeptutor-migrator-secrets" in log_text
-    assert "apply -f -" not in log_text
+    assert "get secret deeptutor-migrator-secrets" not in log_text
+    assert "apply -f -" in log_text
+    assert "rollout status deployment/deeptutor-backend" in log_text
 
 
 def test_prepare_test_woodpecker_secrets_prefers_existing_global_kubectl_and_registry(

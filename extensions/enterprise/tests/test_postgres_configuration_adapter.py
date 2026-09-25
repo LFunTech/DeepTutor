@@ -112,21 +112,21 @@ def test_remote_cli_does_not_resolve_local_database_or_identity_secrets(
     assert json.loads(capsys.readouterr().out) == {"remote": True, "resource": "adapter-test"}
 
 
-def test_schema_cli_requires_its_explicit_secret_and_rejects_canonical_conflict(
+def test_schema_cli_accepts_shared_runtime_dsn_and_rejects_canonical_conflict(
     tmp_path, monkeypatch, capsys
 ):
     from deeptutor_enterprise import cli
 
     constructed = []
 
-    class UnexpectedRunner:
+    class RecordingRunner:
         def __init__(self, dsn):
             constructed.append(dsn)
 
         async def plan(self):
-            raise AssertionError("conflicting Secret must fail before database access")
+            return []
 
-    monkeypatch.setattr("deeptutor_enterprise.migrations.runner.MigrationRunner", UnexpectedRunner)
+    monkeypatch.setattr("deeptutor_enterprise.migrations.runner.MigrationRunner", RecordingRunner)
 
     path = tmp_path / "deployment.json"
     path.write_text(deployment().model_dump_json(), encoding="utf8")
@@ -175,11 +175,12 @@ def test_schema_cli_requires_its_explicit_secret_and_rejects_canonical_conflict(
                 "DEEPTUTOR_DATABASE_URL",
             ]
         )
-        == 1
+        == 0
     )
-    third_error = capsys.readouterr().err
-    assert "runtime-sentinel" not in third_error
-    assert constructed == []
+    third_output = capsys.readouterr()
+    assert "runtime-sentinel" not in third_output.out
+    assert "runtime-sentinel" not in third_output.err
+    assert constructed == ["postgresql://app:runtime-sentinel@db.example/deeptutor"]
 
 
 @pytest.mark.asyncio

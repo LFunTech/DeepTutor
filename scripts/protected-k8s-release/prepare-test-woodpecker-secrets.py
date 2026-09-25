@@ -91,7 +91,7 @@ def _preflight_metadata() -> str:
         "REGISTRY_PUSH_TOKEN": "registry_push:test-cn/runtime",
         "KUBE_DEPLOY_TOKEN": "k8s_deploy:test-cn:namespace/deeptutor-test-cn",
         "SECRETSTORE_ROLE": "secret_store:test-cn/platform-refs-only",
-        "PG_MIGRATOR_DSN": "pg_migrator:test-cn/schema-migrate",
+        "PG_MIGRATOR_DSN": "pg_shared:test-cn/schema-runtime",
         "APP_DB_SECRET_REF": "runtime_secret_ref:test-cn/app-db",
         "OBJECTSTORE_SECRET_REF": "runtime_secret_ref:test-cn/objectstore",
         "LIGHTRAG_API_SECRET_REF": "runtime_secret_ref:test-cn/lightrag-api",

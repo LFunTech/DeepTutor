@@ -1487,3 +1487,71 @@ docker build --check -f Dockerfile.protected-runtime .
 git diff --check
 # exit 0
 ```
+
+### 2026-09-25 用户决策更新：test-cn 使用同一个 PostgreSQL 连接
+
+用户确认 `DT_TEST_CN_PG_MIGRATOR_DSN` 不需要独立 migrator role/DSN，按 test-cn 当前环境约束使用与标准数据库连接一致的 PostgreSQL DSN。本节 supersede 前一节“相同 runtime/migrator PostgreSQL DSN fail-fast”的实现决策；#38 的构建链路结论仍有效，但 deploy 不再因 migration/runtime DSN 值相同而 fail closed。
+
+本轮调整：
+
+- `PostgresDeploymentConfig.resolve_migration()` 允许 migration DSN 与 runtime DSN 使用同一个环境变量引用或同一个 DSN 值。
+- `deploy/kubernetes/protected-k8s-release/deploy.sh` 删除 `deeptutor-migrator-secrets` 中两个 PG DSN data 项相同即失败的前置校验。
+- protected K8s deploy 测试改为验证 shared runtime/migrator DSN 不会被本地 deploy 脚本阻断，仍会继续 apply 原生 Kubernetes YAML 并 rollout。
+- test-cn secret 生成与示例环境 registry 中 PG metadata 文案改为 shared PostgreSQL deployment connection，不再描述为独立 migration role。
+
+RED/GREEN：
+
+```bash
+PYTHONPATH=. .venv/bin/pytest \
+  tests/persistence/postgres/test_configuration.py::test_migration_resolution_accepts_runtime_dsn_reference_or_value_without_leaking -q
+# RED：from_mapping/resolve_migration 仍拒绝 shared runtime DSN。
+# GREEN：1 passed。
+
+PYTHONPATH=. .venv/bin/pytest \
+  extensions/enterprise/tests/test_postgres_configuration_adapter.py::test_schema_cli_accepts_shared_runtime_dsn_and_rejects_canonical_conflict -q
+# RED：enterprise schema CLI 使用 --dsn-env DEEPTUTOR_DATABASE_URL 时仍报 PostgresConfigurationError。
+# GREEN：1 passed。
+
+PYTHONPATH=. .venv/bin/pytest \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_deploy_script_allows_shared_runtime_and_migrator_pg_dsn -q
+# RED：deploy.sh 仍因两个 K8s Secret data 值相同而 fail-fast。
+# GREEN：1 passed。
+```
+
+风险/边界：该变更仅取消“必须使用独立 DB role”的配置门禁；实际 schema apply/verify 是否成功仍取决于 test-cn 当前 DB 用户是否拥有已存在 schema 的验证权限以及必要 DDL 权限。若后续 migration Job 进入数据库权限错误，应按真实错误继续排查，而不是恢复 DSN 分离门禁。
+
+本轮 shared PostgreSQL connection 提交前验证：
+
+```bash
+.venv/bin/ruff check \
+  deeptutor/persistence/postgres/configuration.py \
+  extensions/enterprise/tests/test_postgres_configuration_adapter.py \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py \
+  tests/persistence/postgres/test_configuration.py \
+  scripts/protected-k8s-release/prepare-test-woodpecker-secrets.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest tests/persistence/postgres/test_configuration.py -q
+# 23 passed
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_postgres_configuration_adapter.py -q
+# 5 passed
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 20 passed
+
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# exit 0；保留既有 clone.git allow-list warning。
+
+bash -n deploy/kubernetes/protected-k8s-release/deploy.sh
+# exit 0
+
+git diff --check
+# exit 0
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# Change valid
+
+openspec validate --all --strict
+# 16 passed, 0 failed
+```
