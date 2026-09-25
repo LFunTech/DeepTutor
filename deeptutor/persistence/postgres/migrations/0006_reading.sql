@@ -60,7 +60,7 @@ CREATE TABLE enterprise.reading_workspace_materials (
  FOREIGN KEY (tenant_id, owner_id, material_id) REFERENCES enterprise.reading_materials(tenant_id, owner_id, material_id) ON DELETE CASCADE,
  CHECK ((tab_order >= 0))
 );
-ALTER TABLE enterprise.reading_workspaces ADD FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) ON DELETE SET NULL (active_material_id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE enterprise.reading_workspaces ADD FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) DEFERRABLE INITIALLY DEFERRED;
 CREATE TABLE enterprise.reading_workspace_sessions (
  tenant_id uuid NOT NULL,
  owner_id text NOT NULL,
@@ -77,8 +77,28 @@ CREATE TABLE enterprise.reading_workspace_sessions (
  CHECK ((version > 0)),
  FOREIGN KEY (tenant_id, owner_id, workspace_id) REFERENCES enterprise.reading_workspaces(tenant_id, owner_id, workspace_id) ON DELETE CASCADE,
  FOREIGN KEY (tenant_id, owner_id, session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id) ON DELETE CASCADE,
- FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) ON DELETE SET NULL (active_material_id) DEFERRABLE INITIALLY DEFERRED
+ FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) DEFERRABLE INITIALLY DEFERRED
 );
+CREATE FUNCTION enterprise.detach_reading_active_material_before_membership_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+ UPDATE enterprise.reading_workspaces
+    SET active_material_id = NULL
+  WHERE tenant_id = OLD.tenant_id
+    AND owner_id = OLD.owner_id
+    AND workspace_id = OLD.workspace_id
+    AND active_material_id = OLD.material_id;
+ UPDATE enterprise.reading_workspace_sessions
+    SET active_material_id = NULL
+  WHERE tenant_id = OLD.tenant_id
+    AND owner_id = OLD.owner_id
+    AND workspace_id = OLD.workspace_id
+    AND active_material_id = OLD.material_id;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER detach_reading_active_material_before_membership_delete
+BEFORE DELETE ON enterprise.reading_workspace_materials
+FOR EACH ROW EXECUTE FUNCTION enterprise.detach_reading_active_material_before_membership_delete();
 CREATE TABLE enterprise.reading_session_links (
  tenant_id uuid NOT NULL,
  owner_id text NOT NULL,

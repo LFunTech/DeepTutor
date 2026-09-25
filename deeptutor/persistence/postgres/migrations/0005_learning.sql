@@ -86,8 +86,21 @@ CREATE TABLE enterprise.mastery_path_operations (
  CHECK(path_ref=path_id OR path_ref IS NULL),
  CHECK(status<>'active' OR path_ref IS NOT NULL),
  FOREIGN KEY(tenant_id,owner_id) REFERENCES enterprise.users(tenant_id,id),
- FOREIGN KEY(tenant_id,owner_id,path_ref) REFERENCES enterprise.mastery_paths(tenant_id,owner_id,path_id) ON DELETE SET NULL (path_ref)
+ FOREIGN KEY(tenant_id,owner_id,path_ref) REFERENCES enterprise.mastery_paths(tenant_id,owner_id,path_id)
 );
+CREATE FUNCTION enterprise.detach_mastery_path_operations_before_path_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+ UPDATE enterprise.mastery_path_operations
+    SET path_ref = NULL
+  WHERE tenant_id = OLD.tenant_id
+    AND owner_id = OLD.owner_id
+    AND path_ref = OLD.path_id;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER detach_mastery_path_operations_before_path_delete
+BEFORE DELETE ON enterprise.mastery_paths
+FOR EACH ROW EXECUTE FUNCTION enterprise.detach_mastery_path_operations_before_path_delete();
 CREATE TABLE enterprise.mastery_path_leases (
  tenant_id uuid NOT NULL, owner_id text NOT NULL, path_id text NOT NULL,
  kind text NOT NULL CHECK(kind IN ('turn','operation')),

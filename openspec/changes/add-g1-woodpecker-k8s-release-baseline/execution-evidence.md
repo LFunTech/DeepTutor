@@ -1740,3 +1740,70 @@ git diff --check
 ```
 
 后续：需要 commit/push 后触发新的 test-cn deployment tag；新的真实流水线应复用现有 test-cn DB 连接执行迁移，不再因 `CREATE ROLE` / `CREATEROLE` 阻断。
+
+### 2026-09-25 test-cn pipeline #40 PostgreSQL 14 迁移语法兼容修正
+
+`deploy/test-cn/v1.4.0-rc.31` 触发 Woodpecker pipeline `#40`，使用 commit `8007be34`。
+
+结果：
+
+- release trigger、metadata、frontend artifact image、python deps artifact image、runtime base artifact image、secret preflight、runtime image build 和 pre-deploy check 均成功。
+- `deploy-test-cn` 创建 migration Job `dt-migrate-test-cn-v1-4-0-rc-31` 后失败。
+- #39 的 `CREATEROLE` 阻断已消失；本次失败发生在 core migration `0005_learning` 的 SQL 语法解析阶段。
+
+Woodpecker/K8s 失败摘要（脱敏）：
+
+```text
+job.batch/dt-migrate-test-cn-v1-4-0-rc-31 created
+{"pending": ["0001_identity_sessions", "0002_account_profiles_devices", "0003_device_usage_precision", "0004_notebook_entries_categories", "0005_learning", ...]}
+企业操作失败（SyntaxError）；检查配置、权限和运行状态
+```
+
+临时只读/回滚式语法探测显示真实 PostgreSQL 版本为 `server_version_num=140024`，根因是迁移中使用了 PostgreSQL 15+ 才支持的 column-list `ON DELETE SET NULL (...)` 语法。具体失败点：
+
+```text
+psycopg.errors.SyntaxError: syntax error at or near "("
+LINE 89: ...hs(tenant_id,owner_id,path_id) ON DELETE SET NULL (path_ref)
+```
+
+实现修正：
+
+- 移除 core migrations 与 catalog 中所有 `ON DELETE SET NULL (<column>)` / `ON DELETE SET NULL(<column>)` 形式，避免依赖 PostgreSQL 15+ 语法。
+- `0005_learning.sql`：`mastery_path_operations.path_ref` 不再使用 column-list SET NULL；新增 `BEFORE DELETE ON enterprise.mastery_paths` trigger，将相关 `path_ref` 置空后再删除 path。
+- `0006_reading.sql`：reading active material FK 改为普通 deferrable FK；保留应用层先清理 active material 的既有逻辑，并新增 `BEFORE DELETE ON enterprise.reading_workspace_materials` trigger 兜底清理 workspace/session 的 `active_material_id`。
+- `0007_session_resources.sql`：`session_objects.session_ref` 不再使用 column-list SET NULL；新增 `BEFORE DELETE ON enterprise.sessions` trigger，将相关 `session_ref` 置空后再删除 session。
+- 新增迁移资源测试，禁止再次引入 column-list `ON DELETE SET NULL`。
+
+Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check \
+  tests/persistence/postgres/test_migrations.py \
+  tests/persistence/postgres/test_reading_migration.py
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  tests/persistence/postgres/test_migrations.py \
+  tests/persistence/postgres/test_learning_migration.py \
+  tests/persistence/postgres/test_reading_migration.py \
+  tests/persistence/postgres/test_session_resource_migration.py -q
+# 66 passed, 1 warning
+
+git diff --check
+# exit 0
+```
+
+Kubernetes test-cn 回滚式语法探测：使用 #40 runtime image，挂载修复后的 migration SQL/catalog 到 `/app/deeptutor/persistence/postgres/migrations/*`，使用同一个 `deeptutor-migrator-secrets` DB 连接，在单事务中执行全部 pending core + EduPlus2 migrations，最后显式 rollback。未输出 DSN/密码。
+
+```text
+{'server_version_num': '140024'}
+TRY core 0001_identity_sessions
+...
+TRY core 0014_externalized_runtime
+TRY extension 0001_federated_access
+...
+TRY extension 0004_audit_export_jobs
+syntax probe ok; transaction rolled back
+```
+
+临时 probe Job 与 ConfigMap 已从 `deeptutor-test-cn` namespace 删除。下一步需要提交该兼容修复并触发 `deploy/test-cn/v1.4.0-rc.32`。

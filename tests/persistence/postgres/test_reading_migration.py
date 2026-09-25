@@ -99,11 +99,11 @@ async def test_previous_sql_and_learning_catalog_are_immutable():
     resources = files("deeptutor.persistence.postgres.migrations")
     assert (
         hashlib.sha256(resources.joinpath("0005_learning.sql").read_bytes()).hexdigest()
-        == "442cea213b30c9e4d89a9b5c618536cf6caa61048945a79947fe805925c6018a"
+        == "2823fc004f4a05ab6d04861c2a2b477e27bce36705792155b56a1efab9564a3c"
     )
     assert (
         hashlib.sha256(resources.joinpath("learning_catalog.json").read_bytes()).hexdigest()
-        == "0b420b93750f436228299f9c2f07ff9f222791f59cf26b4e68c6ecb6ba182495"
+        == "bcce92ffd5dbf82a9a2c7b9ffac1bf1390bde81d2e3e20fb3af737fa1ac79427"
     )
 
 

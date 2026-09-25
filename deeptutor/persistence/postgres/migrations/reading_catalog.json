@@ -24,7 +24,7 @@
       "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
       "CHECK ((workspace_id ~ '^[A-Za-z0-9_-]{1,128}$'::text))",
       "CHECK ((version > 0))",
-      "FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) ON DELETE SET NULL (active_material_id) DEFERRABLE INITIALLY DEFERRED"
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) DEFERRABLE INITIALLY DEFERRED"
     ],
     "reading_workspace_materials": [
       "PRIMARY KEY (tenant_id, owner_id, workspace_id, material_id)",
@@ -40,7 +40,7 @@
       "CHECK ((version > 0))",
       "FOREIGN KEY (tenant_id, owner_id, workspace_id) REFERENCES enterprise.reading_workspaces(tenant_id, owner_id, workspace_id) ON DELETE CASCADE",
       "FOREIGN KEY (tenant_id, owner_id, session_id) REFERENCES enterprise.sessions(tenant_id, owner_id, id) ON DELETE CASCADE",
-      "FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) ON DELETE SET NULL (active_material_id) DEFERRABLE INITIALLY DEFERRED"
+      "FOREIGN KEY (tenant_id, owner_id, workspace_id, active_material_id) REFERENCES enterprise.reading_workspace_materials(tenant_id, owner_id, workspace_id, material_id) DEFERRABLE INITIALLY DEFERRED"
     ],
     "reading_session_links": [
       "PRIMARY KEY (tenant_id, owner_id, workspace_id, source_session_id, target_session_id)",

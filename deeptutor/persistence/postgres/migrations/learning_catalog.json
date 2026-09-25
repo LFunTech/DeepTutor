@@ -51,7 +51,7 @@
       "CHECK ((status = ANY (ARRAY['active'::text, 'completed'::text, 'failed'::text, 'interrupted'::text])))",
       "CHECK ((version > 0))",
       "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
-      "FOREIGN KEY (tenant_id, owner_id, path_ref) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id) ON DELETE SET NULL (path_ref)",
+      "FOREIGN KEY (tenant_id, owner_id, path_ref) REFERENCES enterprise.mastery_paths(tenant_id, owner_id, path_id)",
       "PRIMARY KEY (tenant_id, owner_id, operation_id)",
       "UNIQUE (tenant_id, owner_id, path_id, operation_id)"
     ],

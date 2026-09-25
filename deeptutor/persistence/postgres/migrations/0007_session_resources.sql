@@ -13,8 +13,22 @@ CREATE TABLE enterprise.session_objects (
  PRIMARY KEY(tenant_id,owner_id,object_id),
  CHECK(session_ref IS NULL OR session_ref=session_id),
  FOREIGN KEY(tenant_id,owner_id) REFERENCES enterprise.users(tenant_id,id),
- FOREIGN KEY(tenant_id,owner_id,session_ref,incarnation) REFERENCES enterprise.sessions(tenant_id,owner_id,id,incarnation) ON DELETE SET NULL(session_ref)
+ FOREIGN KEY(tenant_id,owner_id,session_ref,incarnation) REFERENCES enterprise.sessions(tenant_id,owner_id,id,incarnation)
 );
+CREATE FUNCTION enterprise.detach_session_objects_before_session_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+ UPDATE enterprise.session_objects
+    SET session_ref = NULL
+  WHERE tenant_id = OLD.tenant_id
+    AND owner_id = OLD.owner_id
+    AND session_ref = OLD.id
+    AND incarnation = OLD.incarnation;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER detach_session_objects_before_session_delete
+BEFORE DELETE ON enterprise.sessions
+FOR EACH ROW EXECUTE FUNCTION enterprise.detach_session_objects_before_session_delete();
 CREATE TABLE enterprise.message_objects (
  tenant_id uuid NOT NULL, owner_id text NOT NULL, session_id text NOT NULL,
  message_id bigint NOT NULL, object_id uuid NOT NULL,

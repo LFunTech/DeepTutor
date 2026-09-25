@@ -22,7 +22,7 @@
       "CHECK ((attempts >= 0))",
       "CHECK ((state = ANY (ARRAY['candidate'::text, 'ready'::text, 'cleanup'::text, 'deleted'::text])))",
       "FOREIGN KEY (tenant_id, owner_id) REFERENCES enterprise.users(tenant_id, id)",
-      "FOREIGN KEY (tenant_id, owner_id, session_ref, incarnation) REFERENCES enterprise.sessions(tenant_id, owner_id, id, incarnation) ON DELETE SET NULL (session_ref)",
+      "FOREIGN KEY (tenant_id, owner_id, session_ref, incarnation) REFERENCES enterprise.sessions(tenant_id, owner_id, id, incarnation)",
       "PRIMARY KEY (tenant_id, owner_id, object_id)",
       "UNIQUE (tenant_id, owner_id, session_id, object_id)"
     ],

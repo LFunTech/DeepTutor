@@ -66,6 +66,20 @@ async def test_core_resource_keeps_schema_1_bytes_and_does_not_connect_on_read(m
     assert MigrationRunner("host=not-used")._migrations()[0][0] == SCHEMA_1_VERSION
 
 
+def test_migration_resources_avoid_column_list_set_null_for_pg_compatibility():
+    resources = files("deeptutor.persistence.postgres.migrations")
+    offenders = [
+        resource.name
+        for resource in resources.iterdir()
+        if resource.name.endswith((".sql", ".json"))
+        and (
+            "ON DELETE SET NULL (" in resource.read_text(encoding="utf8")
+            or "ON DELETE SET NULL(" in resource.read_text(encoding="utf8")
+        )
+    ]
+    assert offenders == []
+
+
 async def test_empty_database_apply_accepts_single_database_owner_without_createrole(pg_dsn):
     """生产迁移若仍要求创建独立运行角色，会阻断单库单用户部署。"""
 
