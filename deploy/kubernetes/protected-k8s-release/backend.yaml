@@ -45,6 +45,16 @@ spec:
               value: "https://${DEEPTUTOR_INGRESS_HOST}/api/v1/auth/eduplus2/demo/callback"
             - name: DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL
               value: "https://${DEEPTUTOR_INGRESS_HOST}/enterprise/eduplus2/conversation-test"
+            # EduPlus2 profile/permission checks are optional enhanced gates. The
+            # current test-cn EduPlus2 endpoints expose the Me Profile API as a
+            # user-token GET contract, while this release baseline's optional
+            # clients call the not-yet-aligned M2M open APIs. Keep them
+            # explicitly disabled so the supported JWT + resolve + allowlist
+            # exchange path remains usable and is not overridden by secret envs.
+            - name: DT_EDUPLUS2_PROFILE_URL
+              value: "off"
+            - name: DT_EDUPLUS2_PERMISSION_URL
+              value: "off"
           envFrom:
             - secretRef:
                 name: deeptutor-runtime-secrets

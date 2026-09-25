@@ -2174,3 +2174,56 @@ pod env DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL -> https://llm-agent-test.f123.pub/
 ```
 
 因此，本次用户反馈的 test 公网页面无法正常进入 EduPlus2 demo 登录闭环的已定位问题已经修复：公网入口页面可达、企业 API route 已挂载、demo start 不再生成 `127.0.0.1:8001` callback，而是生成 `llm-agent-test.f123.pub` 公网 callback。D3.2 仍不标记完整完成：尚未在本次证据中完成真实 EduPlus2 用户登录凭据后的 token exchange、`dt_token` HTTP/WS 对话、ObjectStore/LightRAG/audit 全链路 smoke。
+
+### 2026-09-25 test-cn EduPlus2 profile/permission 可选增强 API 不兼容修复（rc42 预部署）
+
+用户反馈登录后页面显示“登录结果不可用，请重新进入测试。” 继续排查发现：
+
+- 前端该文案由 `/api/v1/auth/eduplus2/demo/result` 返回 `ok=false` 或缺少 `dt_token` 触发；不是页面 404，也不是公网 callback 丢失。
+- `eduplus2.audit_events` 中最新失败事件为 `event_kind=profile.fetch`、`result=failed`、`reason=profile_unavailable`，说明 EduPlus2 authorization code 已进入 DeepTutor exchange，但在可选 profile 复核阶段失败。
+- 在 Pod 内使用相同 M2M client credentials 直接探测最近失败用户对应的 EduPlus2 profile/permission endpoint：M2M token endpoint 返回 `200`；profile endpoint 对当前代码的 POST 请求返回 `405`，安全错误体包含 `COMMON1002` / `请求方法不支持`；permission endpoint 对 POST 同样返回 `405`。
+- 项目企业文档已注明 profile/permission 是“可选增强”：联调环境如不启用可显式设为 `off`/`disabled`/`none`/`0`/`false`/`no`，避免由 base URL 自动派生或被未对齐的 URL 启用。真实文档中的 Me Profile API 是用户 token `GET /api/v1/me/profile` 形态，而当前 release baseline 的可选增强 client 实现为 M2M POST open API 形态，二者契约尚未对齐。
+
+临时恢复：已在 test 集群热修复 Deployment，显式设置：
+
+```text
+DT_EDUPLUS2_PROFILE_URL=off
+DT_EDUPLUS2_PERMISSION_URL=off
+```
+
+K8s rollout 验证：
+
+```text
+deployment.apps/deeptutor-backend env updated
+deployment "deeptutor-backend" successfully rolled out
+pod env DT_EDUPLUS2_PROFILE_URL -> off
+pod env DT_EDUPLUS2_PERMISSION_URL -> off
+backend pod READY 1/1, RESTARTS 0
+```
+
+持久化修复：原生 K8s `protected-k8s-release/backend.yaml` 在显式公网 demo callback/return URL 后追加 profile/permission override，防止 `envFrom: deeptutor-runtime-secrets` 中的联调 URL 再次启用不兼容可选增强。该修复只关闭尚未对齐的可选增强 API；JWT 验签、resolve、allowlist、revocation、短期 `dt_token` 签发和 owner/resource guard 仍保留。
+
+TDD / Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/python -m pytest \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution -q
+# RED: KeyError: 'DT_EDUPLUS2_PROFILE_URL'
+# 修复后：1 passed
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/python -m pytest \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 23 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+openspec validate --all --strict
+# 16 passed, 0 failed
+git diff --check
+# exit 0
+```
+
+后续：提交后触发 `deploy/test-cn/v1.4.0-rc.42`，验证流水线部署后的 Pod env 仍为 `off`，并请用户重新从 `conversation-test` 页面发起一次新的 EduPlus2 登录。
