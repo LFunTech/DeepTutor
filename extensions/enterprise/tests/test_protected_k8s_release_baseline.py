@@ -1136,6 +1136,12 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
                 assert env["DEEPTUTOR_EXECUTION_MODE"] == "replicated"
                 assert env["DEEPTUTOR_TURN_COORDINATION_BACKEND"] == "redis"
                 assert env["DEEPTUTOR_POSTGRES_CONFIG"] == "/etc/deeptutor/deployment.json"
+                assert env["DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI"] == (
+                    "https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback"
+                )
+                assert env["DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL"] == (
+                    "https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test"
+                )
                 mounts = {mount["name"]: mount for mount in backend_container["volumeMounts"]}
                 assert mounts["deployment-config"]["mountPath"] == "/etc/deeptutor"
                 assert mounts["deployment-config"]["readOnly"] is True

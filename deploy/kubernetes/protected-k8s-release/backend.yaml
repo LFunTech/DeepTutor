@@ -41,6 +41,10 @@ spec:
               value: "${DEEPTUTOR_REDIS_KEY_PREFIX}"
             - name: DEEPTUTOR_POSTGRES_CONFIG
               value: /etc/deeptutor/deployment.json
+            - name: DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI
+              value: "https://${DEEPTUTOR_INGRESS_HOST}/api/v1/auth/eduplus2/demo/callback"
+            - name: DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL
+              value: "https://${DEEPTUTOR_INGRESS_HOST}/enterprise/eduplus2/conversation-test"
           envFrom:
             - secretRef:
                 name: deeptutor-runtime-secrets

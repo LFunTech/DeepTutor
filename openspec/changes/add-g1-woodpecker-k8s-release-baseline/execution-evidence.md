@@ -2096,3 +2096,52 @@ GET /ws HTTP/1.1 + Upgrade: websocket + Authorization: Bearer <redacted>
 ```
 
 因此，当前 `llm-agent-test.f123.pub` 的前置 Nginx 代理层已不再产生 308 循环，且公网入口到 `/ws` 的 WebSocket Upgrade 链路可建立。D3.2 仍不标记完成：该条证据只覆盖入口 HTTP/TLS 与 WebSocket 握手；完整 runtime smoke 还需要继续覆盖 EduPlus2、resource/ObjectStore、LightRAG 与 audit 路径。
+
+### 2026-09-25 test-cn EduPlus2 demo 公网 callback 配置修复（rc41 预部署）
+
+用户反馈 `https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test` 在 test 环境无法正常使用。外部入口与集群状态复查结果：
+
+```text
+GET https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test -> 200
+GET https://llm-agent-test.f123.pub/api/v1/enterprise/conversation-test/options anonymous -> 401 {"detail":"Authentication required"}
+backend Deployment deeptutor-backend -> READY 1/1
+pipeline #52 -> success
+```
+
+这说明 rc40 已解决企业运行时未挂载、包元数据 fallback、readiness 被认证拦截等问题；但继续检查 `/api/v1/auth/eduplus2/demo/start` 发现返回的 OAuth `redirect_uri` 仍为内部代理视角的 `http://127.0.0.1:8001/api/v1/auth/eduplus2/demo/callback`。该 URL 会让 EduPlus2 登录后回跳到用户本机，导致 test 公网页面无法完成登录闭环。
+
+根因：test-cn K8s Ingress 将所有路径先转到同一容器的 Next frontend 端口，Next proxy 再把 `/api/*` rewrite 到 `http://127.0.0.1:8001` 的 FastAPI backend；后端 demo 未显式配置公网 callback/return URL 时，会从内部请求 Host 推断 redirect URI。该推断在容器内代理拓扑下不成立。
+
+实现修正：原生 K8s backend 模板显式注入 test/pre/prod 各环境可由 `DEEPTUTOR_INGRESS_HOST` 渲染的公网 demo URL：
+
+```text
+DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI=https://${DEEPTUTOR_INGRESS_HOST}/api/v1/auth/eduplus2/demo/callback
+DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL=https://${DEEPTUTOR_INGRESS_HOST}/enterprise/eduplus2/conversation-test
+```
+
+这些值不是 Secret，不放入 Woodpecker repo 专属 secret；继续由受保护 release metadata 的 Ingress host 控制，避免依赖前端/后端内部代理 Host 推断。
+
+TDD / Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src pytest \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution -q
+# RED: KeyError: 'DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI'
+# 修复后：1 passed
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/python -m pytest \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 23 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+openspec validate --all --strict
+# 16 passed, 0 failed
+git diff --check
+# exit 0
+```
+
+后续：提交后触发 `deploy/test-cn/v1.4.0-rc.41`，验证 `/demo/start` 生成的 `redirect_uri` 改为 `https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback`。
