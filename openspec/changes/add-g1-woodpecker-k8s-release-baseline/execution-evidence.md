@@ -1439,3 +1439,51 @@ acquire release-lock and migration-lock for test-cn/test-cn-v1-4-0-rc-29
 结论：#38 已验证并行构建/推送/ digest pre-check 链路；剩余 deploy 阻断项是 test-cn 环境未提供与 runtime DSN 分离的 migrator DSN。根据 G1 要求，不能在代码中绕过 `postgres_migration_not_separate`，需要环境侧预置独立 migrator role/DSN，并同步更新 K8s `deeptutor-migrator-secrets` 与 Woodpecker `DT_TEST_CN_PG_MIGRATOR_DSN` 后再触发下一 tag。
 
 为避免 Woodpecker deploy step 等待 `kubectl wait` 到 900s 超时，已停止 #38；不移动已触发的 `rc.29` tag。
+
+### 2026-09-25 deploy 前置校验：相同 runtime/migrator PostgreSQL DSN fail-fast
+
+基于 #38 的根因，新增 deploy 脚本前置校验：在 apply NetworkPolicy / migration Job 之前，只读取目标 namespace 中 `deeptutor-migrator-secrets` 的 `DEEPTUTOR_POSTGRES_DATABASE_URL` 与 `DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL` 两个 K8s Secret data 项并比较 base64 结果；若二者均存在且相同，立即 fail closed，输出不含 DSN 明文的错误，要求环境侧预置独立 migrator DSN。
+
+该修复不会尝试用当前低权限运行账号派生 migrator role，也不会绕过企业扩展中的 `postgres_migration_not_separate` 检查；它只把已知环境错误从 migration Job 失败/等待超时前移到 deploy step 早期，避免重复消耗 Woodpecker runner。
+
+RED/GREEN：
+
+```bash
+PYTHONPATH=. .venv/bin/pytest \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_deploy_script_fails_fast_when_runtime_and_migrator_pg_dsn_match -q
+# RED：deploy.sh 未检查 deeptutor-migrator-secrets，fake kubectl 允许后续 apply/rollout，命令返回 0，测试期望 fail-fast 失败。
+# GREEN：新增 K8s Secret base64 等值校验后，1 passed；stderr 只包含 secret/key 名与“provision a separate migrator DSN”，不包含 DSN 明文，且未执行 apply。
+```
+
+下一步：test-cn 环境仍需更新 Woodpecker/K8s secret，使 `DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL` 指向独立 migrator role/DSN；在此之前不应继续打新的 deploy tag，除非明确只验证 fail-fast 行为。
+
+本轮提交前验证：
+
+```bash
+woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# exit 0；保留既有 clone.git allow-list warning。
+
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 20 passed
+
+bash -n deploy/kubernetes/protected-k8s-release/deploy.sh
+# exit 0
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# Change valid
+
+openspec validate --all --strict
+# 16 passed, 0 failed
+
+docker build --check -f Dockerfile.protected-runtime-base .
+# Check complete, no warnings found.
+
+docker build --check -f Dockerfile.protected-runtime .
+# Check complete, no warnings found.
+
+git diff --check
+# exit 0
+```
