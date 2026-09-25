@@ -46,6 +46,15 @@ def test_restricted_role_sql_is_compatible_with_pg14_auth_members_catalog():
     assert "to_jsonb(m)->>'set_option'" in query
 
 
+def test_scope_sql_falls_back_when_transaction_timeout_is_unavailable(restricted_dsn):
+    db = core().Database(restricted_dsn, resource="pg14")
+
+    db._transaction_timeout_supported = False
+
+    assert len(db._scope_values(scope())) == 3
+    assert "transaction_timeout" not in db._scope_sql()
+
+
 def test_sync_scope_reuse_rls_rollback_and_scope_validation(restricted_dsn, pg_dsn):
     a, b = scope(), scope("bob")
     with core().SyncDatabase(restricted_dsn, resource="core", max_size=1) as db:

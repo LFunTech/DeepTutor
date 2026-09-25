@@ -1858,3 +1858,51 @@ Kubernetes test-cn 连接探测：使用 #42 runtime image，挂载修复后的 
 ```
 
 后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.33`。由于 #42 已成功完成 schema apply/verify，下一次 migration Job 应进入空 plan/verify，然后继续 bootstrap 与后续 rollout/smoke。
+
+### 2026-09-25 test-cn pipeline #44 bootstrap 事务 timeout 兼容修正
+
+`deploy/test-cn/v1.4.0-rc.33` 触发 Woodpecker pipeline `#44`，使用 commit `0f2acf5b`。
+
+结果：
+
+- release trigger、metadata、并行 artifact image、secret preflight、runtime image build、pre-deploy check 均成功。
+- `deploy-test-cn` 中 migration Job `dt-migrate-test-cn-v1-4-0-rc-33` 执行：
+  - `schema plan` 返回 `{"pending": []}`；
+  - `schema apply` 返回 `{"schema": "apply", "success": true}`；
+  - `schema verify` 返回 `{"schema": "verify", "success": true}`。
+- 说明 #42 的 schema 已持久化成功，#44 不再执行 DDL。
+- 新失败点发生在 bootstrap 事务打开阶段，类型为 `UndefinedObject`。
+
+根因：`Database.transaction()` 无条件执行 `set_config('transaction_timeout', ...)`；`transaction_timeout` 是 PostgreSQL 17+ 参数，test-cn PostgreSQL 14.24 不支持。
+
+实现修正：
+
+- `Database` / `SyncDatabase` open 时使用 `current_setting('transaction_timeout', true)` 检测目标库是否支持该 GUC。
+- 支持时继续设置 `statement_timeout` + `transaction_timeout`。
+- 不支持时自动 fallback，只设置 `statement_timeout` 与 scope 上下文，避免 PG14 报 `UndefinedObject`。
+- 增加单元测试覆盖 fallback 选择。
+
+Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check \
+  deeptutor/persistence/postgres/connection.py \
+  tests/persistence/postgres/test_connection.py
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  tests/persistence/postgres/test_connection.py -q
+# 58 passed
+```
+
+Kubernetes test-cn 事务探测：使用 #44 runtime image，挂载修复后的 `connection.py`，同 ConfigMap/Secret，执行真实 `Database.transaction()` 但不写入业务数据；临时 Job/ConfigMap 已删除。
+
+```text
+{'transaction_open': True,
+ 'tenant_id': '671bf679-1b58-57e9-9fe0-a59158f1c2af',
+ 'user_id': '@probe',
+ 'statement_timeout': '15s',
+ 'transaction_timeout': None}
+```
+
+后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.34`。下一次应继续 bootstrap，然后进入 rollout/smoke。

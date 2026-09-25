@@ -1,9 +1,10 @@
 """有界 PostgreSQL 池和完整事务 worker，不从环境或 ContextVar 推断身份。
 
-需 PostgreSQL 17+（使用 transaction_timeout）。run() 的回调只做同步数据库
-工作，不得手工提交、转交连接或执行无界外部 I/O。Python 无法强杀线程：取消
-等待回调退出后回滚，期间继续占用容量。提交一旦开始不能承诺撤回；取消遇到
-已确认提交会抛出 CommitCompletedAfterCancellation，附带原结果，禁止盲目重试。
+PG17+ 会额外启用 transaction_timeout；PG14/15/16 自动退回 statement_timeout。
+run() 的回调只做同步数据库工作，不得手工提交、转交连接或执行无界外部 I/O。
+Python 无法强杀线程：取消等待回调退出后回滚，期间继续占用容量。提交一旦开始
+不能承诺撤回；取消遇到已确认提交会抛出 CommitCompletedAfterCancellation，
+附带原结果，禁止盲目重试。
 """
 
 from __future__ import annotations
@@ -42,10 +43,17 @@ SELECT EXISTS (
     WHERE r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb
 ) AS unsafe
 """
+_TRANSACTION_TIMEOUT_SUPPORTED_SQL = """
+SELECT current_setting('transaction_timeout', true) IS NOT NULL AS supported
+"""
 _SCOPE_SQL = """
 SELECT set_config('app.tenant_id', %s, true), set_config('app.user_id', %s, true),
        set_config('statement_timeout', %s, true),
        set_config('transaction_timeout', %s, true)
+"""
+_SCOPE_SQL_WITHOUT_TRANSACTION_TIMEOUT = """
+SELECT set_config('app.tenant_id', %s, true), set_config('app.user_id', %s, true),
+       set_config('statement_timeout', %s, true)
 """
 
 
@@ -124,6 +132,7 @@ class _Configuration:
         self.timeout = timeout
         self._statement_timeout = str(statement_timeout_ms)
         self._transaction_timeout = str(transaction_timeout_ms)
+        self._transaction_timeout_supported = True
         self._pool_options = dict(
             conninfo=dsn,
             min_size=1,
@@ -137,7 +146,15 @@ class _Configuration:
     def _scope_values(self, scope):
         if not isinstance(scope, TenantScope):
             raise ValueError("trusted scope is required")
-        return scope.tenant_id, scope.user_id, self._statement_timeout, self._transaction_timeout
+        values = (scope.tenant_id, scope.user_id, self._statement_timeout)
+        if self._transaction_timeout_supported:
+            return (*values, self._transaction_timeout)
+        return values
+
+    def _scope_sql(self):
+        if self._transaction_timeout_supported:
+            return _SCOPE_SQL
+        return _SCOPE_SQL_WITHOUT_TRANSACTION_TIMEOUT
 
 
 class Database(_Configuration):
@@ -158,6 +175,8 @@ class Database(_Configuration):
                 row = await (await c.execute(_RESTRICTED_ROLE_SQL)).fetchone()
                 if not row or row["unsafe"]:
                     raise RuntimeError("application requires a restricted non-privileged PostgreSQL role")
+                row = await (await c.execute(_TRANSACTION_TIMEOUT_SUPPORTED_SQL)).fetchone()
+                self._transaction_timeout_supported = bool(row and row["supported"])
         except BaseException:
             close = asyncio.create_task(self.pool.close())
             await _drain(close)
@@ -199,7 +218,7 @@ class Database(_Configuration):
             await tx.__aenter__()
             error = (None, None, None)
             try:
-                await c.execute(_SCOPE_SQL, values)
+                await c.execute(self._scope_sql(), values)
                 yield lease.wrap(c)
                 if owner.cancelling() > initial_cancels:
                     raise asyncio.CancelledError()
@@ -255,6 +274,8 @@ class SyncDatabase(_Configuration):
                 row = c.execute(_RESTRICTED_ROLE_SQL).fetchone()
                 if not row or row["unsafe"]:
                     raise RuntimeError("application requires a restricted non-privileged PostgreSQL role")
+                row = c.execute(_TRANSACTION_TIMEOUT_SUPPORTED_SQL).fetchone()
+                self._transaction_timeout_supported = bool(row and row["supported"])
         except BaseException:
             self.pool.close()
             raise
@@ -338,7 +359,7 @@ class SyncDatabase(_Configuration):
                 with c.transaction():
                     if _operation is not None:
                         _operation.check()
-                    c.execute(_SCOPE_SQL, values)
+                    c.execute(self._scope_sql(), values)
                     lease = Lease()
                     try:
                         yield lease.wrap(c)
