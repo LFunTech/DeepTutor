@@ -82,6 +82,8 @@ class AuthenticationMiddleware:
             "/api/v1/auth/eduplus2/demo/result",
             "/api/v1/auth/eduplus2/demo/refresh",
             "/api/settings/ui",
+            "/health/live",
+            "/health/ready",
         )
         status = None
         identity = None
@@ -400,6 +402,7 @@ def create_application(enterprise):
     eduplus2_auth = APIRouter()
     eduplus2_audit = APIRouter()
     conversation_test = APIRouter()
+    health = APIRouter()
 
     async def require_audit_admin():
         identity = await enterprise.identity.authenticate(current_token())
@@ -629,6 +632,14 @@ def create_application(enterprise):
             "mcp_tools": mcp_tools,
         }
 
+    @health.get("/live")
+    async def health_live():
+        return {"status": "alive"}
+
+    @health.get("/ready")
+    async def health_ready():
+        return {"status": "ready"}
+
     @auth.post("/login")
     async def login(payload: LoginRequest, request: Request, response: Response):
         token = await enterprise.identity.login(
@@ -720,6 +731,7 @@ def create_application(enterprise):
             (resources.router, "/files/resources"),
             (voice.router, "/api/voice"),
             (unified_ws.router, "/api/v1"),
+            (health, "/health"),
         ),
         lifespan=lifespan,
         middleware=(

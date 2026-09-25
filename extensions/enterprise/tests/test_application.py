@@ -150,6 +150,17 @@ async def seed_externalized_kb(
     return kb_id
 
 
+async def test_enterprise_health_ready_is_public_for_kubernetes_probe(app):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://school.example",
+    ) as client:
+        response = await client.get("/health/ready")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "ready"
+
+
 async def test_http_auth_csrf_revoke_and_closed_routes(app):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://school.example"
