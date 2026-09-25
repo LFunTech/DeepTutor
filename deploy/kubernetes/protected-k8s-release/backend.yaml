@@ -17,6 +17,8 @@ spec:
       labels:
         app.kubernetes.io/name: deeptutor-backend
         app.kubernetes.io/part-of: deeptutor-protected-k8s-release
+      annotations:
+        deeptutor.f123.pub/deployment-config-hash: "${DEEPTUTOR_DEPLOYMENT_CONFIG_HASH}"
     spec:
       serviceAccountName: deeptutor-runtime
       terminationGracePeriodSeconds: 60

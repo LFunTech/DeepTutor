@@ -888,6 +888,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "volumeMounts:" in backend
     assert "mountPath: /etc/deeptutor" in backend
     assert "name: deeptutor-deployment-config" in backend
+    assert "deeptutor.f123.pub/deployment-config-hash" in backend
     assert ":latest" not in backend
     assert 'PYTHONPATH="/app:/app/extensions/enterprise/src' in supervisor_programs
     assert "DEEPTUTOR_POSTGRES_CONFIG" in backend_start_script
@@ -913,6 +914,9 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert 'render_manifest "${manifest_dir}/networkpolicy.yaml"' in deploy_script
     assert "rollout status" in deploy_script
     assert "DEEPTUTOR_TURN_COORDINATION_BACKEND" in deploy_script
+    assert "sync_deployment_config_origin" in deploy_script
+    assert "protected_k8s_deployment_config" in deploy_script
+    assert "DEEPTUTOR_DEPLOYMENT_CONFIG_HASH" in deploy_script
     assert "logs \"job/${migration_job_name}\"" in deploy_script
     assert "get deployment" in status_script
 
@@ -1090,6 +1094,44 @@ def test_protected_k8s_deploy_steps_do_not_mask_status_collection_failures():
         assert commands[0:status_command_index].count("set -euo pipefail") == 1
 
 
+
+
+def test_deployment_config_origin_patch_adds_ingress_origin_and_hash():
+    from deeptutor_enterprise.protected_k8s_deployment_config import build_origin_patch
+
+    configmap = {
+        "data": {
+            "deployment.json": json.dumps(
+                {
+                    "version": 1,
+                    "origins": ["https://deeptutor-test-cn.example.internal"],
+                    "models": [],
+                }
+            )
+        }
+    }
+
+    patch, digest = build_origin_patch(
+        configmap, expected_origin="https://llm-agent-test.f123.pub"
+    )
+
+    patched_config = json.loads(patch["data"]["deployment.json"])
+    assert patched_config["origins"] == [
+        "https://deeptutor-test-cn.example.internal",
+        "https://llm-agent-test.f123.pub",
+    ]
+    assert digest.startswith("sha256:")
+    assert len(digest) == len("sha256:") + 64
+
+
+def test_deployment_config_origin_patch_rejects_non_exact_https_origin():
+    from deeptutor_enterprise.protected_k8s_deployment_config import build_origin_patch
+
+    configmap = {"data": {"deployment.json": json.dumps({"origins": []})}}
+
+    with pytest.raises(ValueError, match="expected origin must be an exact HTTPS origin"):
+        build_origin_patch(configmap, expected_origin="http://llm-agent-test.f123.pub/path")
+
 def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution():
     import string
 
@@ -1263,6 +1305,15 @@ if [[ "$*" == *"get secret deeptutor-migrator-secrets"* ]]; then
     exit 0
   fi
 fi
+if [[ "$*" == *"get configmap deeptutor-deployment-config"* ]]; then
+  cat <<'JSON'
+{{"data":{{"deployment.json":"{{\\"origins\\":[\\"https://deeptutor-test-cn.example.internal\\"]}}"}}}}
+JSON
+  exit 0
+fi
+if [[ "$*" == *"patch configmap deeptutor-deployment-config"* ]]; then
+  exit 0
+fi
 if [[ "$*" == *"get job/dt-migrate-test-cn-v1-4-0"* && "$*" == *"Complete"* ]]; then
   printf 'True'
   exit 0
@@ -1411,6 +1462,15 @@ if [[ "$*" == *"wait --for=condition=complete"* ]]; then
 fi
 if [[ "$*" == *"apply -f -"* ]]; then
   cat >/dev/null
+  exit 0
+fi
+if [[ "$*" == *"get configmap deeptutor-deployment-config"* ]]; then
+  cat <<'JSON'
+{"data":{"deployment.json":"{\\\"origins\\\":[\\\"https://deeptutor-test-cn.example.internal\\\"]}"}}
+JSON
+  exit 0
+fi
+if [[ "$*" == *"patch configmap deeptutor-deployment-config"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"get job/dt-migrate-test-cn-v1-4-0"* && "$*" == *"Complete"* ]]; then

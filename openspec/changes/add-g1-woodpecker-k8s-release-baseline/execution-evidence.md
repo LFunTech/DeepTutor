@@ -2253,3 +2253,77 @@ Location redirect_uri -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/de
 ```
 
 因此，rc42 已把 test 环境从临时热修复状态固化为发布模板状态：后续部署不会再被 `deeptutor-runtime-secrets` 中的 `DT_EDUPLUS2_PROFILE_URL` / `DT_EDUPLUS2_PERMISSION_URL` 覆盖回不兼容的 POST open API URL。用户需重新从 `conversation-test` 页面发起新的 EduPlus2 登录；旧的失败 `demo_session` 不会自动变为成功。
+
+### 2026-09-25 test-cn pipeline #55 重跑后发现公网 Origin 持久化缺口
+
+从 `master` 当前提交 `61bdb545` 创建并推送 `deploy/test-cn/v1.4.0-rc.43` 后，Woodpecker 创建 pipeline `#55`。
+
+`deploy/test-cn/v1.4.0-rc.43` / pipeline `#55` 结果：
+
+- Woodpecker 状态：`success`。
+- `validate-release-trigger`、`prepare-release-metadata`、`compile-frontend-test-cn`、`compile-python-deps-test-cn`、`build-runtime-base-test-cn`、`secret-preflight-test-cn`、`build-runtime-image-test-cn`、`pre-deploy-check-test-cn`、`deploy-test-cn` 均成功。
+- runtime image digest：`sha256:503e5a7f440c157c249e111cc8fc298250efbf9c3d9050c9a48fa31bed019fa2`。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-43`：`Complete 1/1`。
+- backend Deployment：`READY 1/1`、Pod `1/1 Running`、`RESTARTS 0`。
+- `DT_EDUPLUS2_PROFILE_URL=off`、`DT_EDUPLUS2_PERMISSION_URL=off`、公网 demo callback/return URL 均按 rc42 模板保留，未被 `envFrom` 覆盖。
+
+Fresh live verification（未输出 kubeconfig、JWT、Secret data 或真实 token）：
+
+```text
+GET https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test -> 200
+GET /api/v1/auth/eduplus2/demo/start?return_to=<conversation-test> -> HTTP/2 303
+Location host -> eduplus-auth-test.f123.pub
+Location redirect_uri -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback
+```
+
+但进一步测试 WebSocket/Origin 路径发现新的持久化缺口：`deeptutor-deployment-config` ConfigMap 中 `/etc/deeptutor/deployment.json` 的 `origins` 仍只有 `https://deeptutor-test-cn.example.internal`，不包含公网测试域名 `https://llm-agent-test.f123.pub`。因此应用层会拒绝来自真实页面 origin 的 WebSocket/CSRF 请求：
+
+```text
+WebSocket handshake to https://llm-agent-test.f123.pub/api/v1/ws with Origin=https://llm-agent-test.f123.pub -> HTTP/2 403
+safe body detail -> Origin or CSRF rejected
+runtime deployment.json origins -> ["https://deeptutor-test-cn.example.internal"]
+```
+
+结论：rc43 证明“镜像构建、K8s 部署、profile/permission 关闭、公网 callback”均不会被下一次正常流水线回滚；但 test 环境尚不能判定完整正确，因为原生 K8s ConfigMap 的公网 origin 未被发布脚本校验/同步，真实页面的 WebSocket/带 Origin 请求仍会失败。
+
+### 2026-09-25 test-cn ConfigMap origin 同步修复（rc44 预部署）
+
+持久化修复：原生 K8s release 脚本在部署前读取 `deeptutor-deployment-config`，把 `https://${DEEPTUTOR_INGRESS_HOST}` 作为精确 HTTPS origin 同步到 `deployment.json.origins`，然后以 Kubernetes merge patch 更新 ConfigMap；同时计算规范化 `deployment.json` hash 并注入 backend Pod template annotation `deeptutor.f123.pub/deployment-config-hash`，确保 ConfigMap 内容变化会触发 Pod 重启，不依赖手工热修复或 Helm。
+
+新增模块 `deeptutor_enterprise.protected_k8s_deployment_config` 只处理非 Secret 的 deployment ConfigMap JSON：
+
+- 拒绝非精确 HTTPS origin（带 path/query/userinfo 或 HTTP 均失败）；
+- 要求 `deployment.json` 为 JSON object 且 `origins` 为字符串列表；
+- 只输出 Kubernetes merge patch 与配置 hash，不打印 Secret 值；
+- 保留既有 origin 列表并追加公网 ingress origin。
+
+TDD / Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src pytest -q \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py -k 'deployment_config_origin_patch'
+# RED: ModuleNotFoundError: No module named 'deeptutor_enterprise.protected_k8s_deployment_config'
+# GREEN: 2 passed, 23 deselected
+
+PYTHONPATH=.:extensions/enterprise/src pytest -q \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py -k 'deploy_script_allows_shared_runtime or deploy_script_exits_when_migration_job_fails or deployment_config_origin_patch'
+# 4 passed, 21 deselected
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/python -m pytest -q \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# 25 passed
+
+.venv/bin/python -m ruff check \
+  extensions/enterprise/src/deeptutor_enterprise/protected_k8s_deployment_config.py \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+openspec validate --all --strict
+# 16 passed, 0 failed
+
+git diff --check
+# exit 0
+```
+
+后续：提交后触发 `deploy/test-cn/v1.4.0-rc.44`，验证流水线能自动 patch ConfigMap origin、重启 backend Pod，并确认 WebSocket/Origin 不再因 origin 不匹配被拒绝。

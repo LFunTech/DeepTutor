@@ -72,6 +72,7 @@ export DEEPTUTOR_EXECUTION_MODE="${execution_mode}"
 export DEEPTUTOR_TURN_COORDINATION_BACKEND="${turn_coordination_backend}"
 export DEEPTUTOR_REDIS_KEY_PREFIX="${redis_key_prefix}"
 export DEEPTUTOR_HPA_ENABLED="${hpa_enabled}"
+export PYTHONPATH="${PWD}/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 kube_dir="${HOME:-/tmp}/.kube"
 kubeconfig_path="${kube_dir}/deeptutor-protected-k8s-release-${DEEPTUTOR_TARGET_ENV_ID}.yaml"
@@ -101,6 +102,28 @@ from pathlib import Path
 source = Path(sys.argv[1]).read_text(encoding="utf8")
 print(string.Template(source).safe_substitute(os.environ))
 PY
+}
+
+sync_deployment_config_origin() {
+  local expected_origin="https://${DEEPTUTOR_INGRESS_HOST}"
+  local configmap_json
+  local patch_json
+  local hash_file
+  configmap_json="$(mktemp)"
+  patch_json="$(mktemp)"
+  hash_file="$(mktemp)"
+
+  kubectl -n "${namespace}" get configmap deeptutor-deployment-config -o json > "${configmap_json}"
+  python -m deeptutor_enterprise.protected_k8s_deployment_config \
+    --input "${configmap_json}" \
+    --expected-origin "${expected_origin}" \
+    --output-patch "${patch_json}" \
+    --hash-output "${hash_file}"
+  kubectl -n "${namespace}" patch configmap deeptutor-deployment-config \
+    --type=merge \
+    --patch-file "${patch_json}"
+  DEEPTUTOR_DEPLOYMENT_CONFIG_HASH="$(cat "${hash_file}")"
+  export DEEPTUTOR_DEPLOYMENT_CONFIG_HASH
 }
 
 migration_timeout_seconds() {
@@ -165,6 +188,7 @@ wait_for_migration_job() {
 
 kubectl cluster-info >/dev/null
 kubectl -n "${namespace}" get namespace "${namespace}" >/dev/null
+sync_deployment_config_origin
 
 render_manifest "${manifest_dir}/networkpolicy.yaml" | kubectl -n "${namespace}" apply -f -
 render_manifest "${manifest_dir}/migration-job.yaml" | kubectl -n "${namespace}" apply -f -
