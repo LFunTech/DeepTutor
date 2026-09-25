@@ -2145,3 +2145,32 @@ git diff --check
 ```
 
 后续：提交后触发 `deploy/test-cn/v1.4.0-rc.41`，验证 `/demo/start` 生成的 `redirect_uri` 改为 `https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback`。
+
+### 2026-09-25 test-cn pipeline #53 EduPlus2 demo 公网 callback 修复验证通过
+
+提交并推送 `df6715f7` 后创建并推送 `deploy/test-cn/v1.4.0-rc.41`，Woodpecker 创建 pipeline `#53`。
+
+`deploy/test-cn/v1.4.0-rc.41` / pipeline `#53` 结果：
+
+- Woodpecker 状态：`success`。
+- `validate-release-trigger`、`prepare-release-metadata`、`compile-frontend-test-cn`、`compile-python-deps-test-cn`、`build-runtime-base-test-cn`、`secret-preflight-test-cn`、`build-runtime-image-test-cn`、`pre-deploy-check-test-cn`、`deploy-test-cn` 均成功。
+- runtime image digest：`sha256:e87a06550701b53fc2659c264be9c07b500f644f3eb12d530291908100738d32`。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-41`：`Complete 1/1`。
+- backend Deployment：`READY 1/1`、新 Pod `1/1 Running`、`RESTARTS 0`。
+- 后端启动日志确认仍使用企业 ASGI 入口：`deeptutor_enterprise.runtime_app:app`。
+
+Fresh external / live K8s verification（未输出 kubeconfig、JWT、Secret data 或真实 token）：
+
+```text
+GET https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test -> 200
+GET https://llm-agent-test.f123.pub/api/v1/enterprise/conversation-test/options anonymous -> 401 {"detail":"Authentication required"}
+GET https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/start?return_to=<conversation-test> -> HTTP/2 303
+Location host -> eduplus-auth-test.f123.pub
+Location path -> /realms/eduplus/protocol/openid-connect/auth
+Location redirect_uri -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback
+
+pod env DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback
+pod env DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL -> https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test
+```
+
+因此，本次用户反馈的 test 公网页面无法正常进入 EduPlus2 demo 登录闭环的已定位问题已经修复：公网入口页面可达、企业 API route 已挂载、demo start 不再生成 `127.0.0.1:8001` callback，而是生成 `llm-agent-test.f123.pub` 公网 callback。D3.2 仍不标记完整完成：尚未在本次证据中完成真实 EduPlus2 用户登录凭据后的 token exchange、`dt_token` HTTP/WS 对话、ObjectStore/LightRAG/audit 全链路 smoke。
