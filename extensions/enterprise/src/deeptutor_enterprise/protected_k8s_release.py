@@ -415,7 +415,10 @@ class DeploymentEnvironment(BaseModel):
         )
         _require_env_marker(self.kubernetes.cluster_ref, self.env_id, "cluster_ref")
         _require_env_marker(self.kubernetes.namespace, self.env_id, "namespace")
-        _require_env_marker(self.kubernetes.ingress_host, self.env_id, "ingress_host")
+        # Ingress host can be a business-owned DNS name (for example an llm-agent
+        # vanity domain) that does not include the internal target env id. The
+        # env isolation boundary is enforced by namespace, cluster/ref bindings,
+        # Secret refs, locks, registry path and evidence prefixes below.
         _require_env_marker(self.kubernetes.tls_secret_ref, self.env_id, "tls_secret_ref")
         _require_env_marker(self.kubernetes.secret_store_ref, self.env_id, "secret_store_ref")
         _require_env_marker(self.kubernetes.rbac_ref, self.env_id, "rbac_ref")

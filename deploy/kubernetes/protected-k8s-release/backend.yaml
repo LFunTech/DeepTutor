@@ -39,9 +39,15 @@ spec:
               value: "${DEEPTUTOR_TURN_COORDINATION_BACKEND}"
             - name: DEEPTUTOR_REDIS_KEY_PREFIX
               value: "${DEEPTUTOR_REDIS_KEY_PREFIX}"
+            - name: DEEPTUTOR_POSTGRES_CONFIG
+              value: /etc/deeptutor/deployment.json
           envFrom:
             - secretRef:
                 name: deeptutor-runtime-secrets
+          volumeMounts:
+            - name: deployment-config
+              mountPath: /etc/deeptutor
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health/ready
@@ -60,6 +66,10 @@ spec:
             limits:
               cpu: "2"
               memory: "4Gi"
+      volumes:
+        - name: deployment-config
+          configMap:
+            name: deeptutor-deployment-config
 ---
 apiVersion: v1
 kind: Service

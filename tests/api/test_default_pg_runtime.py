@@ -81,6 +81,71 @@ def test_default_pg_config_can_survive_runtime_data_deletion(tmp_path: Path) -> 
     assert str(config.tenant_id) == tenant_id
 
 
+def test_default_pg_config_projects_enterprise_deployment_contract(tmp_path: Path) -> None:
+    """K8s runtime 可复用 enterprise 部署合同中的 PG 字段。"""
+
+    from deeptutor.app.postgres_runtime import load_default_postgres_config
+
+    tenant_id = str(uuid.uuid4())
+    path = tmp_path / "deployment.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tenant_id": tenant_id,
+                "resource": "test-cn-runtime",
+                "database_secret": "env:DEEPTUTOR_POSTGRES_DATABASE_URL",
+                "migration_database_secret": "env:DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL",
+                "signing_secret": "env:DEEPTUTOR_SIGNING_SECRET",
+                "auth_epoch_secret": "env:DEEPTUTOR_AUTH_EPOCH",
+                "bootstrap_secret": "env:DEEPTUTOR_BOOTSTRAP_SECRET",
+                "allowed_tools": ["ask_user", "rag"],
+                "eduplus2": {"client_secret": "env:DT_EDUPLUS2_CLIENT_SECRET"},
+                "lightrag": {"api_secret": "env:DEEPTUTOR_LIGHTRAG_API_KEY"},
+                "object_store": {
+                    "access_key_secret": "env:DEEPTUTOR_OBJECT_STORE_ACCESS_KEY",
+                    "secret_key_secret": "env:DEEPTUTOR_OBJECT_STORE_SECRET_KEY",
+                },
+                "production": {"runtime_mode": "kubernetes"},
+            }
+        ),
+        encoding="utf8",
+    )
+
+    config = load_default_postgres_config(environ={"DEEPTUTOR_POSTGRES_CONFIG": str(path)})
+
+    assert str(config.tenant_id) == tenant_id
+    assert config.resource == "test-cn-runtime"
+    assert config.database_secret.name == "DEEPTUTOR_POSTGRES_DATABASE_URL"
+    assert config.signing_secret.name == "DEEPTUTOR_SIGNING_SECRET"
+
+
+def test_default_pg_runtime_maps_object_store_from_deployment_contract() -> None:
+    from deeptutor.app.postgres_runtime import _deployment_object_store_config
+
+    object_store = _deployment_object_store_config(
+        {
+            "object_store": {
+                "provider": "s3-compatible",
+                "endpoint": "https://s3.test.example",
+                "region": "cn-test-1",
+                "bucket": "deeptutor-test",
+                "access_key_secret": "env:DEEPTUTOR_OBJECT_STORE_ACCESS_KEY",
+                "secret_key_secret": "env:DEEPTUTOR_OBJECT_STORE_SECRET_KEY",
+                "path_style": False,
+                "verify_tls": True,
+            }
+        }
+    )
+
+    assert object_store is not None
+    assert object_store.endpoint == "https://s3.test.example"
+    assert object_store.bucket == "deeptutor-test"
+    assert object_store.access_key_ref.name == "DEEPTUTOR_OBJECT_STORE_ACCESS_KEY"
+    assert object_store.secret_key_ref.name == "DEEPTUTOR_OBJECT_STORE_SECRET_KEY"
+    assert object_store.path_style is False
+
+
 def _patch_lifespan_side_effect_sentinels(monkeypatch: pytest.MonkeyPatch, side_effects: list[str]):
     from deeptutor.api import main
     from deeptutor.app.container import ApplicationContainer

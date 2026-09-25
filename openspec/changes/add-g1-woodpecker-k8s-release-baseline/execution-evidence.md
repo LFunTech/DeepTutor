@@ -1906,3 +1906,56 @@ Kubernetes test-cn 事务探测：使用 #44 runtime image，挂载修复后的 
 ```
 
 后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.34`。下一次应继续 bootstrap，然后进入 rollout/smoke。
+
+### 2026-09-25 test-cn pipeline #46 runtime 配置挂载、真实域名与对象存储 path-style 修正
+
+`deploy/test-cn/v1.4.0-rc.34` 触发 Woodpecker pipeline `#46`，使用 commit `cfb2b57b`。
+
+结果：
+
+- release trigger、metadata、并行编译、secret preflight、runtime image build、pre-deploy check 均成功。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-34` 成功：
+  - `schema plan` 返回 `{"pending": []}`；
+  - `schema apply` / `schema verify` 均成功；
+  - bootstrap 成功返回 admin 账户摘要。
+- 后续 Deployment/Service/Ingress 创建成功，但 backend rollout 超时：`deployment "deeptutor-backend" exceeded its progress deadline`。
+
+根因链路：
+
+1. backend Deployment 只注入 `deeptutor-runtime-secrets`，没有挂载 `deeptutor-deployment-config`，也没有设置 `DEEPTUTOR_POSTGRES_CONFIG=/etc/deeptutor/deployment.json`；Pod startup 报 `postgres_config_missing`。
+2. 挂载配置后，`deployment.json` 是 enterprise 部署合同，包含 `object_store`、`lightrag`、`eduplus2` 等扩展段；默认 runtime 原先按严格 core PG config 解析，报 `postgres_config_invalid`。
+3. 修复 PG 字段投影后，runtime 能识别对象存储，但 test-cn ConfigMap 中 `object_store.path_style=false` 使 S3 客户端访问 bucket virtual-host。Pod 内网络探测显示 endpoint host 的 DNS/TCP/TLS 正常，而 bucket virtual-host TLS 失败（`SSLCertVerificationError`）。将 test-cn 预置 ConfigMap 的 `object_store.path_style` 修为 `true` 后，对象存储健康探测返回 `objectstore_ready`。
+4. 用户确认 test 环境域名应为 `llm-agent-test.f123.pub`，因此将 active environment registry 的 test-cn Ingress host 从占位域名改为真实域名，并放宽 registry 校验：Ingress host 可以是业务域名，不强制包含 env id；隔离边界继续由 namespace、cluster refs、Secret refs、locks、registry path 与 evidence prefix 保证。
+
+实现修正：
+
+- backend 原生 Kubernetes YAML 挂载 `deeptutor-deployment-config`，并设置 `DEEPTUTOR_POSTGRES_CONFIG=/etc/deeptutor/deployment.json`。
+- `load_default_postgres_config()` 对同一部署合同投影 `PostgresDeploymentConfig` 字段；`PostgresDeploymentConfig.from_file()` 保持严格行为不变。
+- 默认 runtime 在没有 `DEEPTUTOR_OBJECTSTORE_*` env-only 配置时，从部署合同的 `object_store` 段构造 `S3ObjectStoreConfig`，Secret 值仍只通过 `env:<name>` 解析。
+- `extensions/enterprise/protected-k8s-release-environments.example.json` 的 test-cn Ingress host 改为 `llm-agent-test.f123.pub`。
+- test-cn live ConfigMap 已将非敏感 `object_store.path_style` 修为 `true`；`.secrets/deeptutor-local-enterprise-deployment.json` 原本已为 `true`。
+
+Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check \
+  deeptutor/app/postgres_runtime.py \
+  tests/api/test_default_pg_runtime.py \
+  extensions/enterprise/src/deeptutor_enterprise/protected_k8s_release.py \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  tests/api/test_default_pg_runtime.py \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 29 passed
+```
+
+Kubernetes test-cn 探测（使用 #46 runtime image，挂载修复后的 `postgres_runtime.py`，同 ConfigMap/Secret）：
+
+```text
+{"available": true, "code": "objectstore_ready", "object_store_configured": true, "retryable": false}
+{"config": "/etc/deeptutor/deployment.json", "object_store_configured": true, "runtime_started": true}
+```
+
+临时探测 Job/ConfigMap 已删除。后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.35`，预期 backend Pod 能完成 startup/readiness，然后继续 ingress/smoke 证据采集。

@@ -8,7 +8,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+import json
 import os
 from pathlib import Path
 
@@ -47,13 +48,108 @@ def default_postgres_config_path(
     return (get_runtime_home(home) / DEFAULT_POSTGRES_CONFIG_RELATIVE).resolve()
 
 
+def _read_default_postgres_config_payload(path: Path) -> Mapping[str, object]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf8"))
+    except Exception:
+        raise PostgresConfigurationError("postgres_config_invalid") from None
+    if not isinstance(raw, Mapping):
+        raise PostgresConfigurationError("postgres_config_invalid")
+    return raw
+
+
+def _postgres_config_from_payload(raw: Mapping[str, object]) -> PostgresDeploymentConfig:
+    try:
+        return PostgresDeploymentConfig.from_mapping(raw)
+    except PostgresConfigurationError as error:
+        if error.code != "postgres_config_invalid":
+            raise
+        # K8s/enterprise 部署合同会在同一个 deployment.json 中携带
+        # object_store、lightrag、eduplus2 等扩展段。默认 runtime 只投影
+        # PostgreSQL 字段，仍交给 core 配置对象做严格校验，避免接受
+        # legacy DT_* database alias 或泄露扩展段里的值。
+        pg_fields = {item.name for item in fields(PostgresDeploymentConfig)}
+        projected = {key: value for key, value in raw.items() if key in pg_fields}
+        if set(projected) == set(raw):
+            raise
+        return PostgresDeploymentConfig.from_mapping(projected)
+
+
 def load_default_postgres_config(
     *, environ: Mapping[str, str] | None = None, home: str | Path | None = None
 ) -> PostgresDeploymentConfig:
     path = default_postgres_config_path(environ=environ, home=home)
     if not path.is_file():
         raise PostgresConfigurationError("postgres_config_missing")
-    return PostgresDeploymentConfig.from_file(path)
+    return _postgres_config_from_payload(_read_default_postgres_config_payload(path))
+
+
+def _deployment_object_store_config(raw: Mapping[str, object]):
+    section = raw.get("object_store")
+    if not isinstance(section, Mapping):
+        return None
+    try:
+        from deeptutor.runtime.externalized_providers import S3ObjectStoreConfig, SecretRef
+
+        def text(name: str, *, required: bool = False, default: str = "") -> str:
+            value = str(section.get(name) or "").strip()
+            if required and not value:
+                raise ValueError("object store deployment configuration is incomplete")
+            return value or default
+
+        def flag(name: str, *, default: bool) -> bool:
+            value = section.get(name)
+            if value is None or value == "":
+                return default
+            if isinstance(value, bool):
+                return value
+            raw_value = str(value).strip().lower()
+            if raw_value in {"1", "true", "yes", "on"}:
+                return True
+            if raw_value in {"0", "false", "no", "off"}:
+                return False
+            raise ValueError("object store deployment boolean configuration is invalid")
+
+        def number(name: str, *, default: float) -> float:
+            value = section.get(name)
+            if value is None or value == "":
+                return default
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                raise ValueError("object store deployment numeric configuration is invalid") from None
+
+        def integer(name: str, *, default: int) -> int:
+            value = section.get(name)
+            if value is None or value == "":
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                raise ValueError("object store deployment numeric configuration is invalid") from None
+
+        provider = text("provider", default="s3-compatible")
+        if provider not in {"s3", "s3-compatible", "minio"}:
+            raise ValueError("object store provider is unsupported")
+        access_ref = text("access_key_secret", default=text("access_key_ref"))
+        secret_ref = text("secret_key_secret", default=text("secret_key_ref"))
+        session_ref = text("session_token_secret", default=text("session_token_ref"))
+        return S3ObjectStoreConfig(
+            endpoint=text("endpoint", required=True),
+            region=text("region", required=True),
+            bucket=text("bucket", required=True),
+            access_key_ref=SecretRef.parse(access_ref),
+            secret_key_ref=SecretRef.parse(secret_ref),
+            session_token_ref=SecretRef.parse(session_ref) if session_ref else None,
+            path_style=flag("path_style", default=True),
+            verify_tls=flag("verify_tls", default=True),
+            server_side_encryption=text("server_side_encryption"),
+            timeout_seconds=number("timeout_seconds", default=10.0),
+            max_retries=integer("max_retries", default=2),
+            retry_backoff_seconds=number("retry_backoff_seconds", default=0.05),
+        )
+    except ValueError:
+        raise PostgresConfigurationError("production_data_provider_required") from None
 
 
 class _ScopedProvider:
@@ -145,7 +241,7 @@ class DefaultPostgresRuntime:
         source = os.environ if environ is None else environ
         config = load_default_postgres_config(environ=source, home=home)
         data_root = get_runtime_data_root(home)
-        object_store = cls._object_store_from_environment(source)
+        object_store = cls._object_store_from_environment(source, home=home)
         cls._verify_runtime_data_authority(
             source,
             data_root,
@@ -165,7 +261,9 @@ class DefaultPostgresRuntime:
         )
 
     @staticmethod
-    def _object_store_from_environment(environ: Mapping[str, str]) -> object | None:
+    def _object_store_from_environment(
+        environ: Mapping[str, str], *, home: str | Path | None = None
+    ) -> object | None:
         configured = any(
             str(environ.get(name) or "").strip()
             for name in (
@@ -177,8 +275,6 @@ class DefaultPostgresRuntime:
                 "DEEPTUTOR_OBJECTSTORE_SESSION_TOKEN_REF",
             )
         )
-        if not configured:
-            return None
         try:
             from deeptutor.runtime.externalized_providers import (
                 EnvSecretResolver,
@@ -186,8 +282,16 @@ class DefaultPostgresRuntime:
                 S3ObjectStoreConfig,
             )
 
+            if configured:
+                config = S3ObjectStoreConfig.from_environment(environ)
+            else:
+                path = default_postgres_config_path(environ=environ, home=home)
+                raw = _read_default_postgres_config_payload(path)
+                config = _deployment_object_store_config(raw)
+                if config is None:
+                    return None
             return S3CompatibleObjectStore(
-                S3ObjectStoreConfig.from_environment(environ),
+                config,
                 secret_resolver=EnvSecretResolver(),
             )
         except ValueError:

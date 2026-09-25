@@ -73,6 +73,11 @@ def _environment(
     runtime_coordination: dict | None = None,
     autoscaling: dict | None = None,
 ) -> dict:
+    ingress_host = (
+        "llm-agent-test.f123.pub"
+        if env_id == "test-cn"
+        else f"deeptutor-{env_id}.example.internal"
+    )
     required = [
         ("REGISTRY_PUSH_TOKEN", "registry_push"),
         ("KUBE_DEPLOY_TOKEN", "k8s_deploy"),
@@ -115,7 +120,7 @@ def _environment(
         "kubernetes": {
             "cluster_ref": f"k8s:{env_id}",
             "namespace": f"deeptutor-{env_id}",
-            "ingress_host": f"deeptutor-{env_id}.example.internal",
+            "ingress_host": ingress_host,
             "tls_secret_ref": f"k8s:{env_id}/deeptutor-tls",
             "secret_store_ref": f"external-secret:{env_id}/platform",
             "rbac_ref": f"k8s:{env_id}/rbac/deeptutor-release",
@@ -729,6 +734,7 @@ builtins.__import__ = _blocked_import
     assert payload["target_env_id"] == "test-cn"
     assert env_values["DEEPTUTOR_TARGET_ENV_ID"] == "test-cn"
     assert env_values["DEEPTUTOR_RELEASE_VERSION"] == "v1.4.0-rc.8"
+    assert env_values["DEEPTUTOR_INGRESS_HOST"] == "llm-agent-test.f123.pub"
 
 
 def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven():
@@ -751,6 +757,8 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     registry_payload = json.loads(registry_text)
     registry = EnvironmentRegistry.model_validate(registry_payload)
     assert registry.production_env_ids == ("prod-cn-east", "prod-overseas-a")
+    assert registry.find_env("test-cn").kubernetes.ingress_host == "llm-agent-test.f123.pub"
+    assert "deeptutor-test-cn.example.internal" not in registry_text
 
     pipeline = pipeline_path.read_text(encoding="utf8")
     assert "CI_COMMIT_TAG" in pipeline
@@ -869,6 +877,11 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "name: backend-http" in backend
     assert "containerPort: 3782" in backend
     assert "targetPort: frontend-http" in backend
+    assert "DEEPTUTOR_POSTGRES_CONFIG" in backend
+    assert "value: /etc/deeptutor/deployment.json" in backend
+    assert "volumeMounts:" in backend
+    assert "mountPath: /etc/deeptutor" in backend
+    assert "name: deeptutor-deployment-config" in backend
     assert ":latest" not in backend
     assert 'PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"' in migration
     assert "python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json schema plan" in migration
@@ -1050,7 +1063,7 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
         + "1" * 64,
         "DEEPTUTOR_RELEASE_ID": "test-cn-v1-4-0",
         "DEEPTUTOR_TARGET_ENV_ID": "test-cn",
-        "DEEPTUTOR_INGRESS_HOST": "deeptutor-test-cn.example.internal",
+        "DEEPTUTOR_INGRESS_HOST": "llm-agent-test.f123.pub",
         "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
         "DEEPTUTOR_RELEASE_LOCK_REF": "postgres:test-cn/release_locks",
         "DEEPTUTOR_MIGRATION_LOCK_REF": "postgres:test-cn/migration_locks",
@@ -1078,12 +1091,19 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
             assert doc["metadata"]["name"]
             if doc["kind"] == "Deployment":
                 assert doc["spec"]["replicas"] == 3
-                env = {
-                    item["name"]: item.get("value", "")
-                    for item in doc["spec"]["template"]["spec"]["containers"][0]["env"]
-                }
+                pod_spec = doc["spec"]["template"]["spec"]
+                backend_container = pod_spec["containers"][0]
+                env = {item["name"]: item.get("value", "") for item in backend_container["env"]}
                 assert env["DEEPTUTOR_EXECUTION_MODE"] == "replicated"
                 assert env["DEEPTUTOR_TURN_COORDINATION_BACKEND"] == "redis"
+                assert env["DEEPTUTOR_POSTGRES_CONFIG"] == "/etc/deeptutor/deployment.json"
+                mounts = {mount["name"]: mount for mount in backend_container["volumeMounts"]}
+                assert mounts["deployment-config"]["mountPath"] == "/etc/deeptutor"
+                assert mounts["deployment-config"]["readOnly"] is True
+                volumes = {volume["name"]: volume for volume in pod_spec["volumes"]}
+                assert volumes["deployment-config"]["configMap"]["name"] == (
+                    "deeptutor-deployment-config"
+                )
             if doc["kind"] == "HorizontalPodAutoscaler":
                 assert doc["spec"]["minReplicas"] == 3
                 assert doc["spec"]["maxReplicas"] == 12
@@ -1146,7 +1166,7 @@ def test_protected_k8s_deploy_script_rejects_replicas_without_redis_before_kubec
             "DEEPTUTOR_RUNTIME_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/runtime@sha256:"
             + "1" * 64,
             "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
-            "DEEPTUTOR_INGRESS_HOST": "deeptutor-test-cn.example.internal",
+            "DEEPTUTOR_INGRESS_HOST": "llm-agent-test.f123.pub",
             "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
             "DEEPTUTOR_RELEASE_LOCK_REF": "postgres:test-cn/release_locks",
             "DEEPTUTOR_MIGRATION_LOCK_REF": "postgres:test-cn/migration_locks",
@@ -1222,7 +1242,7 @@ exit 0
             "DEEPTUTOR_RUNTIME_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/runtime@sha256:"
             + "1" * 64,
             "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
-            "DEEPTUTOR_INGRESS_HOST": "deeptutor-test-cn.example.internal",
+            "DEEPTUTOR_INGRESS_HOST": "llm-agent-test.f123.pub",
             "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
             "DEEPTUTOR_RELEASE_LOCK_REF": "postgres:test-cn/release_locks",
             "DEEPTUTOR_MIGRATION_LOCK_REF": "postgres:test-cn/migration_locks",
@@ -1311,7 +1331,7 @@ exit 0
             "DEEPTUTOR_RUNTIME_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/runtime@sha256:"
             + "1" * 64,
             "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
-            "DEEPTUTOR_INGRESS_HOST": "deeptutor-test-cn.example.internal",
+            "DEEPTUTOR_INGRESS_HOST": "llm-agent-test.f123.pub",
             "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
             "DEEPTUTOR_RELEASE_LOCK_REF": "postgres:test-cn/release_locks",
             "DEEPTUTOR_MIGRATION_LOCK_REF": "postgres:test-cn/migration_locks",
