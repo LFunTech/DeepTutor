@@ -11,11 +11,13 @@ from deeptutor_enterprise.migrations.runner import MigrationRunner
 from deeptutor_enterprise.stores.postgres.connection import Database
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 @pytest.fixture
 async def recovery_cli(pg_dsn, monkeypatch, tmp_path):
     await MigrationRunner(pg_dsn).apply()
-    dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    dsn = single_database_user_dsn(pg_dsn)
     tenant = str(uuid.uuid4())
     raw = {
         "version": 1,

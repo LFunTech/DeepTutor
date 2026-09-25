@@ -9,13 +9,15 @@ from deeptutor_enterprise.scope import TenantScope
 from deeptutor_enterprise.stores.postgres.connection import Database
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 async def test_backup_restore_never_restores_old_password_or_token(pg_dsn, tmp_path):
     assert importlib.util.find_spec("deeptutor_enterprise.recovery"), "身份恢复门禁尚未实现"
     from deeptutor_enterprise.recovery import RecoveryOperations
 
     await MigrationRunner(pg_dsn).apply()
-    dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    dsn = single_database_user_dsn(pg_dsn)
     tenant = str(uuid.uuid4())
     backup = tmp_path / "backup.dump"
     async with Database(dsn, resource="restore") as db:
@@ -61,6 +63,7 @@ async def test_backup_restore_never_restores_old_password_or_token(pg_dsn, tmp_p
         check=True,
         capture_output=True,
     )
+    dsn = single_database_user_dsn(pg_dsn)
     async with Database(dsn, resource="restore") as db:
         restored = IdentityService(
             db, tenant_id=tenant, signing_key="s" * 48, auth_epoch="epoch-2", bootstrap_secret=None

@@ -40,23 +40,23 @@ python -m build extensions/enterprise --outdir /tmp/deeptutor-enterprise-dist
 
 - 一个部署固定一个 `tenant_id`，只接受配置中的精确 HTTPS `origins`；客户端不能以 header、query 或请求体改租户。`resource` 是执行登记标识，不是多执行者隔离开关。
 - JSON 只承载非敏感只读配置与 `env:VAR` 引用。由 Secret 管理器或受控进程环境注入值；不从项目根 `.env` 加载，不把 DSN、密码、token、模型 key 放入配置、命令参数、URL、日志或版本库。
-- `DT_DATABASE_DSN`：受限应用角色的 DSN。迁移使用**独立**的 `DT_MIGRATION_DSN`。生产网络认证、数据库 TLS、证书和 Secret 分发须由部署侧配置，不能复用测试的 trust 认证。
+- `DT_DATABASE_DSN`：目标库的单数据库用户 DSN。当前 G1/test-cn 模式下迁移可使用相同的 `DT_MIGRATION_DSN`/`PG_MIGRATOR_DSN`，该用户应只拥有本目标库及其对象，且不得是 superuser、createdb、createrole 或 bypassrls。生产网络认证、数据库 TLS、证书和 Secret 分发须由部署侧配置，不能复用测试的 trust 认证。
 - `DT_SIGNING_KEY`：至少 32 字符的独立签名 Secret；`DT_BOOTSTRAP_SECRET`：至少 32 字符的一次性初始化 Secret；`DT_AUTH_EPOCH`：非空、由快照之外的可信系统维护的认证世代，不能随 PG 备份一起回退。密码要求 UTF-8 长度 12–72 字节。
 - `DT_MODEL_API_KEY` 只在模型调用配置中解析。模型 `base_url` 必须为不含凭证、query、fragment 的 HTTPS 地址；`provider` 仅 `openai` 或 `anthropic`。每项模型必须显式设置 `allowed_roles` 或 `allowed_user_ids`，二者按“或”授权；`tenant_admin` 没有模型权限旁路。
 - `allowed_tools` 只允许 `ask_user`，也可设 `[]`；仅装配 `chat`，不加载动态插件。模型/工具配置没有写入或“保存设置”API，修改部署配置后须受控重启。`max_tokens` 是发送给供应商的输出参数，未必限制额外 reasoning tokens；超时/重试/轮数也不是货币硬上限。标题、摘要同样可能计费，付费测试需供应商侧预算/思考额度并记录缺失用量，不能按 0 处理。
 
 ### 数据库角色与迁移
 
-由数据库管理员为**专用目标库**准备迁移身份及认证。当前迁移会在角色不存在时创建 `dt_enterprise_app`（`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS`）并授予所需 DML；不会设置该角色密码。初次迁移身份需要创建 schema / 对象，以及按需创建角色和授权的权限。不要让应用身份拥有数据库、`enterprise` schema、表或 sequence。
+由数据库管理员为**专用目标库**准备一个单数据库用户及认证。当前迁移不再创建固定运行角色（例如 `dt_enterprise_app`），也不再执行数据库级 GRANT/REVOKE 来表达业务权限；首次迁移身份只需要能在目标库内创建/变更 DeepTutor schema 与对象。该用户可以是目标库、schema、表和 sequence 的 owner，但不得拥有跨库/集群管理能力（superuser、createdb、createrole、bypassrls）。
 
-运行连接检查会拒绝高权限角色，以及能经继承、`SET ROLE` 或可管理成员关系到达高权限/所有者的角色路径。运行账户不能执行 DDL。租户表使用 `ENABLE/FORCE ROW LEVEL SECURITY`，个人会话再加 owner 策略和复合外键；管理员也不能读取同租户其他人的会话。`schema_history` 和执行登记表不是租户正文表。
+运行连接检查会拒绝高权限角色，以及能经继承、`SET ROLE` 或可管理成员关系到达高权限角色的路径；不再因为当前用户是目标库或对象 owner 而拒绝。权限边界由 DeepTutor 应用层鉴权、scope、owner guard、审计与受控入口负责；租户表保留 `ENABLE ROW LEVEL SECURITY` 与 policy 作为目录漂移和未来角色拆分的防线，但不使用 `FORCE ROW LEVEL SECURITY` 作为当前单用户模型的主要隔离机制。`schema_history` 和执行登记表不是租户正文表。
 
 下列命令仅应在核实目标、备份与维护窗口后由获准操作者执行；本文不要求对已有共享库试运行：
 
 ```bash
-deeptutor-enterprise --config deployment.json schema plan --dsn-env DT_MIGRATION_DSN
-deeptutor-enterprise --config deployment.json schema apply --dsn-env DT_MIGRATION_DSN
-deeptutor-enterprise --config deployment.json schema verify --dsn-env DT_MIGRATION_DSN
+deeptutor-enterprise --config deployment.json schema plan --dsn-env DT_DATABASE_DSN
+deeptutor-enterprise --config deployment.json schema apply --dsn-env DT_DATABASE_DSN
+deeptutor-enterprise --config deployment.json schema verify --dsn-env DT_DATABASE_DSN
 ```
 
 `plan` 列出待执行版本并核对历史 checksum；`apply` 在迁移互斥与事务内执行 DDL 和历史登记，失败整体回滚；`verify` 要求没有待执行版本，并核对实际列、关键约束/FK、唯一 active-turn 索引及 RLS/policy，不能只伪造历史表通过。漂移会拒绝，不会自动接管或修复。**应用启动只 `verify`，从不自动 `apply` 或回退 SQLite。**
@@ -292,7 +292,7 @@ PYTHONPATH="$PWD" python -m pytest -c extensions/enterprise/pytest.ini \
   extensions/enterprise/tests --ignore=extensions/enterprise/tests/test_real_model.py
 ```
 
-fixture 使用 `initdb` / `pg_ctl` 启动临时 PG 集群，只监听临时 Unix socket、禁用 TCP，每 case 创建独立临时库，结束后清理。使用临时 superuser 安装 schema / 构造测试数据，再以受限 `dt_enterprise_app` 执行应用路径；**不连接共享或开发者已有数据库**。缺原生 PG 明确失败，不跳过为 mock。
+fixture 使用 `initdb` / `pg_ctl` 启动临时 PG 集群，只监听临时 Unix socket、禁用 TCP，每 case 创建独立临时库，结束后清理。测试会创建仅限该库的非特权 owner 用户（无 superuser/createdb/createrole/bypassrls）并以同一用户覆盖迁移、verify 与应用路径；**不连接共享或开发者已有数据库**。缺原生 PG 明确失败，不跳过为 mock。
 
 覆盖入口包括 `test_persistence.py`、`test_sessions.py`、`test_identity.py`、`test_application.py`、`test_flows.py`、`test_denials.py`、`test_isolation_matrix.py`、`test_versions.py`、`test_cli*.py`、`test_executor.py`、`test_restore.py` 与 `test_process_rebuild.py`。确定性入口测试使用受控模型替身，但数据库、鉴权、事务和入口是真实路径；不能用这些测试代替真实模型验收。
 

@@ -10,7 +10,7 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 
-async def test_migrated_database_uses_product_runner_and_restricted_runtime_role(
+async def test_migrated_database_uses_product_runner_and_single_database_user(
     migrated_pg,
     business_database,
     business_actors,
@@ -28,13 +28,13 @@ async def test_migrated_database_uses_product_runner_and_restricted_runtime_role
     assert role == (migrated_pg.runtime_role, False, False, False, False)
 
     actor = business_actors.tenants[0].owners[0]
-    with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        async with business_database.transaction(actor.scope) as connection:
-            await connection.execute("CREATE TABLE enterprise.fixture_must_not_exist(id int)")
+    async with business_database.transaction(actor.scope) as connection:
+        await connection.execute("CREATE TABLE enterprise.fixture_single_user_can_ddl(id int)")
+        await connection.execute("DROP TABLE enterprise.fixture_single_user_can_ddl")
 
     async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
         relation = await (
-            await connection.execute("SELECT to_regclass('enterprise.fixture_must_not_exist')")
+            await connection.execute("SELECT to_regclass('enterprise.fixture_single_user_can_ddl')")
         ).fetchone()
     assert relation == (None,)
 
@@ -68,13 +68,15 @@ async def test_actor_and_existing_session_store_factories_enforce_owner_scope(
             rows = await pg_session_store_factory(actor).list_sessions()
             assert [row["id"] for row in rows] == [expected[actor.scope]]
 
-    # 直接使用受限连接也必须经过相同的 RLS，而非仅靠 Store 的 WHERE 条件。
+    # 单库单用户模型下，直接 SQL 是目标库 owner 视角；业务隔离必须由 Store / service
+    # 路径的 scope、owner guard 和审计执行，而不是依赖数据库角色过滤。
     first = business_actors.tenants[0].owners[0]
     async with business_database.transaction(first.scope) as connection:
         visible = await (
             await connection.execute("SELECT owner_id, id FROM enterprise.sessions ORDER BY id")
         ).fetchall()
-    assert visible == [{"owner_id": first.user_id, "id": expected[first.scope]}]
+    assert {row["id"] for row in visible} == set(expected.values())
+    assert any(row["owner_id"] != first.user_id for row in visible)
 
     async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
         totals = await (
@@ -167,7 +169,8 @@ async def test_all_six_issued_actors_work_through_async_sync_session_and_rls(
         await store.create_session(f"Issued actor {index}", session_id=session_id)
         assert [row["id"] for row in await store.list_sessions()] == [session_id]
 
-        # 同步直查同样由 RLS 收窄到当前 actor，包含 admin 的个人数据边界。
+        # 直接 SQL 不再证明隔离；它展示单库 owner 能看到本测试已创建的所有行。
+        # 用户可见边界由上面的 Store API 断言覆盖。
         assert (
             await business_sync_database.run(
                 scope,
@@ -175,5 +178,5 @@ async def test_all_six_issued_actors_work_through_async_sync_session_and_rls(
                     "SELECT count(*) AS count FROM enterprise.sessions"
                 ).fetchone()["count"],
             )
-            == 1
+            == index + 1
         )

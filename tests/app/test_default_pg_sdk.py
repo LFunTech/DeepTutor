@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+from tests.fixtures.postgres import pg_cluster, pg_dsn, single_database_user_dsn  # noqa: F401
 
 
 def _reset_runtime_singletons(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
@@ -58,7 +58,7 @@ async def _prepare_default_sdk_environment(
     _reset_runtime_singletons(monkeypatch, tmp_path / "home")
     tenant_id = str(uuid.uuid4())
     config = _write_postgres_config(tmp_path / "postgres.json", tenant_id)
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     monkeypatch.setenv("DEEPTUTOR_POSTGRES_CONFIG", str(config))
     monkeypatch.setenv("DEEPTUTOR_DATABASE_URL", runtime_dsn)
     monkeypatch.setenv("TEST_SIGNING_SECRET", "s" * 48)
@@ -71,7 +71,7 @@ async def _prepare_default_sdk_environment(
     from deeptutor.persistence.postgres.scope import TenantScope
     from deeptutor.persistence.postgres.session import PostgresSessionStore
 
-    await MigrationRunner(pg_dsn).apply()
+    await MigrationRunner(runtime_dsn).apply()
     async with Database(runtime_dsn, resource="default-sdk-bootstrap") as db:
         identity = IdentityService(
             db,

@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+from tests.fixtures.postgres import pg_cluster, pg_dsn, single_database_user_dsn  # noqa: F401
 
 
 def invoke(args, environment):
@@ -58,7 +58,7 @@ async def test_controlled_cli_bootstrap_and_account_lifecycle(pg_dsn, tmp_path):
         "TEST_SIGN": "s" * 48,
         "TEST_EPOCH": "epoch1",
         "TEST_BOOT": "b" * 48,
-        "DEEPTUTOR_DATABASE_URL": pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+        "DEEPTUTOR_DATABASE_URL": single_database_user_dsn(pg_dsn),
         "TEST_PASS": "administrator-123",
     }
     environment.pop("DT_RUN_REAL_MODEL", None)

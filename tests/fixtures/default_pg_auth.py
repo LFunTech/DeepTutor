@@ -13,6 +13,7 @@ from deeptutor.persistence.postgres.identity.service import IdentityService
 from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
 from deeptutor.persistence.resources import OwnerResourceProvider
 from deeptutor.services.auth import PostgresAuthProvider
+from tests.fixtures.postgres import single_database_user_dsn
 
 
 class AccountClient(TestClient):
@@ -56,9 +57,8 @@ def pg_auth_client(dsn, root, *, admin="alice", learner="bob", ordinary="sam"):
     @asynccontextmanager
     async def lifespan(app):
         await MigrationRunner(dsn).apply()
-        async with Database(
-            dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="test-default-auth"
-        ) as db:
+        runtime_dsn = single_database_user_dsn(dsn)
+        async with Database(runtime_dsn, resource="test-default-auth") as db:
             service = IdentityService(
                 db,
                 tenant_id=str(uuid.uuid4()),

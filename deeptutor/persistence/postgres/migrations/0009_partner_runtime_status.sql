@@ -27,9 +27,7 @@ CREATE INDEX partner_runtime_status_owner_updated ON enterprise.partner_runtime_
 DO $$ DECLARE t text; BEGIN
  FOREACH t IN ARRAY ARRAY['partner_runtime_status'] LOOP
   EXECUTE format('ALTER TABLE enterprise.%I ENABLE ROW LEVEL SECURITY',t);
-  EXECUTE format('ALTER TABLE enterprise.%I FORCE ROW LEVEL SECURITY',t);
   EXECUTE format('CREATE POLICY tenant_scope ON enterprise.%I USING (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid)',t);
   EXECUTE format('CREATE POLICY owner_scope ON enterprise.%I AS RESTRICTIVE USING (owner_id = nullif(current_setting(''app.user_id'',true),'''')) WITH CHECK (owner_id = nullif(current_setting(''app.user_id'',true),''''))',t);
-  EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.%I TO dt_enterprise_app',t);
  END LOOP;
 END $$;

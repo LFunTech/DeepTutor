@@ -12,6 +12,8 @@ from deeptutor_enterprise.migrations.runner import MigrationRunner
 import httpx
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 @pytest.fixture
 async def app(pg_dsn, monkeypatch):
@@ -20,7 +22,7 @@ async def app(pg_dsn, monkeypatch):
 
     await MigrationRunner(pg_dsn).apply()
     for name, value in {
-        "DT_TEST_DB": pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+        "DT_TEST_DB": single_database_user_dsn(pg_dsn),
         "DT_TEST_SIGN": "s" * 48,
         "DT_TEST_EPOCH": "epoch-1",
         "DT_TEST_BOOT": "b" * 48,

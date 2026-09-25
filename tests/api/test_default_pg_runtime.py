@@ -10,7 +10,7 @@ import uuid
 from fastapi import FastAPI
 import pytest
 
-from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+from tests.fixtures.postgres import pg_cluster, pg_dsn, single_database_user_dsn  # noqa: F401
 
 
 def _reset_runtime_singletons(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
@@ -145,7 +145,7 @@ async def test_lifespan_refuses_executor_conflict_before_model_or_background(
     _reset_runtime_singletons(monkeypatch, tmp_path / "home")
     tenant_id = str(uuid.uuid4())
     config = _write_postgres_config(tmp_path / "postgres.json", tenant_id)
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     monkeypatch.setenv("DEEPTUTOR_POSTGRES_CONFIG", str(config))
     monkeypatch.setenv("DEEPTUTOR_DATABASE_URL", runtime_dsn)
     monkeypatch.setenv("TEST_SIGNING_SECRET", "s" * 48)
@@ -157,7 +157,7 @@ async def test_lifespan_refuses_executor_conflict_before_model_or_background(
     from deeptutor.persistence.postgres.identity.service import IdentityService
     from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
 
-    await MigrationRunner(pg_dsn).apply()
+    await MigrationRunner(runtime_dsn).apply()
     async with Database(runtime_dsn, resource="bootstrap-default-runtime") as db:
         identity = IdentityService(
             db,
@@ -192,7 +192,7 @@ async def test_default_container_assembles_real_pg_store_auth_and_domain_provide
     _reset_runtime_singletons(monkeypatch, tmp_path / "home")
     tenant_id = str(uuid.uuid4())
     config = _write_postgres_config(tmp_path / "postgres.json", tenant_id)
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     monkeypatch.setenv("DEEPTUTOR_POSTGRES_CONFIG", str(config))
     monkeypatch.setenv("DEEPTUTOR_DATABASE_URL", runtime_dsn)
     monkeypatch.setenv("TEST_SIGNING_SECRET", "s" * 48)
@@ -206,7 +206,7 @@ async def test_default_container_assembles_real_pg_store_auth_and_domain_provide
     from deeptutor.persistence.postgres.reading import AsyncReadingCatalogStore
     from deeptutor.persistence.postgres.session import PostgresSessionStore
 
-    await MigrationRunner(pg_dsn).apply()
+    await MigrationRunner(runtime_dsn).apply()
     async with Database(runtime_dsn, resource="bootstrap-default-runtime") as db:
         identity = IdentityService(
             db,

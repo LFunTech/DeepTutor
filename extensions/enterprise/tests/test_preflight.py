@@ -1,5 +1,6 @@
 """接流量前确认明确 hook、初始化状态及不可回退的认证世代。"""
 
+import os
 import uuid
 
 from deeptutor_enterprise.bootstrap import Enterprise
@@ -8,11 +9,13 @@ from deeptutor_enterprise.migrations.runner import MigrationRunner
 import psycopg
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 @pytest.fixture
 def deployment(pg_dsn, monkeypatch):
     for name, value in {
-        "PREFLIGHT_DB": pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+        "PREFLIGHT_DB": single_database_user_dsn(pg_dsn),
         "PREFLIGHT_MODEL": "model-only-secret",
         "PREFLIGHT_SIGN": "s" * 48,
         "PREFLIGHT_EPOCH": "epoch-1",
@@ -52,7 +55,7 @@ def test_missing_or_incompatible_hook_fails_before_database(deployment, monkeypa
 async def test_startup_requires_initialized_tenant_and_matching_epoch(
     pg_dsn, deployment, monkeypatch
 ):
-    await MigrationRunner(pg_dsn).apply()
+    await MigrationRunner(os.environ["PREFLIGHT_DB"]).apply()
     enterprise = Enterprise(deployment)
     try:
         with pytest.raises(RuntimeError, match="tenant"):
@@ -89,7 +92,7 @@ def test_core_version_mismatch_fails_before_database(deployment, monkeypatch):
 
 
 async def test_schema_mismatch_still_blocks_enterprise_composition(pg_dsn, deployment):
-    await MigrationRunner(pg_dsn).apply()
+    await MigrationRunner(os.environ["PREFLIGHT_DB"]).apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute("ALTER TABLE enterprise.sessions DISABLE ROW LEVEL SECURITY")
     enterprise = Enterprise(deployment)

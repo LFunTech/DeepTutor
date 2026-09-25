@@ -39,7 +39,7 @@ async def test_learning_migration_is_registered_and_verified(pg_dsn):
             assert c.execute(
                 "SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid=%s::regclass",
                 (f"enterprise.{table}",),
-            ).fetchone() == (True, True)
+            ).fetchone() == (True, False)
 
 
 @pytest.mark.parametrize("source", [1, 2, 3, 4])
@@ -89,7 +89,7 @@ async def test_learning_upgrade_verifies_source_and_rolls_back_target(pg_dsn, so
 @pytest.mark.parametrize(
     "mutation",
     [
-        "ALTER TABLE enterprise.mastery_paths NO FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE enterprise.mastery_paths DISABLE ROW LEVEL SECURITY",
         "DROP POLICY owner_scope ON enterprise.mastery_events",
         "ALTER TABLE enterprise.mastery_path_leases DISABLE TRIGGER ALL",
         "ALTER TABLE enterprise.notebook_entries ALTER COLUMN mastery_path_ref DROP EXPRESSION",

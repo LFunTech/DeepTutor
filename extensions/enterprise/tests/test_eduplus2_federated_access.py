@@ -19,6 +19,8 @@ from jose import jwt
 import pytest
 from test_application import app as app
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 pytestmark = pytest.mark.asyncio
 
 SIGNING_KEY = "s" * 48
@@ -31,7 +33,7 @@ ISSUER = "https://eduplus2.test"
 async def enterprise_db(pg_dsn):
     await MigrationRunner(pg_dsn).apply()
     async with Database(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="eduplus2-test"
+        single_database_user_dsn(pg_dsn), resource="eduplus2-test"
     ) as db:
         yield db
 
@@ -2130,7 +2132,7 @@ async def test_enterprise_wires_eduplus2_provider_from_env(monkeypatch):
     )
 
     for name, value in {
-        "DT_TEST_DB": "postgresql://dt_enterprise_app:pass@127.0.0.1:5432/deeptutor",
+        "DT_TEST_DB": "postgresql://deeptutor:pass@127.0.0.1:5432/deeptutor",
         "DT_TEST_SIGN": "s" * 48,
         "DT_TEST_EPOCH": "epoch-env",
         "DT_TEST_MODEL": "model-secret",
@@ -2212,7 +2214,7 @@ async def test_enterprise_env_can_disable_optional_eduplus2_profile_permission_c
     )
 
     for name, value in {
-        "DT_TEST_DB": "postgresql://dt_enterprise_app:pass@127.0.0.1:5432/deeptutor",
+        "DT_TEST_DB": "postgresql://deeptutor:pass@127.0.0.1:5432/deeptutor",
         "DT_TEST_SIGN": "s" * 48,
         "DT_TEST_EPOCH": "epoch-env",
         "DT_TEST_MODEL": "model-secret",

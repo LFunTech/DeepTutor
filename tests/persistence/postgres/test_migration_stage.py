@@ -19,14 +19,10 @@ from tests.persistence.postgres.business.conftest import (
 pytestmark = pytest.mark.asyncio
 
 
-async def test_migration_stage_schema_is_private_to_migration_role(pg_dsn: str) -> None:
-    """生产 migration 若把 staging 暴露给运行角色或不登记 schema 应失败。"""
+async def test_migration_stage_schema_uses_single_database_user_and_app_flow(migrated_pg, pg_dsn: str) -> None:
+    """生产迁移若仍依赖固定数据库运行角色隔离 staging，应阻断单库单用户部署。"""
 
-    from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
-
-    await MigrationRunner(pg_dsn).apply()
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
-    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
         tables = {
             row[0]
             for row in await (
@@ -46,16 +42,16 @@ async def test_migration_stage_schema_is_private_to_migration_role(pg_dsn: str) 
             "progress",
             "promotion_items",
         } <= tables
-        usage = await (
-            await connection.execute(
-                "SELECT has_schema_privilege('dt_enterprise_app','migration_stage','USAGE')"
-            )
-        ).fetchone()
-        assert usage[0] is False
-
-    async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
-        with pytest.raises(errors.InsufficientPrivilege):
+        count = await (
             await connection.execute("SELECT count(*) FROM migration_stage.batches")
+        ).fetchone()
+        assert count[0] == 0
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        role_exists = await (
+            await connection.execute("SELECT 1 FROM pg_roles WHERE rolname='dt_enterprise_app'")
+        ).fetchone()
+    assert role_exists is None
 
 
 async def test_batch_progress_cancel_resume_and_cleanup_are_persistent(migrated_pg) -> None:

@@ -26,7 +26,8 @@ from .scope import TenantScope
 
 T = TypeVar("T")
 
-# 检查所有非系统 schema，不能在从企业包提取后保留 enterprise 专用安全边界。
+# 单库单数据库用户模型：应用连接可以是目标库/schema/table owner，
+# 但不能直接或通过可继承/可 SET 的成员身份获得集群级或 RLS 旁路能力。
 _RESTRICTED_ROLE_SQL = """
 WITH RECURSIVE reachable(oid) AS (
     SELECT oid FROM pg_roles WHERE rolname IN (current_user, session_user)
@@ -37,17 +38,6 @@ WITH RECURSIVE reachable(oid) AS (
 SELECT EXISTS (
     SELECT 1 FROM reachable a JOIN pg_roles r ON r.oid=a.oid
     WHERE r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb
-       OR EXISTS (
-           SELECT 1 FROM pg_class cl JOIN pg_namespace n ON n.oid=cl.relnamespace
-           WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-             AND cl.relowner=r.oid)
-       OR EXISTS (
-           SELECT 1 FROM pg_namespace n
-           WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-             AND n.nspowner=r.oid)
-       OR EXISTS (
-           SELECT 1 FROM pg_database d
-           WHERE d.datname=current_database() AND d.datdba=r.oid)
 ) AS unsafe
 """
 _SCOPE_SQL = """
@@ -165,7 +155,7 @@ class Database(_Configuration):
             async with self.pool.connection() as c:
                 row = await (await c.execute(_RESTRICTED_ROLE_SQL)).fetchone()
                 if not row or row["unsafe"]:
-                    raise RuntimeError("application requires a restricted PostgreSQL role")
+                    raise RuntimeError("application requires a restricted non-privileged PostgreSQL role")
         except BaseException:
             close = asyncio.create_task(self.pool.close())
             await _drain(close)
@@ -262,7 +252,7 @@ class SyncDatabase(_Configuration):
             with self.pool.connection() as c:
                 row = c.execute(_RESTRICTED_ROLE_SQL).fetchone()
                 if not row or row["unsafe"]:
-                    raise RuntimeError("application requires a restricted PostgreSQL role")
+                    raise RuntimeError("application requires a restricted non-privileged PostgreSQL role")
         except BaseException:
             self.pool.close()
             raise

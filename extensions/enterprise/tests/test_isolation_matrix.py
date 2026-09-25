@@ -15,6 +15,7 @@ from test_flows import ScriptedModel, Socket, chunk
 from deeptutor.core.providers import get_providers
 from deeptutor.multi_user.context import get_current_user_or_none
 from deeptutor.services.session import get_session_store
+from tests.fixtures.postgres import single_database_user_dsn
 
 ORIGIN = "https://school.example"
 PASSWORD = "matrix-test-password-2026"
@@ -503,7 +504,7 @@ async def test_two_tenants_with_identical_user_session_turn_ids_cannot_replay_ea
 
     await MigrationRunner(pg_dsn).apply()
     env = {
-        "DT_MATRIX_DB": pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+        "DT_MATRIX_DB": single_database_user_dsn(pg_dsn),
         "DT_MATRIX_SIGN": "s" * 48,
         "DT_MATRIX_EPOCH": "matrix-epoch",
         "DT_MATRIX_BOOT": "b" * 48,

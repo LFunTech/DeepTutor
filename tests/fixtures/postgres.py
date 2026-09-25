@@ -62,6 +62,69 @@ def pg_cluster(tmp_path_factory):
         shutil.rmtree(socket)
 
 
+def single_database_user_dsn(admin_dsn: str) -> str:
+    """Create and return a non-privileged database owner DSN for one-test single-user runtime."""
+
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    info = conninfo_to_dict(admin_dsn)
+    role = "owner_" + uuid.uuid4().hex
+    with psycopg.connect(admin_dsn) as c:
+        c.execute(
+            sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+            ).format(sql.Identifier(role))
+        )
+        c.execute(
+            sql.SQL("ALTER DATABASE {} OWNER TO {}").format(
+                sql.Identifier(info["dbname"]), sql.Identifier(role)
+            )
+        )
+        schemas = [
+            row[0]
+            for row in c.execute(
+                """
+                SELECT nspname
+                FROM pg_namespace
+                WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'
+                """
+            ).fetchall()
+        ]
+        for schema in schemas:
+            c.execute(
+                sql.SQL("ALTER SCHEMA {} OWNER TO {}").format(
+                    sql.Identifier(schema), sql.Identifier(role)
+                )
+            )
+        objects = c.execute(
+            """
+            SELECT n.nspname, c.relname, c.relkind
+            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+              AND c.relkind IN ('r','p','v','m','f','S')
+            ORDER BY CASE c.relkind WHEN 'S' THEN 2 ELSE 1 END
+            """
+        ).fetchall()
+        kind_sql = {"r": "TABLE", "p": "TABLE", "v": "VIEW", "m": "MATERIALIZED VIEW", "f": "FOREIGN TABLE", "S": "SEQUENCE"}
+        for schema, name, kind in objects:
+            c.execute(
+                sql.SQL("ALTER {} {}.{} OWNER TO {}").format(
+                    sql.SQL(kind_sql[kind]),
+                    sql.Identifier(schema),
+                    sql.Identifier(name),
+                    sql.Identifier(role),
+                )
+            )
+    return make_conninfo(**{**info, "user": role})
+
+
+@pytest.fixture
+def pg_single_user_dsn(pg_dsn):
+    return single_database_user_dsn(pg_dsn)
+
+
 @pytest.fixture
 def pg_dsn(pg_cluster):
     import psycopg

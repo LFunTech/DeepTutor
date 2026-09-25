@@ -86,12 +86,7 @@ CREATE INDEX notebook_entry_categories_category ON enterprise.notebook_entry_cat
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['notebook_entries','notebook_categories','notebook_entry_categories'] LOOP
     EXECUTE format('ALTER TABLE enterprise.%I ENABLE ROW LEVEL SECURITY',t);
-    EXECUTE format('ALTER TABLE enterprise.%I FORCE ROW LEVEL SECURITY',t);
     EXECUTE format('CREATE POLICY tenant_scope ON enterprise.%I USING (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid)',t);
     EXECUTE format('CREATE POLICY owner_scope ON enterprise.%I AS RESTRICTIVE USING (owner_id = nullif(current_setting(''app.user_id'',true),'''')) WITH CHECK (owner_id = nullif(current_setting(''app.user_id'',true),''''))',t);
   END LOOP;
 END $$;
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.notebook_entries,
-  enterprise.notebook_categories,enterprise.notebook_entry_categories TO dt_enterprise_app;
-GRANT USAGE ON SEQUENCE enterprise.notebook_entries_id_seq,
-  enterprise.notebook_categories_id_seq TO dt_enterprise_app;

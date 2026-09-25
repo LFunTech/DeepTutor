@@ -13,6 +13,8 @@ import psycopg
 from psycopg.types.json import Jsonb
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 def test_pg_session_repository_is_available():
     assert importlib.util.find_spec("deeptutor_enterprise.stores.postgres.session") is not None, (
@@ -42,7 +44,7 @@ async def stores(pg_dsn):
     except (ImportError, AttributeError):
         pytest.fail("缺失 PostgresSessionStore：需要真实 PG 会话持久化实现")
     async with Database(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="test-session-db"
+        single_database_user_dsn(pg_dsn), resource="test-session-db"
     ) as db:
         yield (
             cls(db, TenantScope(tenants[0], "alice")),

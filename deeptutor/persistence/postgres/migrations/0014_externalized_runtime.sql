@@ -126,7 +126,6 @@ CREATE TABLE enterprise.runtime_audit_events (
 );
 
 ALTER TABLE enterprise.resource_objects ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.resource_objects FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.resource_objects
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
@@ -135,7 +134,6 @@ CREATE POLICY owner_scope ON enterprise.resource_objects AS RESTRICTIVE
   WITH CHECK (owner_id = nullif(current_setting('app.user_id', true),''));
 
 ALTER TABLE enterprise.resource_cleanup_jobs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.resource_cleanup_jobs FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.resource_cleanup_jobs
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
@@ -144,25 +142,21 @@ CREATE POLICY owner_scope ON enterprise.resource_cleanup_jobs AS RESTRICTIVE
   WITH CHECK (owner_id = nullif(current_setting('app.user_id', true),''));
 
 ALTER TABLE enterprise.runtime_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.runtime_settings FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.runtime_settings
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
 
 ALTER TABLE enterprise.runtime_policies ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.runtime_policies FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.runtime_policies
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
 
 ALTER TABLE enterprise.secret_references ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.secret_references FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.secret_references
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
 
 ALTER TABLE enterprise.runtime_audit_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.runtime_audit_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.runtime_audit_events
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
@@ -179,10 +173,3 @@ CREATE INDEX secret_references_status
   ON enterprise.secret_references(tenant_id, status, updated_at);
 CREATE INDEX runtime_audit_events_kind_time
   ON enterprise.runtime_audit_events(tenant_id, event_kind, created_at DESC);
-
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.resource_objects TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.resource_cleanup_jobs TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.runtime_settings TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.runtime_policies TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.secret_references TO dt_enterprise_app;
-GRANT SELECT,INSERT ON enterprise.runtime_audit_events TO dt_enterprise_app;

@@ -57,6 +57,7 @@
 - **WHEN** 环境 `prod-cn-east` 被登记为发布目标
 - **THEN** deployment contract 至少声明 `DT_PROD_CN_EAST_REGISTRY_PUSH_TOKEN`、`DT_PROD_CN_EAST_KUBE_DEPLOY_TOKEN` 或 `DT_PROD_CN_EAST_KUBECONFIG`、`DT_PROD_CN_EAST_SECRETSTORE_AUTH` 或等价 role、`DT_PROD_CN_EAST_PG_MIGRATOR_DSN` 或 `DT_PROD_CN_EAST_PG_MIGRATOR_SECRET_REF`、runtime secret refs、smoke credential、`DT_PROD_CN_EAST_EVIDENCE_STORE_WRITE_TOKEN`、以及 tag/approval verify token 或可信元数据来源
 - **AND** 每个 secret/ref 都记录 secret resolution 模式、用途、权限边界、环境作用域、轮换/过期策略和脱敏 evidence 字段
+- **AND** 如果该环境采用单库单数据库用户模式，`PG_MIGRATOR_DSN` 可以与 runtime DB secret 指向同一目标库 owner，但该用户不得是 superuser、createdb、createrole 或 bypassrls，也不得访问其他环境数据库；业务权限由应用层鉴权与审计控制，不通过额外数据库运行角色表达
 
 #### Scenario: Woodpecker 不读取 runtime 明文 secret
 - **WHEN** runtime 需要模型 key、EduPlus2 client secret、LightRAG API key、ObjectStore access key 或应用 DB 密码

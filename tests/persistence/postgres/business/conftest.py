@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
+import uuid
 from uuid import UUID
 
 import psycopg
+from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 import pytest
 import pytest_asyncio
@@ -22,14 +24,26 @@ from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
 from deeptutor.persistence.postgres.scope import TenantScope
 from deeptutor.persistence.postgres.session import PostgresSessionStore
 
-RUNTIME_ROLE = "dt_enterprise_app"
 SCHEMA_1 = "0001_identity_sessions"
 _SIGNING_KEY = "task-1.2-signing-key-is-synthetic-and-long-enough"
 _BOOTSTRAP_SECRET = "task-1.2-bootstrap-secret-is-synthetic-and-long-enough"
 
 
-def _dsn_for_role(dsn: str, role: str) -> str:
-    return make_conninfo(**{**conninfo_to_dict(dsn), "user": role})
+def _single_owner_dsn(dsn: str) -> tuple[str, str]:
+    info = conninfo_to_dict(dsn)
+    role = "owner_" + uuid.uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute(
+            sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+            ).format(sql.Identifier(role))
+        )
+        connection.execute(
+            sql.SQL("ALTER DATABASE {} OWNER TO {}").format(
+                sql.Identifier(info["dbname"]), sql.Identifier(role)
+            )
+        )
+    return make_conninfo(**{**info, "user": role}), role
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,13 +82,14 @@ class BusinessActors:
 async def migrated_pg(pg_dsn) -> MigratedPostgres:
     """对每测试独立数据库运行真实产品 migration，并验证 catalog。"""
 
-    runner = MigrationRunner(pg_dsn)
+    owner_dsn, runtime_role = _single_owner_dsn(pg_dsn)
+    runner = MigrationRunner(owner_dsn)
     pending = await runner.plan()
     assert pending and pending[0] == SCHEMA_1
     await runner.apply()
     await runner.verify()
     assert await runner.plan() == []
-    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+    async with await psycopg.AsyncConnection.connect(owner_dsn) as connection:
         versions = tuple(
             row[0]
             for row in await (
@@ -84,9 +99,9 @@ async def migrated_pg(pg_dsn) -> MigratedPostgres:
             ).fetchall()
         )
     return MigratedPostgres(
-        admin_dsn=pg_dsn,
-        runtime_dsn=_dsn_for_role(pg_dsn, RUNTIME_ROLE),
-        runtime_role=RUNTIME_ROLE,
+        admin_dsn=owner_dsn,
+        runtime_dsn=owner_dsn,
+        runtime_role=runtime_role,
         schema_versions=versions,
     )
 

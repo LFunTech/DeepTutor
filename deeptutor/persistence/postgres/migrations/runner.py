@@ -544,6 +544,58 @@ _MIGRATION_STAGE_COLUMNS = {
     "promotion_items": "batch_id:uuid! domain:text! item_key:text! payload:jsonb! status:text! updated_at:timestamptz!",
 }
 
+# 2026-09 G1 决策改为单库单数据库用户：新迁移不再创建/授权独立
+# dt_enterprise_app 角色。已经应用过旧 role-grant SQL 的环境只要目录结构校验仍通过，
+# 允许这些旧 checksum 继续作为兼容历史，避免把等价的 ACL 策略调整误判为结构漂移。
+_LEGACY_ROLE_GRANT_CHECKSUMS = {
+    "0001_identity_sessions": frozenset({
+        "06a1a9303d9d45745a31a94ec9a95ce2d864e48ff41be2a6a8d926abdeea7a3f",
+    }),
+    "0002_account_profiles_devices": frozenset({
+        "9c55108c497f0c19b91a96e7813b711ed111540851d1c019c1876051884ae005",
+    }),
+    "0004_notebook_entries_categories": frozenset({
+        "37baf9172c09031a6bb901daa42be7e7dde758ec549b1e7e462638fa1cf6fadf",
+    }),
+    "0005_learning": frozenset({
+        "4ca565a95b3d7540ad0b24d7a7ec824327b2907379943eb7825e01ca86621398",
+    }),
+    "0006_reading": frozenset({
+        "a0d69b15fc62d9786f453e8b7de430745b1806a5c53983e909972c90e501b62e",
+    }),
+    "0007_session_resources": frozenset({
+        "f2a46b75d43c9617b3cb4a07b084a156d4e0be52e0f47d5a512f4a5a463eca69",
+    }),
+    "0008_cron": frozenset({
+        "efe39a3661b1bd4d7f4ae4118ca16481d609157c2c4a39785157b1d5aa34f63f",
+    }),
+    "0009_partner_runtime_status": frozenset({
+        "521a4568931864606ebd841ede44d9ae753407de645916306930ee43e4000e84",
+    }),
+    "0010_matrix_store": frozenset({
+        "62f88dc235fad526fc1bf2d5464112e461ac4d1d5871c33e5cd509aa4abbf013",
+    }),
+    "0011_marginnote_store": frozenset({
+        "9483eb57bdbd0d685d6130d5349ca1fae2eb0648fa453d5a8354f77c57846214",
+    }),
+    "0012_offline_import_stage": frozenset({
+        "673e38f3cfb2adeb0a2b7d7d95063a45ae14b5b56b2ef8680b90afb1ba16b91d",
+    }),
+    "0013_courses": frozenset({
+        "c41c2300d8ec0699fa78d7eade382e720a760d9921c3b898b62b0eb7bc0f96ef",
+    }),
+    "0014_externalized_runtime": frozenset({
+        "27747b00005f86f528dba89ec24be52efc26ddf3b3b3886e959a4b4cb56d7023",
+    }),
+}
+
+
+def _accepted_checksums(expected):
+    return {
+        version: frozenset({digest, *_LEGACY_ROLE_GRANT_CHECKSUMS.get(version, ())})
+        for version, digest in expected.items()
+    }
+
 
 class MigrationRunner:
     def __init__(self, dsn):
@@ -576,7 +628,8 @@ class MigrationRunner:
         history = await self._history(c)
         migrations = self._migrations()
         expected = {v: hashlib.sha256(sql.encode()).hexdigest() for v, sql in migrations}
-        if any(v not in expected or expected[v] != digest for v, digest in history.items()):
+        accepted = _accepted_checksums(expected)
+        if any(v not in accepted or digest not in accepted[v] for v, digest in history.items()):
             raise RuntimeError("schema history drift or incompatible version")
         applied = [v for v, _ in migrations if v in history]
         if applied != [v for v, _ in migrations][: len(applied)]:
@@ -603,8 +656,8 @@ class MigrationRunner:
             raise RuntimeError("schema drift: required table set differs")
         for name, (kind, enabled, forced) in tables.items():
             expected_rls = name in tenant_tables
-            if kind != "r" or enabled != expected_rls or forced != expected_rls:
-                raise RuntimeError(f"schema drift: {name} table kind or RLS ENABLE/FORCE differs")
+            if kind != "r" or enabled != expected_rls or forced:
+                raise RuntimeError(f"schema drift: {name} table kind or RLS flags differ")
         columns = {name: {} for name in expected_columns}
         rows = await (
             await c.execute("""
@@ -716,13 +769,6 @@ class MigrationRunner:
         ).fetchone()
         if namespace[0] is None:
             raise RuntimeError("schema drift: migration_stage schema is missing")
-        usage = await (
-            await c.execute(
-                "SELECT has_schema_privilege('dt_enterprise_app','migration_stage','USAGE')"
-            )
-        ).fetchone()
-        if usage[0]:
-            raise RuntimeError("schema drift: runtime role can access migration_stage")
         rows = await (
             await c.execute("""
             SELECT r.relname,r.relkind,r.relrowsecurity,r.relforcerowsecurity
@@ -756,17 +802,6 @@ class MigrationRunner:
             }
             if columns[table] != expected:
                 raise RuntimeError(f"schema drift: migration_stage.{table} columns differ")
-        privileges = await (
-            await c.execute("""
-            SELECT 1
-              FROM information_schema.table_privileges
-             WHERE table_schema='migration_stage'
-               AND grantee='dt_enterprise_app'
-             LIMIT 1
-        """)
-        ).fetchone()
-        if privileges:
-            raise RuntimeError("schema drift: runtime role has migration_stage table privileges")
 
     async def _verify_notebook_metadata(self, c, *, learning=False, reading=False):
         rows = await (

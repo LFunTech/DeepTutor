@@ -59,10 +59,6 @@ CREATE INDEX eduplus2_permission_allowed_expiry
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['profile_snapshots','permission_snapshots'] LOOP
     EXECUTE format('ALTER TABLE eduplus2.%I ENABLE ROW LEVEL SECURITY', t);
-    EXECUTE format('ALTER TABLE eduplus2.%I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('CREATE POLICY tenant_scope ON eduplus2.%I USING (tenant_id = nullif(current_setting(''app.tenant_id'', true),'''')::uuid) WITH CHECK (tenant_id = nullif(current_setting(''app.tenant_id'', true),'''')::uuid)', t);
   END LOOP;
 END $$;
-
-GRANT SELECT,INSERT,UPDATE,DELETE ON eduplus2.profile_snapshots TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON eduplus2.permission_snapshots TO dt_enterprise_app;

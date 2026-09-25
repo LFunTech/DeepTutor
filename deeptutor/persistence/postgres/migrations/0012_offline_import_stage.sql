@@ -3,7 +3,6 @@
 -- 不得访问 migration_stage schema 中的源数据、映射或进度。
 CREATE SCHEMA migration_stage;
 REVOKE ALL ON SCHEMA migration_stage FROM PUBLIC;
-REVOKE ALL ON SCHEMA migration_stage FROM dt_enterprise_app;
 
 CREATE TABLE enterprise.maintenance_locks (
  tenant_id uuid PRIMARY KEY,
@@ -18,11 +17,9 @@ CREATE TABLE enterprise.maintenance_locks (
  CHECK (generation >= 1)
 );
 ALTER TABLE enterprise.maintenance_locks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.maintenance_locks FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.maintenance_locks
  USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
  WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
-GRANT SELECT ON enterprise.maintenance_locks TO dt_enterprise_app;
 
 CREATE TABLE migration_stage.batches (
  batch_id uuid PRIMARY KEY,

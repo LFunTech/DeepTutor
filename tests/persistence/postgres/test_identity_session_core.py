@@ -8,6 +8,8 @@ from uuid import uuid4
 
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 class _RejectEnterpriseImports(importlib.abc.MetaPathFinder):
     """若 core 在导入或运行时反向加载企业包，立即让测试失败。"""
@@ -32,7 +34,7 @@ async def test_core_only_identity_session_turn_event_and_executor_lifecycle(pg_d
         from deeptutor.persistence.postgres.session import PostgresSessionStore
 
         await MigrationRunner(pg_dsn).apply()
-        runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+        runtime_dsn = single_database_user_dsn(pg_dsn)
         tenant_id = str(uuid4())
         async with Database(runtime_dsn, resource="core-only-lifecycle") as db:
             identity = IdentityService(

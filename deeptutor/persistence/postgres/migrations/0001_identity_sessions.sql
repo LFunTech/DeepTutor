@@ -1,11 +1,5 @@
 -- 应用结构迁移：只支持本 A1 身份/纯文本会话范围。
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='dt_enterprise_app') THEN
-    CREATE ROLE dt_enterprise_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-  END IF;
-END $$;
 REVOKE ALL ON SCHEMA enterprise FROM PUBLIC;
-GRANT USAGE ON SCHEMA enterprise TO dt_enterprise_app;
 
 CREATE TABLE enterprise.tenants (
   id uuid PRIMARY KEY,
@@ -129,7 +123,6 @@ CREATE TABLE enterprise.turn_commands (
 DO $$ DECLARE t text; owner_column text; BEGIN
   FOREACH t IN ARRAY ARRAY['tenants','users','local_credentials','auth_sessions','audit','sessions','messages','turns','turn_events','operations','turn_commands'] LOOP
     EXECUTE format('ALTER TABLE enterprise.%I ENABLE ROW LEVEL SECURITY',t);
-    EXECUTE format('ALTER TABLE enterprise.%I FORCE ROW LEVEL SECURITY',t);
     EXECUTE format('CREATE POLICY tenant_scope ON enterprise.%I USING (%I = nullif(current_setting(''app.tenant_id'', true),'''')::uuid) WITH CHECK (%I = nullif(current_setting(''app.tenant_id'',true),'''')::uuid)',t,CASE WHEN t='tenants' THEN 'id' ELSE 'tenant_id' END,CASE WHEN t='tenants' THEN 'id' ELSE 'tenant_id' END);
     IF t IN ('sessions','messages','turns','turn_events','operations','turn_commands') THEN
       owner_column := CASE WHEN t='turns' THEN 'user_id' ELSE 'owner_id' END;
@@ -137,15 +130,9 @@ DO $$ DECLARE t text; owner_column text; BEGIN
     END IF;
   END LOOP;
 END $$;
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.tenants,enterprise.users,enterprise.local_credentials,enterprise.auth_sessions,
-  enterprise.sessions,enterprise.messages,enterprise.turns,enterprise.turn_events,enterprise.operations,enterprise.turn_commands TO dt_enterprise_app;
-GRANT SELECT,INSERT ON enterprise.audit TO dt_enterprise_app;
-GRANT SELECT ON enterprise.schema_history TO dt_enterprise_app;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA enterprise TO dt_enterprise_app;
 -- 进程执行登记不承载业务正文，独立于 tenant 表，未知退出须人工确认。
 CREATE TABLE enterprise.executor_state (
   resource text PRIMARY KEY, execution_id uuid NOT NULL,
   status text NOT NULL CHECK(status IN ('active','stopped')),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-GRANT SELECT,INSERT,UPDATE ON enterprise.executor_state TO dt_enterprise_app;

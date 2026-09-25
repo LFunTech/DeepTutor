@@ -13,6 +13,30 @@ _EXTENSION_SCHEMA = "eduplus2"
 _EXTENSION_PACKAGE = "deeptutor_enterprise.eduplus2.migrations"
 _EXTENSION_LOCK_ID = 0x44544544555032
 
+# 与 core runner 一致：G1 起新迁移不再向固定 dt_enterprise_app 角色授权；
+# 已应用旧 role-grant SQL 的扩展 schema 允许通过 catalog/RLS 校验继续验证。
+_EXTENSION_LEGACY_ROLE_GRANT_CHECKSUMS = {
+    "0001_federated_access": frozenset({
+        "96f03a43b07992cdf3436124aceffb6726470597f1ae9ead1b65193166915b25",
+    }),
+    "0002_profile_permission_snapshots": frozenset({
+        "d5e2db087780e5860e3d38b8c809babf2fc4ee42e5c43031f283ed8a3da84c09",
+    }),
+    "0003_revocation_state": frozenset({
+        "ec55a94bc1be0d4a50477819aa79a8fa32d9ca69f5ec34e6fe93b45774d1fcad",
+    }),
+    "0004_audit_export_jobs": frozenset({
+        "56aa1155679764ef7c4daf0f014dcca69da6049ff76f43e86f329fd5c0982fc8",
+    }),
+}
+
+
+def _extension_accepted_checksums(expected):
+    return {
+        version: frozenset({digest, *_EXTENSION_LEGACY_ROLE_GRANT_CHECKSUMS.get(version, ())})
+        for version, digest in expected.items()
+    }
+
 
 class MigrationRunner(CoreMigrationRunner):
     """保留 core runner 语义，并追加企业扩展自有 schema 迁移。"""
@@ -44,8 +68,9 @@ class MigrationRunner(CoreMigrationRunner):
         expected = {
             version: hashlib.sha256(sql.encode()).hexdigest() for version, sql in migrations
         }
+        accepted = _extension_accepted_checksums(expected)
         if any(
-            version not in expected or expected[version] != digest
+            version not in accepted or digest not in accepted[version]
             for version, digest in history.items()
         ):
             raise RuntimeError("eduplus2 schema history drift or incompatible version")
@@ -70,16 +95,16 @@ class MigrationRunner(CoreMigrationRunner):
         tables = {row[0]: row[1:] for row in rows}
         expected = {
             "schema_history": ("r", False, False),
-            "provider_clients": ("r", True, True),
-            "external_client_registrations": ("r", True, True),
-            "identity_bindings": ("r", True, True),
-            "resolve_cache": ("r", True, True),
-            "profile_snapshots": ("r", True, True),
-            "permission_snapshots": ("r", True, True),
-            "revocation_events": ("r", True, True),
-            "revocation_state": ("r", True, True),
-            "audit_export_jobs": ("r", True, True),
-            "audit_events": ("r", True, True),
+            "provider_clients": ("r", True, False),
+            "external_client_registrations": ("r", True, False),
+            "identity_bindings": ("r", True, False),
+            "resolve_cache": ("r", True, False),
+            "profile_snapshots": ("r", True, False),
+            "permission_snapshots": ("r", True, False),
+            "revocation_events": ("r", True, False),
+            "revocation_state": ("r", True, False),
+            "audit_export_jobs": ("r", True, False),
+            "audit_events": ("r", True, False),
         }
         if tables != expected:
             raise RuntimeError("eduplus2 schema drift: table set or RLS flags differ")

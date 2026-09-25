@@ -16,7 +16,7 @@ import pytest
 from typer.testing import CliRunner
 import uvicorn
 
-from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+from tests.fixtures.postgres import pg_cluster, pg_dsn, single_database_user_dsn  # noqa: F401
 
 runner = CliRunner()
 
@@ -70,7 +70,7 @@ async def _prepare_default_cli_environment(pg_dsn: str, tmp_path: Path):
     await MigrationRunner(pg_dsn).apply()
     tenant_id = str(uuid.uuid4())
     config = _write_postgres_config(tmp_path / "postgres.json", tenant_id)
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     environment = {
         **os.environ,
         "DEEPTUTOR_HOME": str(tmp_path / "home"),

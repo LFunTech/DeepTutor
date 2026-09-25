@@ -123,13 +123,10 @@ CREATE INDEX notebook_mastery_ref ON enterprise.notebook_entries(tenant_id,owner
 DO $$ DECLARE t text; BEGIN
  FOREACH t IN ARRAY ARRAY['mastery_paths','mastery_knowledge_points','mastery_path_sessions','mastery_interactions','mastery_events','mastery_topic_meta','mastery_topic_sources','mastery_path_operations','mastery_path_leases'] LOOP
   EXECUTE format('ALTER TABLE enterprise.%I ENABLE ROW LEVEL SECURITY',t);
-  EXECUTE format('ALTER TABLE enterprise.%I FORCE ROW LEVEL SECURITY',t);
   EXECUTE format('CREATE POLICY tenant_scope ON enterprise.%I USING (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid)',t);
   EXECUTE format('CREATE POLICY owner_scope ON enterprise.%I AS RESTRICTIVE USING (owner_id = nullif(current_setting(''app.user_id'',true),'''')) WITH CHECK (owner_id = nullif(current_setting(''app.user_id'',true),''''))',t);
-  EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.%I TO dt_enterprise_app',t);
  END LOOP;
 END $$;
-GRANT USAGE ON SEQUENCE enterprise.mastery_events_id_seq TO dt_enterprise_app;
 -- 被引用资源删除时按scope定位，避免历史交互/事件/operation的全表FK检查。
 CREATE INDEX mastery_interactions_session ON enterprise.mastery_interactions(tenant_id,owner_id,session_ref,turn_ref);
 CREATE INDEX mastery_events_session ON enterprise.mastery_events(tenant_id,owner_id,session_ref,turn_ref);

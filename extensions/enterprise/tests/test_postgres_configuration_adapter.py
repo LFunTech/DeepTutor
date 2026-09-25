@@ -6,6 +6,7 @@ from deeptutor_enterprise.configuration import DeploymentConfig
 import pytest
 
 from deeptutor.persistence.postgres.configuration import PostgresConfigurationError
+from tests.fixtures.postgres import single_database_user_dsn
 
 
 def deployment(**updates):
@@ -193,7 +194,7 @@ async def test_bootstrap_secret_is_resolved_only_for_explicit_call_and_never_ret
     from deeptutor.persistence.postgres.identity.service import IdentityService
 
     await MigrationRunner(pg_dsn).apply()
-    app_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    app_dsn = single_database_user_dsn(pg_dsn)
     for name, value in {
         "DT_DATABASE_DSN": app_dsn,
         "DEEPTUTOR_DATABASE_URL": app_dsn,

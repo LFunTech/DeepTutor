@@ -6,6 +6,8 @@ from importlib.resources import files
 import uuid
 
 import psycopg
+from psycopg import sql
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 import pytest
 
 from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
@@ -26,7 +28,8 @@ SCHEMA_11_VERSION = "0011_marginnote_store"
 SCHEMA_12_VERSION = "0012_offline_import_stage"
 SCHEMA_13_VERSION = "0013_courses"
 SCHEMA_14_VERSION = "0014_externalized_runtime"
-SCHEMA_1_SHA256 = "06a1a9303d9d45745a31a94ec9a95ce2d864e48ff41be2a6a8d926abdeea7a3f"
+SCHEMA_1_SHA256 = "f6a3825321c2d5aaf7f82842e8eed6df7742a2e6a8c7d6bc89e90c013c8a98b8"
+SCHEMA_1_LEGACY_ROLE_GRANT_SHA256 = "06a1a9303d9d45745a31a94ec9a95ce2d864e48ff41be2a6a8d926abdeea7a3f"
 
 
 def _schema_1_bytes() -> bytes:
@@ -37,6 +40,23 @@ def _schema_1_bytes() -> bytes:
     )
 
 
+def _single_owner_dsn(pg_dsn: str) -> str:
+    info = conninfo_to_dict(pg_dsn)
+    role = "owner_" + uuid.uuid4().hex
+    with psycopg.connect(pg_dsn) as connection:
+        connection.execute(
+            sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+            ).format(sql.Identifier(role))
+        )
+        connection.execute(
+            sql.SQL("ALTER DATABASE {} OWNER TO {}").format(
+                sql.Identifier(info["dbname"]), sql.Identifier(role)
+            )
+        )
+    return make_conninfo(**{**info, "user": role})
+
+
 async def test_core_resource_keeps_schema_1_bytes_and_does_not_connect_on_read(monkeypatch):
     async def unexpected_connect(*args, **kwargs):
         raise AssertionError("读取 core migration 资源时不应连接数据库")
@@ -44,6 +64,34 @@ async def test_core_resource_keeps_schema_1_bytes_and_does_not_connect_on_read(m
     monkeypatch.setattr(psycopg.AsyncConnection, "connect", unexpected_connect)
     assert hashlib.sha256(_schema_1_bytes()).hexdigest() == SCHEMA_1_SHA256
     assert MigrationRunner("host=not-used")._migrations()[0][0] == SCHEMA_1_VERSION
+
+
+async def test_empty_database_apply_accepts_single_database_owner_without_createrole(pg_dsn):
+    """生产迁移若仍要求创建独立运行角色，会阻断单库单用户部署。"""
+
+    owner_dsn = _single_owner_dsn(pg_dsn)
+
+    async with await psycopg.AsyncConnection.connect(owner_dsn) as connection:
+        capabilities = await (
+            await connection.execute(
+                """
+                SELECT rolsuper, rolcreaterole, rolcreatedb, rolbypassrls
+                FROM pg_roles
+                WHERE rolname = current_user
+                """
+            )
+        ).fetchone()
+    assert capabilities == (False, False, False, False)
+
+    runner = MigrationRunner(owner_dsn)
+    await runner.apply()
+    await runner.verify()
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        role_exists = await (
+            await connection.execute("SELECT 1 FROM pg_roles WHERE rolname='dt_enterprise_app'")
+        ).fetchone()
+    assert role_exists is None
 
 
 async def test_empty_database_apply_is_repeatable_and_concurrent(pg_dsn):
@@ -91,6 +139,27 @@ async def test_empty_database_apply_is_repeatable_and_concurrent(pg_dsn):
     assert history[12][0] == SCHEMA_13_VERSION
     assert history[13][0] == SCHEMA_14_VERSION
     assert len(history) == 14
+
+
+async def test_role_grant_only_legacy_schema_1_checksum_remains_verifiable(pg_dsn):
+    """已应用库若只因移除独立运行角色授权导致 checksum 不同，不应被误判为结构漂移。"""
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute("CREATE SCHEMA enterprise")
+        await connection.execute(
+            """CREATE TABLE enterprise.schema_history (
+                   version text PRIMARY KEY,
+                   checksum text NOT NULL,
+                   applied_at timestamptz NOT NULL DEFAULT now()
+               )"""
+        )
+        await connection.execute(_schema_1_bytes().decode("utf-8"), prepare=False)
+        await connection.execute(
+            "INSERT INTO enterprise.schema_history(version, checksum) VALUES (%s, %s)",
+            (SCHEMA_1_VERSION, SCHEMA_1_LEGACY_ROLE_GRANT_SHA256),
+        )
+
+    assert (await MigrationRunner(pg_dsn).plan())[0] == SCHEMA_2_VERSION
 
 
 async def test_existing_schema_1_history_data_and_all_ids_are_preserved(pg_dsn):
@@ -393,10 +462,11 @@ async def test_failed_migration_rolls_back_schema_data_and_history(pg_dsn, alrea
             assert namespace[0] is None
 
 
-async def test_enterprise_runner_explicitly_forwards_core_and_has_no_sql_copy():
-    from deeptutor_enterprise.migrations.runner import MigrationRunner as EnterpriseMigrationRunner
+async def test_enterprise_runner_extends_core_and_keeps_no_root_sql_copy():
+    enterprise_runner = pytest.importorskip("deeptutor_enterprise.migrations.runner")
+    EnterpriseMigrationRunner = enterprise_runner.MigrationRunner
 
-    assert EnterpriseMigrationRunner is MigrationRunner
+    assert issubclass(EnterpriseMigrationRunner, MigrationRunner)
     assert [
         item.name
         for item in files("deeptutor_enterprise.migrations").iterdir()

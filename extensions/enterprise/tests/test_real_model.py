@@ -16,6 +16,8 @@ import httpx
 import pytest
 from test_flows import Socket
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 pytestmark = pytest.mark.skipif(
     os.environ.get("DT_RUN_REAL_MODEL") != "1", reason="真实计费验收须显式启用"
 )
@@ -77,7 +79,7 @@ async def test_real_model_ws_sdk_continue_regenerate_and_ask_user(pg_dsn, monkey
     )
     host = re.search(r'"API Host"\s*=\s*"([^\"]+)"', source).group(1)
     env = {
-        "SMOKE_DB": pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+        "SMOKE_DB": single_database_user_dsn(pg_dsn),
         "SMOKE_KEY": key,
         "SMOKE_SIGN": uuid.uuid4().hex + uuid.uuid4().hex,
         "SMOKE_EPOCH": str(uuid.uuid4()),

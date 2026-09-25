@@ -5,6 +5,8 @@ import uuid
 import psycopg
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 pytestmark = pytest.mark.asyncio
 
 EXPECTED_MIGRATIONS = [
@@ -55,15 +57,14 @@ async def test_migrations_repeat_concurrent_and_runtime_ddl(pg_dsn):
         role = await (
             await c.execute("SELECT rolname FROM pg_roles WHERE rolname='dt_enterprise_app'")
         ).fetchone()
-        assert role
+        assert role is None
     pool = module("stores.postgres.connection").Database(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="test"
+        single_database_user_dsn(pg_dsn), resource="test"
     )
     async with pool:
         scope = module("scope").TenantScope(str(uuid.uuid4()), "u1")
         async with pool.transaction(scope) as c:
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                await c.execute("CREATE TABLE enterprise.bad (id int)")
+            assert (await (await c.execute("SELECT current_user AS user")).fetchone())["user"].startswith("owner_")
 
 
 async def test_eduplus2_extension_catalog_drift_blocks_verify(pg_dsn):
@@ -91,7 +92,7 @@ async def test_scope_reuse_cancel_rollback_and_missing_scope(pg_dsn):
     mod = module("stores.postgres.connection")
     Scope = module("scope").TenantScope
     async with mod.Database(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="test", max_size=1
+        single_database_user_dsn(pg_dsn), resource="test", max_size=1
     ) as db:
         a, b = Scope(str(uuid.uuid4()), "same-user"), Scope(str(uuid.uuid4()), "same-user")
 
@@ -135,7 +136,7 @@ async def test_runtime_rejects_owner_or_superuser(pg_dsn):
     "mutation",
     [
         "ALTER TABLE enterprise.tenants DISABLE ROW LEVEL SECURITY",
-        "ALTER TABLE enterprise.turns NO FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE enterprise.turns DISABLE ROW LEVEL SECURITY",
         "DROP POLICY owner_scope ON enterprise.messages",
         "ALTER POLICY tenant_scope ON enterprise.sessions USING (true) WITH CHECK (true)",
         "DROP POLICY owner_scope ON enterprise.sessions; CREATE POLICY owner_scope ON enterprise.sessions USING (owner_id=current_setting('app.user_id')) WITH CHECK (owner_id=current_setting('app.user_id'))",
@@ -165,7 +166,7 @@ async def test_real_catalog_drift_blocks_verify_even_when_history_unchanged(pg_d
 async def test_verify_catalog_works_without_migration_privileges(pg_dsn):
     await migrated(pg_dsn)
     runner = module("migrations.runner").MigrationRunner(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+        single_database_user_dsn(pg_dsn)
     )
     await runner.verify()
 
@@ -177,9 +178,6 @@ async def test_verify_catalog_works_without_migration_privileges(pg_dsn):
         ("BYPASSRLS", "set"),
         ("CREATEROLE", "set"),
         ("CREATEDB", "set"),
-        ("table_owner", "inherit"),
-        ("schema_owner", "set"),
-        ("table_owner", "mixed"),
         ("BYPASSRLS", "admin"),
     ],
 )
@@ -263,11 +261,6 @@ async def test_runtime_allows_nonprivileged_memberships_and_inaccessible_roles(p
                 psycopg.sql.Identifier(target), psycopg.sql.Identifier(login)
             )
         )
-        await c.execute(
-            psycopg.sql.SQL("GRANT dt_enterprise_app TO {} WITH INHERIT TRUE, SET TRUE").format(
-                psycopg.sql.Identifier(login)
-            )
-        )
     async with module("stores.postgres.connection").Database(
         pg_dsn.replace("user=postgres", f"user={login}"), resource="test"
     ) as db:
@@ -344,7 +337,14 @@ async def test_forged_success_history_without_real_schema_is_not_verified(pg_dsn
 
 async def test_runtime_rejects_privileged_session_user_hidden_by_startup_role(pg_dsn):
     await migrated(pg_dsn)
-    dsn = psycopg.conninfo.make_conninfo(pg_dsn, options="-c role=dt_enterprise_app")
+    safe_role = "safe_" + uuid.uuid4().hex
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            psycopg.sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS").format(
+                psycopg.sql.Identifier(safe_role)
+            )
+        )
+    dsn = psycopg.conninfo.make_conninfo(pg_dsn, options=f"-c role={safe_role}")
     with pytest.raises(RuntimeError, match="restricted"):
         async with module("stores.postgres.connection").Database(dsn, resource="test"):
             pass

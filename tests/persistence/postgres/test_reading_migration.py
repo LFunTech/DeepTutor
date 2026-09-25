@@ -72,7 +72,7 @@ async def test_all_source_versions_verified_before_reading_target_and_failure_ro
 @pytest.mark.parametrize(
     "mutation",
     [
-        "ALTER TABLE enterprise.reading_materials NO FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE enterprise.reading_materials DISABLE ROW LEVEL SECURITY",
         "DROP POLICY owner_scope ON enterprise.reading_workspaces",
         "ALTER TABLE enterprise.reading_workspace_sessions DISABLE TRIGGER ALL",
         "ALTER TABLE enterprise.notebook_entries ALTER COLUMN reading_material_ref DROP EXPRESSION",
@@ -99,7 +99,7 @@ async def test_previous_sql_and_learning_catalog_are_immutable():
     resources = files("deeptutor.persistence.postgres.migrations")
     assert (
         hashlib.sha256(resources.joinpath("0005_learning.sql").read_bytes()).hexdigest()
-        == "4ca565a95b3d7540ad0b24d7a7ec824327b2907379943eb7825e01ca86621398"
+        == "442cea213b30c9e4d89a9b5c618536cf6caa61048945a79947fe805925c6018a"
     )
     assert (
         hashlib.sha256(resources.joinpath("learning_catalog.json").read_bytes()).hexdigest()

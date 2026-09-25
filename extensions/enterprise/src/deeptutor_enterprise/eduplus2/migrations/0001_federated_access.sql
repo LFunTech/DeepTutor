@@ -120,15 +120,6 @@ CREATE INDEX eduplus2_audit_request ON eduplus2.audit_events(tenant_id, request_
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['provider_clients','external_client_registrations','identity_bindings','resolve_cache','audit_events'] LOOP
     EXECUTE format('ALTER TABLE eduplus2.%I ENABLE ROW LEVEL SECURITY', t);
-    EXECUTE format('ALTER TABLE eduplus2.%I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('CREATE POLICY tenant_scope ON eduplus2.%I USING (tenant_id = nullif(current_setting(''app.tenant_id'', true),'''')::uuid) WITH CHECK (tenant_id = nullif(current_setting(''app.tenant_id'', true),'''')::uuid)', t);
   END LOOP;
 END $$;
-
-GRANT USAGE ON SCHEMA eduplus2 TO dt_enterprise_app;
-GRANT SELECT ON eduplus2.schema_history TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON eduplus2.provider_clients TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON eduplus2.external_client_registrations TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON eduplus2.identity_bindings TO dt_enterprise_app;
-GRANT SELECT,INSERT,UPDATE,DELETE ON eduplus2.resolve_cache TO dt_enterprise_app;
-GRANT SELECT,INSERT ON eduplus2.audit_events TO dt_enterprise_app;

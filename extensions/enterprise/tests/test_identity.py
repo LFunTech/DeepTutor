@@ -7,6 +7,8 @@ from deeptutor_enterprise.stores.postgres.connection import Database
 from jose import jwt
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 @pytest.fixture
 async def identity(pg_dsn):
@@ -15,7 +17,7 @@ async def identity(pg_dsn):
 
     await MigrationRunner(pg_dsn).apply()
     async with Database(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="identity-test"
+        single_database_user_dsn(pg_dsn), resource="identity-test"
     ) as db:
         service = IdentityService(
             db,

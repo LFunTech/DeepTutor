@@ -8,13 +8,14 @@ import pytest
 from deeptutor.persistence.postgres.connection import Database
 from deeptutor.persistence.postgres.identity.service import IdentityService
 from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
+from tests.fixtures.postgres import single_database_user_dsn
 
 
 @pytest.fixture
 async def accounts(pg_dsn):
     await MigrationRunner(pg_dsn).apply()
     async with Database(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="accounts"
+        single_database_user_dsn(pg_dsn), resource="accounts"
     ) as db:
         service = IdentityService(
             db,

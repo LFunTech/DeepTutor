@@ -27,8 +27,6 @@ ALTER TABLE enterprise.auth_sessions
   ADD CHECK ((device_credential_id IS NULL AND device_generation IS NULL)
     OR (device_credential_id IS NOT NULL AND device_generation IS NOT NULL));
 ALTER TABLE enterprise.device_credentials ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.device_credentials FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.device_credentials
   USING (tenant_id = nullif(current_setting('app.tenant_id',true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id',true),'')::uuid);
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.device_credentials TO dt_enterprise_app;

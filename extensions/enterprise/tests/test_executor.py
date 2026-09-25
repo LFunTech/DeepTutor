@@ -4,13 +4,15 @@ from deeptutor_enterprise.migrations.runner import MigrationRunner
 import psycopg
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 async def test_single_executor_and_explicit_crash_recovery(pg_dsn):
     assert importlib.util.find_spec("deeptutor_enterprise.executor"), "单执行者防线尚未实现"
     from deeptutor_enterprise.executor import ExecutorLease
 
     await MigrationRunner(pg_dsn).apply()
-    dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    dsn = single_database_user_dsn(pg_dsn)
     one = ExecutorLease(dsn, resource="same")
     await one.acquire()
     second = ExecutorLease(dsn, resource="same")
@@ -39,7 +41,7 @@ async def test_cancelled_health_probe_does_not_fence_healthy_executor(pg_dsn):
 
     await MigrationRunner(pg_dsn).apply()
     lease = ExecutorLease(
-        pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="cancel-test"
+        single_database_user_dsn(pg_dsn), resource="cancel-test"
     )
     await lease.acquire()
     query = asyncio.create_task(lease.connection.execute("SELECT pg_sleep(0.2)"))
@@ -57,7 +59,7 @@ async def test_different_resource_name_cannot_bypass_single_executor(pg_dsn):
     from deeptutor_enterprise.executor import ExecutorLease
 
     await MigrationRunner(pg_dsn).apply()
-    dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    dsn = single_database_user_dsn(pg_dsn)
     first = ExecutorLease(dsn, resource="first")
     second = ExecutorLease(dsn, resource="second")
     await first.acquire()

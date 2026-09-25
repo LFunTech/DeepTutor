@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import pytest
 
-from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+from tests.fixtures.postgres import pg_cluster, pg_dsn, single_database_user_dsn  # noqa: F401
 
 
 class _StaticStoreProvider:
@@ -22,7 +22,7 @@ class _StaticStoreProvider:
 
 async def _prepare_pg_stores(pg_dsn: str, *, resource: str):
     tenant_id = str(uuid.uuid4())
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
 
     from deeptutor.persistence.postgres.connection import Database
     from deeptutor.persistence.postgres.identity.service import IdentityService
@@ -30,8 +30,9 @@ async def _prepare_pg_stores(pg_dsn: str, *, resource: str):
     from deeptutor.persistence.postgres.scope import TenantScope
     from deeptutor.persistence.postgres.session import PostgresSessionStore
 
-    await MigrationRunner(pg_dsn).apply()
+    await MigrationRunner(runtime_dsn).apply()
     db = Database(runtime_dsn, resource=resource)
+    db.test_runtime_dsn = runtime_dsn
     await db.__aenter__()
     try:
         identity = IdentityService(

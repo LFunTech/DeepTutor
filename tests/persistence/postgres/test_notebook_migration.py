@@ -77,7 +77,7 @@ async def test_source_drift_and_target_failure_do_not_apply_notebook_ddl(pg_dsn,
 @pytest.mark.parametrize(
     "mutation",
     [
-        "ALTER TABLE enterprise.notebook_entries NO FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE enterprise.notebook_entries DISABLE ROW LEVEL SECURITY",
         "DROP POLICY owner_scope ON enterprise.notebook_categories",
         "ALTER TABLE enterprise.notebook_entry_categories DISABLE TRIGGER ALL",
         "ALTER TABLE enterprise.notebook_entries ALTER COLUMN execution_turn_id DROP EXPRESSION",

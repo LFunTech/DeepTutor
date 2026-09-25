@@ -16,6 +16,7 @@ from deeptutor.persistence.postgres.identity.service import Identity, IdentitySe
 from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
 from deeptutor.persistence.postgres.scope import TenantScope
 from deeptutor.persistence.postgres.session import PostgresSessionStore
+from tests.fixtures.postgres import single_database_user_dsn
 
 _SIGNING_KEY = "session-pg-helper-signing-key-is-long-enough"
 _BOOTSTRAP_SECRET = "session-pg-helper-bootstrap-secret-is-long-enough"
@@ -44,7 +45,7 @@ async def pg_session_runtime(pg_dsn: str, *, resource: str):
     """Yield an authenticated PG session runtime for one isolated test database."""
 
     await MigrationRunner(pg_dsn).apply()
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     tenant_id = str(uuid4())
     async with Database(runtime_dsn, resource=resource, max_size=4, max_waiting=8) as db:
         identity = IdentityService(

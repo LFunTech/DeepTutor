@@ -29,10 +29,8 @@ CREATE INDEX message_objects_session ON enterprise.message_objects(tenant_id,own
 DO $$ DECLARE t text; BEGIN
  FOREACH t IN ARRAY ARRAY['session_objects','message_objects'] LOOP
   EXECUTE format('ALTER TABLE enterprise.%I ENABLE ROW LEVEL SECURITY',t);
-  EXECUTE format('ALTER TABLE enterprise.%I FORCE ROW LEVEL SECURITY',t);
   EXECUTE format('CREATE POLICY tenant_scope ON enterprise.%I USING (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid) WITH CHECK (tenant_id = nullif(current_setting(''app.tenant_id'',true),'''')::uuid)',t);
   EXECUTE format('CREATE POLICY owner_scope ON enterprise.%I AS RESTRICTIVE USING (owner_id = nullif(current_setting(''app.user_id'',true),'''')) WITH CHECK (owner_id = nullif(current_setting(''app.user_id'',true),''''))',t);
-  EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.%I TO dt_enterprise_app',t);
  END LOOP;
 END $$;
 -- 消息与对象必须属于同一会话，不仅 owner 相同。
@@ -63,10 +61,8 @@ CREATE INDEX session_references_path ON enterprise.session_references(tenant_id,
 CREATE INDEX session_references_workspace ON enterprise.session_references(tenant_id,owner_id,workspace_ref);
 CREATE INDEX session_references_material ON enterprise.session_references(tenant_id,owner_id,material_ref);
 ALTER TABLE enterprise.session_references ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.session_references FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.session_references USING (tenant_id = nullif(current_setting('app.tenant_id',true),'')::uuid) WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id',true),'')::uuid);
 CREATE POLICY owner_scope ON enterprise.session_references AS RESTRICTIVE USING (owner_id = nullif(current_setting('app.user_id',true),'')) WITH CHECK (owner_id = nullif(current_setting('app.user_id',true),''));
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.session_references TO dt_enterprise_app;
 -- 已有 PG JSON 引用投影为同一 typed FK；不改正文，不把未知引用默认归给 owner。
 -- 坏/缺失来源会使整次升级回滚，必须在维护流程核查而非静默丢弃。
 WITH payloads AS (

@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from tests.fixtures.postgres import pg_cluster, pg_dsn  # noqa: F401
+from tests.fixtures.postgres import pg_cluster, pg_dsn, single_database_user_dsn  # noqa: F401
 
 
 def _write_postgres_config(path: Path, tenant_id: str) -> Path:
@@ -38,7 +38,7 @@ async def _bootstrap_pg(pg_dsn: str, *, tenant_id: str) -> None:
     from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
 
     await MigrationRunner(pg_dsn).apply()
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     async with Database(runtime_dsn, resource="bootstrap-zero-sqlite-runtime") as db:
         identity = IdentityService(
             db,
@@ -60,7 +60,7 @@ async def test_default_runtime_child_process_exercises_all_pg_domains_without_sq
     home = tmp_path / "home"
     home.mkdir()
     sqlite_probe = tmp_path / "forbidden.sqlite3"
-    runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     script = textwrap.dedent(
         f"""
         import asyncio

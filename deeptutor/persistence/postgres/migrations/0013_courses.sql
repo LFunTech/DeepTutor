@@ -28,7 +28,6 @@ CREATE TABLE enterprise.courses (
 );
 
 ALTER TABLE enterprise.courses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE enterprise.courses FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON enterprise.courses
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
@@ -37,4 +36,3 @@ CREATE POLICY owner_scope ON enterprise.courses AS RESTRICTIVE
   WITH CHECK (owner_id = nullif(current_setting('app.user_id', true),''));
 
 CREATE INDEX courses_recent ON enterprise.courses(tenant_id, owner_id, created_at, name);
-GRANT SELECT,INSERT,UPDATE,DELETE ON enterprise.courses TO dt_enterprise_app;

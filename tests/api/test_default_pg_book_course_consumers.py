@@ -178,7 +178,7 @@ async def test_courses_state_counts_pg_question_bank_categories(
         await admin_store.link_entries_to_category([wrong["id"]], category["id"])
 
         sync_db = SyncDatabase(
-            pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+            db.test_runtime_dsn,
             resource="test-pg-courses-state-question-bank-sync",
         )
         await sync_db.__aenter__()
@@ -236,7 +236,7 @@ async def test_topic_materials_reads_chat_and_question_bank_from_pg_runtime(
         )
         entry = await admin_store.find_notebook_entry(session["id"], "topic-q1")
         sync_db = SyncDatabase(
-            pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+            db.test_runtime_dsn,
             resource="test-pg-topic-materials-sync",
         )
         await sync_db.__aenter__()
@@ -291,7 +291,7 @@ async def test_mastery_build_tool_uses_bound_pg_runtime_without_sqlite_fallback(
 
         monkeypatch.setattr(session_module, "get_sqlite_session_store", _forbid_sqlite, raising=False)
 
-        runtime_dsn = pg_dsn.replace("user=postgres", "user=dt_enterprise_app")
+        runtime_dsn = db.test_runtime_dsn
         sync_db = SyncDatabase(runtime_dsn, resource="test-pg-mastery-build-tool-sync")
         await sync_db.__aenter__()
         executor = ExecutorLease(runtime_dsn, resource="test-pg-mastery-build-tool-sync")

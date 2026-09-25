@@ -1661,3 +1661,82 @@ git diff --check
 - 该用户可以创建 schema（事务内 `CREATE SCHEMA` 探测成功并回滚）。
 - 该用户没有 `CREATEROLE`，且 `dt_enterprise_app` role 尚不存在；首个 migration `0001_identity_sessions.sql` 会尝试创建 `dt_enterprise_app`，因此 #39 的 `schema apply` 失败根因与 Pod 探测一致：`InsufficientPrivilege / permission denied to create role`。
 - 如果继续坚持使用单一 PostgreSQL 连接，需要在数据库侧预先创建 `dt_enterprise_app`，或授予当前连接用户足够的 role/grant 初始化权限；否则迁移仍会失败。
+
+### 2026-09-25 单库单数据库用户迁移模型修正
+
+用户确认当前系统只使用一个 PostgreSQL 数据库和一个数据库用户；迁移、verify 与运行态使用同一目标库连接。权限边界由 DeepTutor 应用层鉴权、scope、owner guard、审计和受控入口执行，不再通过数据库内独立运行角色表达业务权限。本节 supersede 上一节关于“必须预先创建 `dt_enterprise_app` 或授予 CREATEROLE”的后续结论；#39 的 Pod 探测仍保留为根因证据。
+
+实现调整：
+
+- Core 与 EduPlus2 扩展迁移 SQL 不再创建固定 `dt_enterprise_app` role，不再执行面向该 role 的 GRANT/REVOKE。
+- 租户表继续 `ENABLE ROW LEVEL SECURITY` 并保留 policy，用于 catalog drift 校验和未来角色拆分防线；当前单用户 owner 模式不再使用 `FORCE ROW LEVEL SECURITY`，避免 owner 连接被数据库 RLS 机制阻断迁移/运行。
+- PostgreSQL runtime 连接检查允许当前用户是目标库/schema/table owner，但仍拒绝 superuser、createdb、createrole、bypassrls 以及可通过成员关系获得这些能力的用户。
+- `MigrationRunner`/企业扩展 runner 接受旧 role-grant/forced-RLS migration checksum 作为兼容历史，但仍执行真实 catalog、constraint、policy 与 RLS flag 校验；新库写入新的 checksum。
+- 测试 fixture 改为创建一次性、仅限当前测试库的非特权 owner 用户，覆盖迁移、verify 与应用路径；不再依赖固定 `dt_enterprise_app`。
+- `extensions/enterprise/README.md`、`docs/enterprise/06-postgresql-native-store-plan.md` 与本 G1 design/spec 已同步为单库单用户模型。
+
+Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check $(git diff --name-only | grep -E '\.py$')
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  tests/persistence/postgres/test_migrations.py \
+  tests/persistence/postgres/test_migration_stage.py \
+  tests/persistence/postgres/test_connection.py \
+  tests/persistence/postgres/test_notebook_migration.py \
+  tests/persistence/postgres/test_learning_migration.py \
+  tests/persistence/postgres/test_reading_migration.py -q
+# 120 passed
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  extensions/enterprise/tests/test_persistence.py \
+  extensions/enterprise/tests/test_identity.py \
+  extensions/enterprise/tests/test_application.py \
+  extensions/enterprise/tests/test_cli.py \
+  extensions/enterprise/tests/test_cli_recovery.py \
+  extensions/enterprise/tests/test_executor.py \
+  extensions/enterprise/tests/test_sessions.py \
+  extensions/enterprise/tests/test_restore.py \
+  extensions/enterprise/tests/test_preflight.py \
+  extensions/enterprise/tests/test_process_rebuild.py \
+  extensions/enterprise/tests/test_postgres_configuration_adapter.py \
+  extensions/enterprise/tests/test_eduplus2_federated_access.py -q
+# 144 passed, 1 skipped
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  tests/api/test_default_pg_book_course_consumers.py \
+  tests/api/test_default_pg_question_bank.py \
+  tests/api/test_default_pg_runtime.py \
+  tests/app/test_default_pg_sdk.py \
+  tests/cli/test_pg_accounts.py \
+  tests/cli/test_default_pg_cli.py \
+  tests/persistence/postgres/test_accounts.py \
+  tests/persistence/postgres/test_identity_session_core.py \
+  tests/persistence/postgres/test_zero_sqlite_runtime_guard.py \
+  tests/services/session/test_turn_repository.py -q
+# 50 passed, 2 warnings
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check $(git diff --name-only | grep -E '\.py$') && \
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  tests/persistence/postgres/business/test_business_fixtures.py \
+  tests/persistence/postgres/test_migration_stage.py -q && \
+git diff --check
+# All checks passed; 9 passed; git diff --check exit 0
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 21 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# Change 'add-g1-woodpecker-k8s-release-baseline' is valid
+
+openspec validate --all --strict
+# 16 passed, 0 failed
+
+git diff --check
+# exit 0
+```
+
+后续：需要 commit/push 后触发新的 test-cn deployment tag；新的真实流水线应复用现有 test-cn DB 连接执行迁移，不再因 `CREATE ROLE` / `CREATEROLE` 阻断。

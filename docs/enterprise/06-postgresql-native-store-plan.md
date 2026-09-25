@@ -160,11 +160,10 @@ DeepTutor 的应用 PG/S3/LightRAG HTTP 连接、事务、超时和重试通过�
 
 ## RLS 与事务契约
 
-租户表必须启用并强制 RLS；应用角色不能是 owner/superuser/BYPASSRLS。下面仅说明策略形状：
+租户表保留 RLS policy，但当前单库单数据库用户模型不强制依赖数据库角色隔离：应用连接可以是目标库/schema/table owner，但不能是 superuser、CREATEDB、CREATEROLE 或 BYPASSRLS，也不能经成员关系获得这些能力。业务权限必须由 DeepTutor 应用层鉴权、scope、owner guard、审计与受控入口执行；RLS policy 用于目录漂移校验和未来拆分运行角色时的防线。下面仅说明策略形状：
 
 ```sql
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sessions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation_sessions ON sessions
   USING (tenant_id::text = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id::text = current_setting('app.tenant_id', true));

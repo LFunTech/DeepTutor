@@ -5,6 +5,8 @@ import uuid
 
 import pytest
 
+from tests.fixtures.postgres import single_database_user_dsn
+
 
 def test_cli_schema_bootstrap_and_accounts(pg_dsn, monkeypatch, tmp_path, capsys):
     assert importlib.util.find_spec("deeptutor_enterprise.cli"), "企业 CLI 尚未实现"
@@ -32,9 +34,10 @@ def test_cli_schema_bootstrap_and_accounts(pg_dsn, monkeypatch, tmp_path, capsys
     }
     path = tmp_path / "deployment.json"
     path.write_text(json.dumps(deployment))
+    runtime_dsn = single_database_user_dsn(pg_dsn)
     for name, value in {
-        "CLI_DB": pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
-        "CLI_MIGRATION": pg_dsn,
+        "CLI_DB": runtime_dsn,
+        "CLI_MIGRATION": runtime_dsn,
         "CLI_SIGN": "s" * 48,
         "CLI_EPOCH": "epoch-1",
         "CLI_BOOT": "b" * 48,
@@ -62,9 +65,7 @@ def test_cli_schema_bootstrap_and_accounts(pg_dsn, monkeypatch, tmp_path, capsys
         from deeptutor_enterprise.identity.service import IdentityService
         from deeptutor_enterprise.stores.postgres.connection import Database
 
-        async with Database(
-            pg_dsn.replace("user=postgres", "user=dt_enterprise_app"), resource="cli-test"
-        ) as db:
+        async with Database(runtime_dsn, resource="cli-test") as db:
             identity = IdentityService(
                 db,
                 tenant_id=deployment["tenant_id"],

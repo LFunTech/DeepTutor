@@ -343,9 +343,6 @@ async def test_async_close_drains_sync_workers_and_closes_pool(restricted_dsn, p
         "BYPASSRLS",
         "CREATEDB",
         "CREATEROLE",
-        "table_owner",
-        "schema_owner",
-        "database_owner",
     ],
 )
 @pytest.mark.asyncio
@@ -355,25 +352,9 @@ async def test_recursive_privileged_roles_rejected_and_failed_pool_closed(pg_dsn
     with psycopg.connect(pg_dsn) as c:
         for name in (login, middle, target):
             c.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT").format(sql.Identifier(name)))
-        if privilege.endswith("_owner"):
-            c.execute("CREATE SCHEMA pgapp")
-            c.execute("CREATE TABLE pgapp.items (id int)")
-            if privilege == "database_owner":
-                dbname = c.info.dbname
-                c.execute(
-                    sql.SQL("ALTER DATABASE {} OWNER TO {}").format(
-                        sql.Identifier(dbname), sql.Identifier(target)
-                    )
-                )
-            else:
-                obj = "TABLE pgapp.items" if privilege == "table_owner" else "SCHEMA pgapp"
-                c.execute(
-                    sql.SQL("ALTER {} OWNER TO {}").format(sql.SQL(obj), sql.Identifier(target))
-                )
-        else:
-            c.execute(
-                sql.SQL("ALTER ROLE {} {}").format(sql.Identifier(target), sql.SQL(privilege))
-            )
+        c.execute(
+            sql.SQL("ALTER ROLE {} {}").format(sql.Identifier(target), sql.SQL(privilege))
+        )
         c.execute(
             sql.SQL("GRANT {} TO {} WITH INHERIT FALSE, SET TRUE").format(
                 sql.Identifier(middle), sql.Identifier(login)
@@ -533,6 +514,32 @@ async def test_sync_async_startup_failure_and_exit_join_owned_threads(pg_dsn, re
     async with core().SyncDatabase(restricted_dsn, resource="safe") as db:
         await db.run(scope(), lambda c: c.execute("SELECT 1"))
     assert not (set(threading.enumerate()) - before)
+
+
+@pytest.mark.parametrize("kind", ["sync", "async"])
+@pytest.mark.asyncio
+async def test_single_database_owner_without_privileged_attributes_is_allowed(pg_dsn, kind):
+    suffix = uuid.uuid4().hex
+    role = "owner_" + suffix
+    with psycopg.connect(pg_dsn) as c:
+        c.execute(
+            sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+            ).format(sql.Identifier(role))
+        )
+        c.execute(sql.SQL("ALTER DATABASE {} OWNER TO {}").format(sql.Identifier(c.info.dbname), sql.Identifier(role)))
+        c.execute(sql.SQL("CREATE SCHEMA owned AUTHORIZATION {}").format(sql.Identifier(role)))
+
+    dsn = pg_dsn.replace("user=postgres", "user=" + role)
+    db = (core().SyncDatabase if kind == "sync" else core().Database)(dsn, resource="single-owner")
+    if kind == "sync":
+        with db:
+            with db.transaction(scope()) as c:
+                assert c.execute("SELECT current_user AS user").fetchone()["user"] == role
+    else:
+        async with db:
+            async with db.transaction(scope()) as c:
+                assert (await (await c.execute("SELECT current_user AS user")).fetchone())["user"] == role
 
 
 @pytest.mark.parametrize("kind", ["sync", "async"])

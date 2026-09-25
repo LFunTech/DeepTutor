@@ -11,7 +11,7 @@ from test_preflight import deployment as deployment
 
 
 async def test_full_process_file_guard_and_explicit_crash_rebuild(pg_dsn, deployment, tmp_path):
-    await MigrationRunner(pg_dsn).apply()
+    await MigrationRunner(os.environ["PREFLIGHT_DB"]).apply()
     config = deployment.model_copy(
         update={
             "resource": "process-probe",
@@ -33,7 +33,7 @@ async def test_full_process_file_guard_and_explicit_crash_rebuild(pg_dsn, deploy
         "PYTHONDONTWRITEBYTECODE": "1",
         "PROBE_ROOT": str(root),
         "PROBE_CONFIG": config.model_dump_json(),
-        "PROBE_DB": pg_dsn.replace("user=postgres", "user=dt_enterprise_app"),
+        "PROBE_DB": os.environ["PREFLIGHT_DB"],
         "PROBE_BOOT": "b" * 48,
     }
     outputs = []

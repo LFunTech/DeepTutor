@@ -25,9 +25,6 @@ CREATE INDEX eduplus2_audit_export_jobs_requester
   ON eduplus2.audit_export_jobs(tenant_id, requested_by, created_at DESC);
 
 ALTER TABLE eduplus2.audit_export_jobs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE eduplus2.audit_export_jobs FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON eduplus2.audit_export_jobs
   USING (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid)
   WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true),'')::uuid);
-
-GRANT SELECT,INSERT,UPDATE,DELETE ON eduplus2.audit_export_jobs TO dt_enterprise_app;

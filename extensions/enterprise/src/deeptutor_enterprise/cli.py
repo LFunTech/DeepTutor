@@ -23,7 +23,7 @@ def parser():
     sub = p.add_subparsers(dest="command", required=True)
     schema = sub.add_parser("schema", allow_abbrev=False)
     schema.add_argument("action", choices=("plan", "apply", "verify"))
-    schema.add_argument("--dsn-env", required=True, help="迁移角色 DSN 的环境变量名")
+    schema.add_argument("--dsn-env", required=True, help="目标库迁移/运行 DSN 的环境变量名")
     boot = sub.add_parser("bootstrap", allow_abbrev=False)
     boot.add_argument("--username", required=True)
     boot.add_argument("--password-env", required=True)
