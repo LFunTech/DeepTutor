@@ -2327,3 +2327,38 @@ git diff --check
 ```
 
 后续：提交后触发 `deploy/test-cn/v1.4.0-rc.44`，验证流水线能自动 patch ConfigMap origin、重启 backend Pod，并确认 WebSocket/Origin 不再因 origin 不匹配被拒绝。
+
+### 2026-09-25 test-cn pipeline #56 ConfigMap origin 同步验证通过
+
+提交并推送 `408c9f4e` 后创建并推送 `deploy/test-cn/v1.4.0-rc.44`，Woodpecker 创建 pipeline `#56`。
+
+`deploy/test-cn/v1.4.0-rc.44` / pipeline `#56` 结果：
+
+- Woodpecker 状态：`success`。
+- `validate-release-trigger`、`prepare-release-metadata`、`compile-frontend-test-cn`、`compile-python-deps-test-cn`、`build-runtime-base-test-cn`、`secret-preflight-test-cn`、`build-runtime-image-test-cn`、`pre-deploy-check-test-cn`、`deploy-test-cn` 均成功。
+- runtime image digest：`sha256:fada2ed837874602392d7f5db62c69cea405e46611ad896921f2fdeeba986ce8`。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-44`：`Complete 1/1`。
+- backend Deployment：`READY 1/1`，新 Pod `deeptutor-backend-59467c69cc-szxb9` 为 `1/1 Running`、`RESTARTS 0`。
+
+Fresh live verification（未输出 kubeconfig、JWT、Secret data、账号或真实 token）：
+
+```text
+ConfigMap deployment.json origins -> ["https://deeptutor-test-cn.example.internal", "https://llm-agent-test.f123.pub"]
+computed deployment-config hash -> sha256:66164872a326c30eb1445ea5fa89f61d7c41ecc6b76121e80fce2f5f6a737019
+Deployment pod-template annotation hash -> sha256:66164872a326c30eb1445ea5fa89f61d7c41ecc6b76121e80fce2f5f6a737019
+hash_matches -> True
+pod env DT_EDUPLUS2_PROFILE_URL -> off
+pod env DT_EDUPLUS2_PERMISSION_URL -> off
+pod env DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback
+pod env DT_EDUPLUS2_FRONTING_DEMO_RETURN_URL -> https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test
+GET https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test -> 200
+GET /api/v1/auth/eduplus2/demo/start?return_to=<conversation-test> -> HTTP/2 303
+Location host -> eduplus-auth-test.f123.pub
+Location redirect_uri -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback
+WebSocket upgrade probe /api/v1/ws with Origin=https://llm-agent-test.f123.pub -> HTTP/1.1 403 Forbidden
+origin_or_csrf_rejected -> False
+```
+
+解释：未携带 `dt_token` 的 WebSocket probe 仍会被应用层鉴权拒绝，这是预期的负向结果；关键变化是响应不再是 `Origin or CSRF rejected`，说明公网 origin 已被运行时允许，浏览器页面后续携带有效 token 时不会再被 ConfigMap origin 阻断。
+
+使用本地 `.secrets/.login-credentials` 中的教师、第一个学生、管理员账号做浏览器自动化尝试（验证码填 `8888`，未输出账号/密码），三次均停留在 EduPlus 登录页，未回跳到 DeepTutor `/demo/callback` 或 `/demo/result`，DeepTutor 侧只观察到 `/demo/start` 303。因此，本轮无法证明“真实 EduPlus 账号登录后 dt_token + WS start_turn”完整闭环；该剩余验证依赖可登录的 EduPlus 测试账号或人工登录后的 request_id。当前可确认的部署结果是：Woodpecker/K8s 发布成功，ConfigMap origin、profile/permission 可选增强关闭、公网 callback、页面可达与 WebSocket Origin 层阻断均已修复并持久化。
