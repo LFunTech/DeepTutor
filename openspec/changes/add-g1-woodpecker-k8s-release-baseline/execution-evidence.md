@@ -1555,3 +1555,57 @@ openspec validate add-g1-woodpecker-k8s-release-baseline --strict
 openspec validate --all --strict
 # 16 passed, 0 failed
 ```
+
+### 2026-09-25 test-cn pipeline #39 shared DSN 生效，阻断于 DB DDL 权限；deploy wait 修正
+
+`deploy/test-cn/v1.4.0-rc.30` 触发 Woodpecker pipeline `#39`，使用 commit `ad11c1bd`：
+
+- release trigger、metadata 均成功。
+- `compile-frontend-test-cn`、`compile-python-deps-test-cn`、`build-runtime-base-test-cn`、`secret-preflight-test-cn` 均在 `Started=1790305807` 同时启动并成功。
+- `build-runtime-image-test-cn` 成功，`pre-deploy-check-test-cn` 成功。
+- `deploy-test-cn` 创建 `dt-migrate-test-cn-v1-4-0-rc-30` migration Job。
+
+K8s 只读排查结果：Job 已 `Failed`，Pod `Error`，不是仍在执行。Woodpecker 卡住的直接原因是 deploy 脚本仍在用 `kubectl wait --for=condition=complete` 等待 Job Complete；当 Job 进入 Failed 时不会被该条件识别，只能等到 900s timeout。
+
+脱敏 Pod 日志：
+
+```text
+acquire release-lock and migration-lock for test-cn/test-cn-v1-4-0-rc-30
+{"pending": ["0001_identity_sessions", "0002_account_profiles_devices", "0003_device_usage_precision", "0004_notebook_entries_categories", "0005_learning", "0006_reading", "0007_session_resources", "0008_cron", "0009_partner_runtime_status", "0010_matrix_store", "0011_marginnote_store", "0012_offline_import_stage", "0013_courses", "0014_externalized_runtime", "0001_federated_access", "0002_profile_permission_snapshots", "0003_revocation_state", "0004_audit_export_jobs"]}
+企业操作失败（InsufficientPrivilege）；检查配置、权限和运行状态
+```
+
+结论：shared DSN 配置门禁已生效，`schema plan` 可以运行并列出 pending migrations；真实阻断点变为 `schema apply` 阶段数据库账号权限不足。当前 test-cn 数据库尚未初始化 DeepTutor enterprise schema，且使用的同一个 DB 账号不足以执行首轮 DDL/role/grant 迁移。
+
+本轮脚本修复：
+
+- `deploy.sh` 不再使用 complete-only `kubectl wait`。
+- 新增 Job condition 轮询：检测 `Complete=True` 返回成功，检测 `Failed=True` 立即输出 pods/logs/describe 并退出 1，避免占用 Woodpecker runner 等完整 timeout。
+- 保留 `DEEPTUTOR_MIGRATION_TIMEOUT`，支持秒数或 `s`/`m` 后缀；新增 `DEEPTUTOR_MIGRATION_POLL_INTERVAL_SECONDS`。
+
+RED/GREEN：
+
+```bash
+PYTHONPATH=. .venv/bin/pytest \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_deploy_script_exits_when_migration_job_fails_without_wait_timeout -q
+# RED：deploy.sh 调用了 complete-only kubectl wait。
+# GREEN：1 passed，失败 Job 立即收集日志并退出，不进入 rollout。
+```
+
+验证：
+
+```bash
+.venv/bin/ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=. .venv/bin/pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 21 passed
+
+bash -n deploy/kubernetes/protected-k8s-release/deploy.sh
+# exit 0
+
+git diff --check
+# exit 0
+```
+
+后续：若继续坚持 test-cn 使用单一 DB 连接，则该连接必须具备初始化企业 schema 所需的 DDL/role/grant 权限，或由 DBA 预先初始化全部 pending migrations。否则下一次 deploy 会快速失败在同一 `InsufficientPrivilege` 根因，而不会再卡 900s。

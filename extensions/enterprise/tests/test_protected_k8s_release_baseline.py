@@ -1196,6 +1196,13 @@ if [[ "$*" == *"get secret deeptutor-migrator-secrets"* ]]; then
     exit 0
   fi
 fi
+if [[ "$*" == *"get job/dt-migrate-test-cn-v1-4-0"* && "$*" == *"Complete"* ]]; then
+  printf 'True'
+  exit 0
+fi
+if [[ "$*" == *"get job/dt-migrate-test-cn-v1-4-0"* && "$*" == *"Failed"* ]]; then
+  exit 0
+fi
 if [[ "$*" == *"apply -f -"* ]]; then
   cat >/dev/null
 fi
@@ -1219,6 +1226,7 @@ exit 0
             "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
             "DEEPTUTOR_RELEASE_LOCK_REF": "postgres:test-cn/release_locks",
             "DEEPTUTOR_MIGRATION_LOCK_REF": "postgres:test-cn/migration_locks",
+            "DEEPTUTOR_MIGRATION_POLL_INTERVAL_SECONDS": "0",
             "KUBECONFIG_DATA": "apiVersion: v1\nclusters: []\ncontexts: []\n",
         }
     )
@@ -1240,6 +1248,93 @@ exit 0
     assert "get secret deeptutor-migrator-secrets" not in log_text
     assert "apply -f -" in log_text
     assert "rollout status deployment/deeptutor-backend" in log_text
+
+
+def test_protected_k8s_deploy_script_exits_when_migration_job_fails_without_wait_timeout(
+    tmp_path,
+):
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2].parent
+    script = root / "deploy/kubernetes/protected-k8s-release/deploy.sh"
+    kubectl_log = tmp_path / "kubectl.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "python").symlink_to(sys.executable)
+    fake_kubectl = fake_bin / "kubectl"
+    fake_kubectl.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${KUBECTL_LOG}"
+if [[ "$*" == *"wait --for=condition=complete"* ]]; then
+  echo "unexpected complete-only wait" >&2
+  exit 42
+fi
+if [[ "$*" == *"apply -f -"* ]]; then
+  cat >/dev/null
+  exit 0
+fi
+if [[ "$*" == *"get job/dt-migrate-test-cn-v1-4-0"* && "$*" == *"Complete"* ]]; then
+  exit 0
+fi
+if [[ "$*" == *"get job/dt-migrate-test-cn-v1-4-0"* && "$*" == *"Failed"* ]]; then
+  printf 'True'
+  exit 0
+fi
+if [[ "$*" == *"get pods -l job-name=dt-migrate-test-cn-v1-4-0"* ]]; then
+  echo "pod/dt-migrate-test-cn-v1-4-0-failed 0/1 Error"
+  exit 0
+fi
+if [[ "$*" == *"logs job/dt-migrate-test-cn-v1-4-0"* ]]; then
+  echo "migration failed log"
+  exit 0
+fi
+if [[ "$*" == *"describe job dt-migrate-test-cn-v1-4-0"* ]]; then
+  echo "BackoffLimitExceeded"
+  exit 0
+fi
+exit 0
+""",
+        encoding="utf8",
+    )
+    fake_kubectl.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "KUBECTL_LOG": str(kubectl_log),
+            "DEEPTUTOR_DEPLOY_APPROVED": "yes",
+            "DEEPTUTOR_TARGET_ENV_ID": "test-cn",
+            "DEEPTUTOR_RELEASE_ID": "test-cn-v1-4-0",
+            "DEEPTUTOR_RUNTIME_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/runtime@sha256:"
+            + "1" * 64,
+            "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
+            "DEEPTUTOR_INGRESS_HOST": "deeptutor-test-cn.example.internal",
+            "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
+            "DEEPTUTOR_RELEASE_LOCK_REF": "postgres:test-cn/release_locks",
+            "DEEPTUTOR_MIGRATION_LOCK_REF": "postgres:test-cn/migration_locks",
+            "DEEPTUTOR_MIGRATION_POLL_INTERVAL_SECONDS": "0",
+            "KUBECONFIG_DATA": "apiVersion: v1\nclusters: []\ncontexts: []\n",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(script)],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "migration failed log" in result.stderr
+    assert "BackoffLimitExceeded" in result.stderr
+    log_text = kubectl_log.read_text(encoding="utf8")
+    assert "wait --for=condition=complete" not in log_text
+    assert "rollout status deployment/deeptutor-backend" not in log_text
 
 
 def test_prepare_test_woodpecker_secrets_prefers_existing_global_kubectl_and_registry(

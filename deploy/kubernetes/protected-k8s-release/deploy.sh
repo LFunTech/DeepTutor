@@ -103,12 +103,72 @@ print(string.Template(source).safe_substitute(os.environ))
 PY
 }
 
+migration_timeout_seconds() {
+  local raw="${DEEPTUTOR_MIGRATION_TIMEOUT:-900s}"
+  case "${raw}" in
+    *s)
+      raw="${raw%s}"
+      ;;
+    *m)
+      raw="$(( ${raw%m} * 60 ))"
+      ;;
+  esac
+  case "${raw}" in
+    ''|*[!0-9]*)
+      echo "DEEPTUTOR_MIGRATION_TIMEOUT must be an integer number of seconds, or use s/m suffix" >&2
+      exit 1
+      ;;
+  esac
+  echo "${raw}"
+}
+
+job_condition_status() {
+  local condition_type="$1"
+  kubectl -n "${namespace}" get "job/${migration_job_name}" \
+    -o "jsonpath={.status.conditions[?(@.type==\"${condition_type}\")].status}" \
+    2>/dev/null || true
+}
+
+wait_for_migration_job() {
+  local timeout_seconds
+  local poll_interval
+  local deadline
+  local complete_status
+  local failed_status
+
+  timeout_seconds="$(migration_timeout_seconds)"
+  poll_interval="${DEEPTUTOR_MIGRATION_POLL_INTERVAL_SECONDS:-5}"
+  case "${poll_interval}" in
+    ''|*[!0-9]*)
+      echo "DEEPTUTOR_MIGRATION_POLL_INTERVAL_SECONDS must be a non-negative integer" >&2
+      exit 1
+      ;;
+  esac
+  deadline=$((SECONDS + timeout_seconds))
+
+  while true; do
+    complete_status="$(job_condition_status Complete)"
+    if [ "${complete_status}" = "True" ]; then
+      return 0
+    fi
+    failed_status="$(job_condition_status Failed)"
+    if [ "${failed_status}" = "True" ]; then
+      return 1
+    fi
+    if [ "${SECONDS}" -ge "${deadline}" ]; then
+      echo "migration job ${migration_job_name} did not complete before ${timeout_seconds}s timeout" >&2
+      return 1
+    fi
+    sleep "${poll_interval}"
+  done
+}
+
 kubectl cluster-info >/dev/null
 kubectl -n "${namespace}" get namespace "${namespace}" >/dev/null
 
 render_manifest "${manifest_dir}/networkpolicy.yaml" | kubectl -n "${namespace}" apply -f -
 render_manifest "${manifest_dir}/migration-job.yaml" | kubectl -n "${namespace}" apply -f -
-if ! kubectl -n "${namespace}" wait --for=condition=complete --timeout="${DEEPTUTOR_MIGRATION_TIMEOUT:-900s}" "job/${migration_job_name}"; then
+if ! wait_for_migration_job; then
   kubectl -n "${namespace}" get pods -l job-name="${migration_job_name}" -o wide >&2 || true
   kubectl -n "${namespace}" logs "job/${migration_job_name}" --all-containers=true >&2 || true
   kubectl -n "${namespace}" describe job "${migration_job_name}" >&2 || true
