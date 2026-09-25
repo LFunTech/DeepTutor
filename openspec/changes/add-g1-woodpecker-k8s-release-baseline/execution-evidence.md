@@ -1959,3 +1959,71 @@ Kubernetes test-cn 探测（使用 #46 runtime image，挂载修复后的 `postg
 ```
 
 临时探测 Job/ConfigMap 已删除。后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.35`，预期 backend Pod 能完成 startup/readiness，然后继续 ingress/smoke 证据采集。
+
+### 2026-09-25 test-cn pipeline #48 通过，补充 status evidence 采集修正
+
+`deploy/test-cn/v1.4.0-rc.35` 触发 Woodpecker pipeline `#48`，使用 commit `5b588300`。
+
+结果：
+
+- `validate-release-trigger`、`prepare-release-metadata`、并行 artifact image 构建、secret preflight、runtime image build、pre-deploy check 均成功。
+- runtime image digest：`docker-hub.f123.pub/lfun/deeptutor/test-cn/runtime@sha256:944b63b467e73d85815c82ec7b1ceaee9c5957bcdc27eff5d9c0b987ccf6c633`。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-35` 成功：pending 为空，schema apply/verify 成功，bootstrap admin 成功。
+- backend Deployment 成功 rollout；live `deeptutor-test-cn` Ingress host 为 `llm-agent-test.f123.pub`。
+- Woodpecker pipeline 最终状态为 `success`。
+
+发现的 evidence 采集缺陷：deploy step 在 `deploy.sh` 之后执行：
+
+```text
++ deploy/kubernetes/protected-k8s-release/status.sh "${DEEPTUTOR_K8S_NAMESPACE}" | tee "${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
+error: error loading config file "********": open ********: file name too long
+```
+
+根因：Woodpecker 中 `KUBECONFIG` secret 保存的是 kubeconfig 内容而非宿主文件路径。`deploy.sh` 会把 `KUBECONFIG_DATA` 写入临时文件并在子进程内 `export KUBECONFIG=<file>`，但子进程退出后父级 deploy step 仍保留原始 `KUBECONFIG` 内容；随后 `status.sh` 直接调用 `kubectl`，导致 kubectl 把 kubeconfig 内容当作文件名。另外 `status.sh | tee ...` 所在 deploy step 未显式启用 `pipefail`，因此该错误被后续 `scan-evidence` 掩盖，pipeline 仍显示 success。
+
+实现修正：
+
+- `deploy/kubernetes/protected-k8s-release/status.sh` 与 `deploy.sh` 一样支持 `KUBECONFIG_DATA`：当变量存在时写入 `${HOME}/.kube/deeptutor-protected-k8s-release-${DEEPTUTOR_TARGET_ENV_ID}-status.yaml`，`chmod 600`，在脚本进程内导出 `KUBECONFIG`，退出时清理临时文件。
+- 所有环境的 `deploy-*` Woodpecker step 增加 `set -euo pipefail`，确保 `status.sh | tee` 中任一命令失败都会阻断 step。
+- 增加回归测试：模拟 Woodpecker 注入的 kubeconfig 内容，验证 `status.sh` 不把明文内容当文件名、不泄露到日志、会清理临时 kubeconfig；解析 pipeline YAML，验证所有 deploy step 都先启用 `pipefail`。
+
+Live test-cn 只读状态验证（不输出 kubeconfig/Secret data）：
+
+```text
+Ingress host: llm-agent-test.f123.pub
+Deployment: deeptutor-backend READY 1/1 AVAILABLE 1
+Runtime digest: sha256:944b63b467e73d85815c82ec7b1ceaee9c5957bcdc27eff5d9c0b987ccf6c633
+```
+
+Fresh verification：
+
+```bash
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_status_script_uses_kubeconfig_data_secret_without_leaking \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py::test_protected_k8s_deploy_steps_do_not_mask_status_collection_failures -q
+# 先按 TDD 确认 2 个测试失败，随后修复后 2 passed
+
+bash -n deploy/kubernetes/protected-k8s-release/status.sh
+bash -n deploy/kubernetes/protected-k8s-release/deploy.sh
+WOODPECKER_DISABLE_UPDATE_CHECK=true woodpecker-cli lint .woodpecker/protected-k8s-release.yml
+# YAML 可解析；仅有既有 clone image allow-list warning：Specified clone image does not match allow list, netrc is not injected
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/ruff check \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest --asyncio-mode=auto \
+  extensions/enterprise/tests/test_protected_k8s_release_baseline.py -q
+# 23 passed
+
+openspec validate add-g1-woodpecker-k8s-release-baseline --strict
+# Change 'add-g1-woodpecker-k8s-release-baseline' is valid
+
+openspec validate --all --strict
+# 16 passed, 0 failed
+
+git diff --check
+# exit 0
+```
+
+后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.36`，目标是让 deploy-status evidence 也包含真实 K8s status，而不是被 kubeconfig 路径错误污染。

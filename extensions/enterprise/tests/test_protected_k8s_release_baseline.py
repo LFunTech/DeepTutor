@@ -1051,6 +1051,35 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "python-base" not in protected_runtime_base_dockerfile
 
 
+def test_protected_k8s_deploy_steps_do_not_mask_status_collection_failures():
+    import yaml
+
+    root = Path(__file__).resolve().parents[2].parent
+    pipeline_path = root / ".woodpecker/protected-k8s-release.yml"
+    pipeline = yaml.safe_load(pipeline_path.read_text(encoding="utf8"))
+    deploy_steps = [
+        step
+        for step in pipeline["steps"]
+        if str(step.get("name", "")).startswith("deploy-")
+    ]
+
+    assert {step["name"] for step in deploy_steps} == {
+        "deploy-test-cn",
+        "deploy-pre-cn",
+        "deploy-prod-cn-east",
+        "deploy-prod-overseas-a",
+    }
+    for step in deploy_steps:
+        commands = step["commands"]
+        assert commands[0] == "set -euo pipefail", step["name"]
+        status_command_index = next(
+            index
+            for index, command in enumerate(commands)
+            if "status.sh" in command and "tee" in command
+        )
+        assert commands[0:status_command_index].count("set -euo pipefail") == 1
+
+
 def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution():
     import string
 
@@ -1268,6 +1297,76 @@ exit 0
     assert "get secret deeptutor-migrator-secrets" not in log_text
     assert "apply -f -" in log_text
     assert "rollout status deployment/deeptutor-backend" in log_text
+
+
+def test_protected_k8s_status_script_uses_kubeconfig_data_secret_without_leaking(
+    tmp_path,
+):
+    """状态采集脚本必须把 Woodpecker 注入的 kubeconfig 明文转成临时文件。"""
+
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2].parent
+    script = root / "deploy/kubernetes/protected-k8s-release/status.sh"
+    kubectl_log = tmp_path / "kubectl.log"
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_kubectl = fake_bin / "kubectl"
+    fake_kubectl.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [ ! -f "${KUBECONFIG:-}" ]; then
+  echo "kubectl did not receive a kubeconfig file path" >&2
+  exit 37
+fi
+printf 'KUBECONFIG=%s\\nARGS=%s\\n' "$KUBECONFIG" "$*" >> "${KUBECTL_LOG}"
+printf 'ok\\n'
+""",
+        encoding="utf8",
+    )
+    fake_kubectl.chmod(0o755)
+    kubeconfig_data = "apiVersion: v1\nclusters: []\ncontexts: []\n"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "HOME": str(fake_home),
+            "KUBECTL_LOG": str(kubectl_log),
+            "DEEPTUTOR_TARGET_ENV_ID": "test-cn",
+            "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
+            # Woodpecker 里 KUBECONFIG secret 保存的是 kubeconfig 内容，不是宿主文件路径。
+            "KUBECONFIG": kubeconfig_data,
+            "KUBECONFIG_DATA": kubeconfig_data,
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(script), "deeptutor-test-cn"],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    log_text = kubectl_log.read_text(encoding="utf8")
+    assert "kubectl did not receive a kubeconfig file path" not in result.stderr
+    assert "apiVersion: v1" not in log_text
+    kubeconfig_lines = [
+        line.removeprefix("KUBECONFIG=")
+        for line in log_text.splitlines()
+        if line.startswith("KUBECONFIG=")
+    ]
+    assert kubeconfig_lines
+    assert len(set(kubeconfig_lines)) == 1
+    kubeconfig_path = Path(kubeconfig_lines[0])
+    assert kubeconfig_path.name == "deeptutor-protected-k8s-release-test-cn-status.yaml"
+    assert not kubeconfig_path.exists()
+    assert "ARGS=-n deeptutor-test-cn get deployment deeptutor-backend -o wide" in log_text
 
 
 def test_protected_k8s_deploy_script_exits_when_migration_job_fails_without_wait_timeout(

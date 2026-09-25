@@ -269,6 +269,7 @@ steps:
       EVIDENCE_STORE_WRITE_TOKEN:
         from_secret: dt_test_cn_evidence_store_write_token
     commands:
+      - set -euo pipefail
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
@@ -471,6 +472,7 @@ steps:
       EVIDENCE_STORE_WRITE_TOKEN:
         from_secret: dt_pre_cn_evidence_store_write_token
     commands:
+      - set -euo pipefail
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
@@ -673,6 +675,7 @@ steps:
       EVIDENCE_STORE_WRITE_TOKEN:
         from_secret: dt_prod_cn_east_evidence_store_write_token
     commands:
+      - set -euo pipefail
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
@@ -875,6 +878,7 @@ steps:
       EVIDENCE_STORE_WRITE_TOKEN:
         from_secret: dt_prod_overseas_a_evidence_store_write_token
     commands:
+      - set -euo pipefail
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
