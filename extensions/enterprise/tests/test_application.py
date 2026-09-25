@@ -15,6 +15,23 @@ import pytest
 from tests.fixtures.postgres import single_database_user_dsn
 
 
+def test_enterprise_core_version_falls_back_to_source_tree_version(monkeypatch):
+    """源码拷贝型 runtime 没有 distribution metadata 时仍可校验 core 版本。"""
+
+    from importlib.metadata import PackageNotFoundError
+
+    import deeptutor_enterprise.bootstrap as bootstrap
+
+    from deeptutor.__version__ import __version__
+
+    def missing_distribution(name: str) -> str:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(bootstrap, "version", missing_distribution)
+
+    assert bootstrap._core_version() == __version__
+
+
 @pytest.fixture
 async def app(pg_dsn, monkeypatch):
     assert importlib.util.find_spec("deeptutor_enterprise.bootstrap"), "企业组合入口尚未实现"

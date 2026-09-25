@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 import os
 
 from jose import JWTError, jwt
@@ -113,9 +113,18 @@ class _ControlledBootstrapIdentity(IdentityService):
         return await controlled.bootstrap(username, password, secret=secret)
 
 
+def _core_version() -> str:
+    try:
+        return version("deeptutor")
+    except PackageNotFoundError:
+        from deeptutor.__version__ import __version__
+
+        return __version__
+
+
 class Enterprise:
     def __init__(self, deployment):
-        if version("deeptutor") not in SpecifierSet(CORE_COMPATIBILITY):
+        if _core_version() not in SpecifierSet(CORE_COMPATIBILITY):
             raise RuntimeError("incompatible DeepTutor core version")
         try:
             from deeptutor.core import providers
