@@ -1609,3 +1609,55 @@ git diff --check
 ```
 
 后续：若继续坚持 test-cn 使用单一 DB 连接，则该连接必须具备初始化企业 schema 所需的 DDL/role/grant 权限，或由 DBA 预先初始化全部 pending migrations。否则下一次 deploy 会快速失败在同一 `InsufficientPrivilege` 根因，而不会再卡 900s。
+
+### 2026-09-25 test-cn Pod 内 PostgreSQL 连接与权限探测
+
+按用户要求，通过 Kubernetes 上的临时 Pod 从集群内实际连接数据库，验证 `deeptutor-migrator-secrets` 提供的 PostgreSQL 连接是否真实可用。探测 Pod 使用 #39 migration Job 同一个 runtime image，并从同一个 `deeptutor-migrator-secrets` 注入环境变量；探测完成后已删除 Pod。未输出 DSN、密码或 kubeconfig secret。
+
+临时 Pod：`dt-pg-probe-1790307685`，namespace：`deeptutor-test-cn`，node：`test-worker6`。
+
+脱敏探测结论：
+
+```json
+{
+  "connect": {"ok": true},
+  "env_present": {
+    "DEEPTUTOR_POSTGRES_DATABASE_URL": true,
+    "DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL": true
+  },
+  "session": {
+    "database": "deeptutor",
+    "user": "deeptutor",
+    "schema": "public",
+    "server_addr": "10.5.3.11/32",
+    "server_port": 5432
+  },
+  "role_capabilities": {
+    "superuser": false,
+    "createrole": false,
+    "createdb": false,
+    "database_create": true,
+    "enterprise_schema_exists": false,
+    "migration_stage_schema_exists": false,
+    "runtime_role_exists": false
+  },
+  "ddl_probes": {
+    "create_schema_rollback": {"ok": true},
+    "create_role_rollback": {
+      "ok": false,
+      "type": "InsufficientPrivilege",
+      "sqlstate": "42501",
+      "message": "permission denied to create role"
+    }
+  },
+  "schema_owners": []
+}
+```
+
+结论：
+
+- 从 Kubernetes Pod 内到 PostgreSQL 的网络、认证和基本查询真实可用。
+- 当前连接用户为 `deeptutor`，连接数据库为 `deeptutor`。
+- 该用户可以创建 schema（事务内 `CREATE SCHEMA` 探测成功并回滚）。
+- 该用户没有 `CREATEROLE`，且 `dt_enterprise_app` role 尚不存在；首个 migration `0001_identity_sessions.sql` 会尝试创建 `dt_enterprise_app`，因此 #39 的 `schema apply` 失败根因与 Pod 探测一致：`InsufficientPrivilege / permission denied to create role`。
+- 如果继续坚持使用单一 PostgreSQL 连接，需要在数据库侧预先创建 `dt_enterprise_app`，或授予当前连接用户足够的 role/grant 初始化权限；否则迁移仍会失败。
