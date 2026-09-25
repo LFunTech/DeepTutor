@@ -2065,3 +2065,34 @@ NAME                              STATUS     COMPLETIONS
 因此，D2.2 的 test-cn 真实入口已完成：受保护 deployment tag 解析 `target_env_id=test-cn` 与 version，完成并行构建、runtime image push/digest resolve、pre-deploy gate 和 deploy evidence。D3.2 仍不标记完成，因为完整 runtime smoke（HTTP/WS/EduPlus2/resource/ObjectStore/LightRAG/audit 经真实 Ingress/TLS）尚未全部接入并通过。
 
 Webhook token follow-up：在 #49 验证完成后再次执行 `woodpecker-cli repo repair LFunTech/DeepTutor`，仅以 SHA-256 hash 对比 hook URL，确认 hook URL hash 已变化；GitHub 当前 active hook id 为 `685416006`，events 包含 `push`，未输出新的 hook URL/access token。repair 后 `woodpecker-cli pipeline ls` 仍显示最新 release pipeline 为 #49，未误触发新的部署 run。
+
+### 2026-09-25 test-cn 入口域名与前置 Nginx/WebSocket 修复
+
+外部域名 `llm-agent-test.f123.pub` 初始经公网访问时出现 HTTPS `308` 循环；直接将同一 Host/SNI 解析到 K8s ingress `10.0.5.20:443` 可返回 DeepTutor 前端 `200`。对比后确认根因在前置代理 `10.0.0.6`：泛域名 vhost 对 `*.f123.pub` 终止 TLS 后以 `http://k8s-web` 回源到 ingress，触发 ingress-nginx 的 HTTP→HTTPS 重定向；不是后端 Pod 或 K8s ingress 本身不可用。
+
+在 `10.0.0.6` 新增精确 vhost `/etc/nginx/conf.d/20-sites/prod/llm-agent-test.conf`：
+
+- `llm-agent-test.f123.pub:80` 只做 301 到 HTTPS；
+- `llm-agent-test.f123.pub:443` 经现有本机 TLS 入口匹配到 `listen 127.0.0.1:8443 ssl` 的精确 server；
+- 回源改为 `proxy_pass https://k8s-web-https`，并设置 `proxy_ssl_server_name on` / `proxy_ssl_name llm-agent-test.f123.pub`，避免 upstream ingress 继续按 HTTP 重定向；
+- 保留/强化 WebSocket 透传：`proxy_http_version 1.1`、`Upgrade $http_upgrade`、`Connection $connection_upgrade`、关闭 buffering，并将读写超时提升到 `3600s`。
+
+Fresh verification（未输出 kubeconfig、JWT、Secret data 或真实 token）：
+
+```text
+ssh root@10.0.0.6 'nginx -t'
+# nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+# nginx: configuration file /etc/nginx/nginx.conf test is successful
+
+curl -k -sS -o /dev/null -w '%{http_code}\n' https://llm-agent-test.f123.pub/
+# 200
+
+curl -sS -o /dev/null -w '%{http_code} -> %{redirect_url}\n' http://llm-agent-test.f123.pub/
+# 301 -> https://llm-agent-test.f123.pub/
+
+# 使用短期内部 smoke token 通过 Authorization header 做 WebSocket 握手，避免 token 进入 URL/access log。
+GET /ws HTTP/1.1 + Upgrade: websocket + Authorization: Bearer <redacted>
+# HTTP/1.1 101 Switching Protocols
+```
+
+因此，当前 `llm-agent-test.f123.pub` 的前置 Nginx 代理层已不再产生 308 循环，且公网入口到 `/ws` 的 WebSocket Upgrade 链路可建立。D3.2 仍不标记完成：该条证据只覆盖入口 HTTP/TLS 与 WebSocket 握手；完整 runtime smoke 还需要继续覆盖 EduPlus2、resource/ObjectStore、LightRAG 与 audit 路径。
