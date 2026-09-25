@@ -2227,3 +2227,29 @@ git diff --check
 ```
 
 后续：提交后触发 `deploy/test-cn/v1.4.0-rc.42`，验证流水线部署后的 Pod env 仍为 `off`，并请用户重新从 `conversation-test` 页面发起一次新的 EduPlus2 登录。
+
+### 2026-09-25 test-cn pipeline #54 profile/permission 可选增强关闭验证通过
+
+提交并推送 `f38c767d` 后创建并推送 `deploy/test-cn/v1.4.0-rc.42`，Woodpecker 创建 pipeline `#54`。
+
+`deploy/test-cn/v1.4.0-rc.42` / pipeline `#54` 结果：
+
+- Woodpecker 状态：`success`。
+- `validate-release-trigger`、`prepare-release-metadata`、`compile-frontend-test-cn`、`compile-python-deps-test-cn`、`build-runtime-base-test-cn`、`secret-preflight-test-cn`、`build-runtime-image-test-cn`、`pre-deploy-check-test-cn`、`deploy-test-cn` 均成功。
+- runtime image digest：`sha256:a4af644b13257528d49761d295c0b4c368653c968bcb9373ab568136c36a56b5`。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-42`：`Complete 1/1`。
+- backend Deployment：`READY 1/1`、新 Pod `1/1 Running`、`RESTARTS 0`。
+
+Fresh live verification（未输出 kubeconfig、JWT、Secret data 或真实 token）：
+
+```text
+pod env DT_EDUPLUS2_PROFILE_URL -> off
+pod env DT_EDUPLUS2_PERMISSION_URL -> off
+pod env DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback
+GET https://llm-agent-test.f123.pub/enterprise/eduplus2/conversation-test -> 200
+GET /api/v1/auth/eduplus2/demo/start?return_to=<conversation-test> -> HTTP/2 303
+Location host -> eduplus-auth-test.f123.pub
+Location redirect_uri -> https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback
+```
+
+因此，rc42 已把 test 环境从临时热修复状态固化为发布模板状态：后续部署不会再被 `deeptutor-runtime-secrets` 中的 `DT_EDUPLUS2_PROFILE_URL` / `DT_EDUPLUS2_PERMISSION_URL` 覆盖回不兼容的 POST open API URL。用户需重新从 `conversation-test` 页面发起新的 EduPlus2 登录；旧的失败 `demo_session` 不会自动变为成功。
