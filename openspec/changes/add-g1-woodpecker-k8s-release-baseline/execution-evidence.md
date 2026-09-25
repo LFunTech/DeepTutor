@@ -2027,3 +2027,39 @@ git diff --check
 ```
 
 后续：提交修正并触发 `deploy/test-cn/v1.4.0-rc.36`，目标是让 deploy-status evidence 也包含真实 K8s status，而不是被 kubeconfig 路径错误污染。
+
+### 2026-09-25 test-cn pipeline #49 发布状态证据采集验证通过
+
+提交并推送 `7617db2a` 后，先创建并推送 `deploy/test-cn/v1.4.0-rc.36`。该 tag 已存在于 GitHub remote，但 Woodpecker 未创建 pipeline。执行 `woodpecker-cli repo repair LFunTech/DeepTutor` 后创建 `deploy/test-cn/v1.4.0-rc.37`，GitHub webhook delivery 显示 `push` delivery 返回 `502 failed to connect to host`，repair 产生的 `ping` delivery 返回 `200 OK`。由于当前 `gh` token 缺少 `admin:repo_hook` scope，不能直接调用 GitHub redelivery API；随后使用已登记的 Woodpecker hook endpoint 对 rc37 tag push 事件做等价重放，HTTP 返回 `202`，Woodpecker 创建 pipeline `#49`。
+
+安全备注：调试 hook 时必须继续禁止记录 hook URL、access token、kubeconfig 或 Secret 明文。本次 evidence 不保存 hook URL/token；后续建议对 Woodpecker webhook access token/签名密钥做一次运维侧轮换或确认其暴露范围仅限本受控会话。
+
+`deploy/test-cn/v1.4.0-rc.37` / pipeline `#49` 结果：
+
+- Woodpecker 状态：`success`。
+- `validate-release-trigger`、`prepare-release-metadata`、`compile-frontend-test-cn`、`compile-python-deps-test-cn`、`build-runtime-base-test-cn`、`secret-preflight-test-cn`、`build-runtime-image-test-cn`、`pre-deploy-check-test-cn`、`deploy-test-cn` 均成功。
+- deploy step 日志开头显示 `set -euo pipefail` 已生效。
+- runtime image digest：`sha256:9228ce036d852b6f7b704d5eba7620720a9136f2a07f24ee732ee450a41487d1`。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-37`：pending 为空，schema apply/verify 成功，bootstrap admin 成功，Job `Complete`。
+- backend Deployment rollout 成功，Pod `1/1 Running`。
+- `status.sh | tee` 不再出现 `error loading config file ... file name too long`，`deploy-status.txt` 采集到了真实 K8s status。
+- Ingress host：`llm-agent-test.f123.pub`。
+- secret leakage scan 通过：`release-evidence/test-cn/v1.4.0-rc.37/scan/secret-leakage-scan.json` ready 为 `True`。
+
+deploy-status 摘要（Woodpecker 日志已脱敏 registry path）：
+
+```text
+NAME                READY   UP-TO-DATE   AVAILABLE   CONTAINERS   IMAGES
+ deeptutor-backend  1/1     1            1           backend      .../runtime@sha256:9228ce036d852b6f7b704d5eba7620720a9136f2a07f24ee732ee450a41487d1
+
+NAME                                 READY   STATUS    RESTARTS
+ deeptutor-backend-6cf8cf4fd6-2p9zr  1/1     Running   0
+
+NAME                CLASS   HOSTS
+ deeptutor-backend  nginx   llm-agent-test.f123.pub
+
+NAME                              STATUS     COMPLETIONS
+ dt-migrate-test-cn-v1-4-0-rc-37  Complete   1/1
+```
+
+因此，D2.2 的 test-cn 真实入口已完成：受保护 deployment tag 解析 `target_env_id=test-cn` 与 version，完成并行构建、runtime image push/digest resolve、pre-deploy gate 和 deploy evidence。D3.2 仍不标记完成，因为完整 runtime smoke（HTTP/WS/EduPlus2/resource/ObjectStore/LightRAG/audit 经真实 Ingress/TLS）尚未全部接入并通过。

@@ -20,7 +20,7 @@
 ## D2 Woodpecker build/push/digest
 
 - [x] D2.1 迁移/配置：实现 build-once、按 `target_env_id` 的 registry image push、digest resolve、SBOM/scan 摘要和 mutable tag 禁用/限制策略。
-- [ ] D2.2 真实入口：在受保护且批准的 deployment tag 上运行 pipeline，从 tag 解析 `target_env_id` 和 version，生成 frontend/backend 镜像 digest，并将 digest 写入该环境发布清单。
+- [x] D2.2 真实入口：在受保护且批准的 deployment tag 上运行 pipeline，从 tag 解析 `target_env_id` 和 version，生成 frontend/backend 镜像 digest，并将 digest 写入该环境发布清单。
 - [ ] D2.3 权限/异常测试：验证旧构建覆盖、新 tag 指向旧 digest、非 deployment tag、tag moved/reused、未批准 ref/tag、歧义/错误 `target_env_id`、缺失/错误 registry push secret、agent 中断和 registry 推送失败不会进入部署阶段。
 - [x] D2.4 切换证据：记录原始 tag、tag object SHA、tag creator、`target_env_id`、version、源码 SHA、upstream SHA、企业包版本、镜像 digest、build run ID、扫描摘要和失败证据。
 
