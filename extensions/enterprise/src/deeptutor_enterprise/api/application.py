@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager, nullcontext
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import uuid
@@ -77,6 +78,7 @@ class AuthenticationMiddleware:
             "/api/auth/status",
             "/api/v1/auth/eduplus2/exchange",
             "/api/v1/auth/eduplus2/revocations",
+            "/api/v1/eduplus2/webhooks",
             "/api/v1/auth/eduplus2/demo/start",
             "/api/v1/auth/eduplus2/demo/callback",
             "/api/v1/auth/eduplus2/demo/result",
@@ -471,6 +473,53 @@ def create_application(enterprise):
             return JSONResponse({"detail": "Invalid request"}, status_code=422)
         except RuntimeError:
             return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+
+    @eduplus2_auth.post("/eduplus2/webhooks")
+    async def eduplus2_webhook(request: Request):
+        """接收已验签的控制台 mock；真实生命周期事件尚未开放确认。"""
+
+        secret = str(getattr(enterprise, "eduplus2_webhook_secret", "") or "")
+        if not secret:
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503)
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 128 * 1024:
+                return JSONResponse({"detail": "Payload too large"}, status_code=413)
+        timestamp = request.headers.get("x-eduplus-timestamp", "")
+        event_type = request.headers.get("x-eduplus-event", "")
+        signature = request.headers.get("x-eduplus-signature", "")
+        if not timestamp.isascii() or not timestamp.isdecimal() or len(timestamp) > 12:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        if abs(int(time.time()) - int(timestamp)) > 300:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,100}", event_type):
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        if not re.fullmatch(r"sha256=[0-9a-f]{64}", signature):
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            timestamp.encode("ascii") + b"." + event_type.encode("ascii") + b"." + raw,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, signature[7:]):
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        if not isinstance(payload, dict) or payload.get("event") != event_type:
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        event_id = payload.get("event_id")
+        if (
+            request.headers.get("x-eduplus-mock", "").lower() == "true"
+            and isinstance(event_id, str)
+            and event_id.startswith("mock_")
+            and len(event_id) <= 128
+        ):
+            return Response(status_code=204)
+        # 未有单调权威版本/状态对账时，绝不 2xx 确认真实事件或写入租户开停。
+        return JSONResponse({"detail": "Lifecycle receiver unavailable"}, status_code=503)
 
     @eduplus2_auth.get("/auth/eduplus2/demo/start", name="eduplus2_demo_start")
     async def eduplus2_demo_start(request: Request):

@@ -1,0 +1,21 @@
+{
+  "name": "@deeptutor/tms-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 4311",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 4311",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@deeptutor/admin-ui": "0.1.0",
+    "@deeptutor/api-contracts": "0.1.0",
+    "@deeptutor/branding": "0.1.0",
+    "@deeptutor/service-components": "0.1.0",
+    "lucide-react": "0.562.0",
+    "next": "16.2.3",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  }
+}

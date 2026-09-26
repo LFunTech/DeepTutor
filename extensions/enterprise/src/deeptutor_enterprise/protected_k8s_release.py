@@ -175,6 +175,7 @@ class WoodpeckerSecret(BaseModel):
         "secret_store",
         "pg_migrator",
         "runtime_secret_ref",
+        "runtime_secret_sync",
         "smoke_credentials",
         "evidence_store",
         "tag_approval_verify",

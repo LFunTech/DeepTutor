@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-26
+goal: 规划学校/企业租户管理后台，独立部署并复用 OMS 管理组件

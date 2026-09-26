@@ -18,6 +18,9 @@ FROM ${FRONTEND_ARTIFACT_IMAGE} AS frontend-artifact
 FROM ${PYTHON_DEPS_IMAGE} AS python-deps
 FROM ${RUNTIME_BASE_IMAGE} AS production
 
+# 与本地通用镜像区分；缺部署配置或改写 ASGI 入口时禁止启动核心管理面。
+ENV DEEPTUTOR_PROTECTED_RUNTIME=1
+
 LABEL maintainer="DeepTutor Team" \
       description="DeepTutor: AI-Powered Personalized Learning Assistant"
 

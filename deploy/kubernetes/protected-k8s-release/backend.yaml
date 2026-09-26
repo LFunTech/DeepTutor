@@ -27,6 +27,8 @@ spec:
           image: "${DEEPTUTOR_RUNTIME_IMAGE_DIGEST}"
           imagePullPolicy: IfNotPresent
           env:
+            - name: DEEPTUTOR_PROTECTED_RUNTIME
+              value: "1"
             - name: DEEPTUTOR_RUNTIME_MODE
               value: kubernetes
             - name: DEEPTUTOR_EXECUTION_MODE

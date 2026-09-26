@@ -164,6 +164,7 @@ class Enterprise:
         self.eduplus2_revocation_cache_ttl_seconds = 30
         self.eduplus2_audit_export_storage_ref = "db://eduplus2/audit-export"
         self.eduplus2_revocation_webhook_secret = ""
+        self.eduplus2_webhook_secret = ""
         self.eduplus2_signing_key = ""
         self.eduplus2_issuer = ""
         self._configure_eduplus2_from_env()
@@ -228,6 +229,11 @@ class Enterprise:
             revocation_secret_ref = "env:DT_EDUPLUS2_REVOCATION_WEBHOOK_SECRET"
         if revocation_secret_ref:
             self.eduplus2_revocation_webhook_secret = resolve_secret(revocation_secret_ref)
+        webhook_secret_ref = os.environ.get("DT_EDUPLUS2_WEBHOOK_SECRET_REF", "").strip()
+        if not webhook_secret_ref and os.environ.get("DT_EDUPLUS2_WEBHOOK_SECRET"):
+            webhook_secret_ref = "env:DT_EDUPLUS2_WEBHOOK_SECRET"
+        if webhook_secret_ref:
+            self.eduplus2_webhook_secret = resolve_secret(webhook_secret_ref)
         try:
             ttl = int(
                 os.environ.get(

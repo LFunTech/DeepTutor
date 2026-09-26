@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-25
+goal: 制定 C1 OMS 运营原型 proposal/design/tasks/spec，明确普通运营人员可理解的跨租户运营后台、B2 依赖、安全边界和验收门禁

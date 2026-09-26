@@ -24,6 +24,7 @@ PURPOSES = {
     "OBJECTSTORE_SECRET_REF": "runtime_secret_ref",
     "LIGHTRAG_API_SECRET_REF": "runtime_secret_ref",
     "EDUPLUS2_CLIENT_SECRET_REF": "runtime_secret_ref",
+    "EDUPLUS2_WEBHOOK_SECRET": "runtime_secret_sync",
     "SMOKE_TOKEN_ISSUER_SECRET": "smoke_credentials",
     "EVIDENCE_STORE_WRITE_TOKEN": "evidence_store",
     "VCS_TAG_VERIFY_TOKEN": "tag_approval_verify",

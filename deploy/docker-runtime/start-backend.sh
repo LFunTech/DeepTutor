@@ -5,7 +5,18 @@ BACKEND_PORT=${BACKEND_PORT:-8001}
 BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
 BACKEND_WORKERS=${BACKEND_WORKERS:-1}
 
-if [ -n "${DEEPTUTOR_POSTGRES_CONFIG:-}" ] && [ -f "${DEEPTUTOR_POSTGRES_CONFIG}" ]; then
+if [ "${DEEPTUTOR_PROTECTED_RUNTIME:-}" = "1" ]; then
+    if [ -z "${DEEPTUTOR_POSTGRES_CONFIG:-}" ] || [ ! -f "${DEEPTUTOR_POSTGRES_CONFIG}" ] || [ ! -r "${DEEPTUTOR_POSTGRES_CONFIG}" ]; then
+        echo "[Backend] Protected runtime requires a readable enterprise deployment config" >&2
+        exit 1
+    fi
+    if [ -n "${DEEPTUTOR_BACKEND_APP_MODULE:-}" ] && [ "${DEEPTUTOR_BACKEND_APP_MODULE}" != "deeptutor_enterprise.runtime_app:app" ]; then
+        echo "[Backend] Protected runtime forbids ASGI app override" >&2
+        exit 1
+    fi
+    export PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"
+    DEEPTUTOR_BACKEND_APP_MODULE=deeptutor_enterprise.runtime_app:app
+elif [ -n "${DEEPTUTOR_POSTGRES_CONFIG:-}" ] && [ -f "${DEEPTUTOR_POSTGRES_CONFIG}" ]; then
     export PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"
     DEEPTUTOR_BACKEND_APP_MODULE=${DEEPTUTOR_BACKEND_APP_MODULE:-deeptutor_enterprise.runtime_app:app}
 else

@@ -30,6 +30,12 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "0002_profile_permission_snapshots",
     "0003_revocation_state",
     "0004_audit_export_jobs",
+    "oms/0001_ledger_base",
+    "oms/0002_grant_source",
+    "oms/0003_grant_command_idempotency",
+    "oms/0004_attempt_lifecycle",
+    "oms/0005_command_result_summary",
+    "oms/0006_append_only_facts",
 ]
 
 

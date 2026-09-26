@@ -884,6 +884,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "containerPort: 3782" in backend
     assert "targetPort: frontend-http" in backend
     assert "DEEPTUTOR_POSTGRES_CONFIG" in backend
+    assert 'name: DEEPTUTOR_PROTECTED_RUNTIME\n              value: "1"' in backend
     assert "value: /etc/deeptutor/deployment.json" in backend
     assert "volumeMounts:" in backend
     assert "mountPath: /etc/deeptutor" in backend
@@ -1178,6 +1179,7 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
                 assert env["DEEPTUTOR_EXECUTION_MODE"] == "replicated"
                 assert env["DEEPTUTOR_TURN_COORDINATION_BACKEND"] == "redis"
                 assert env["DEEPTUTOR_POSTGRES_CONFIG"] == "/etc/deeptutor/deployment.json"
+                assert env["DEEPTUTOR_PROTECTED_RUNTIME"] == "1"
                 assert env["DT_EDUPLUS2_FRONTING_DEMO_REDIRECT_URI"] == (
                     "https://llm-agent-test.f123.pub/api/v1/auth/eduplus2/demo/callback"
                 )
@@ -1571,6 +1573,7 @@ APIKEY=lightrag-key
 
 # DeepTutor EduPlus2 runtime env (canonical; generated from token-test.secrets)
 DT_EDUPLUS2_CLIENT_SECRET_REF=external-secret:test-cn/eduplus2-existing
+DT_EDUPLUS2_WEBHOOK_SECRET=synthetic-webhook-secret
 """.strip()
         + "\n",
         encoding="utf8",
@@ -1618,6 +1621,7 @@ DT_EDUPLUS2_CLIENT_SECRET_REF=external-secret:test-cn/eduplus2-existing
     assert values["DT_TEST_CN_EDUPLUS2_CLIENT_SECRET_REF"] == (
         "external-secret:test-cn/eduplus2-existing"
     )
+    assert values["DT_TEST_CN_EDUPLUS2_WEBHOOK_SECRET"] == "synthetic-webhook-secret"
     assert values["DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET"] == "generated-test-token"
     assert values["DT_TEST_CN_SECRET_PREFLIGHT_METADATA_JSON"]
 

@@ -2,13 +2,15 @@
 
 本目录覆盖 DeepTutor 的企业存储、生产部署、多租户、TMS/OMS、外部集成和持续维护。目录统一命名为 `docs/enterprise/`；EduPlus2 是身份、权限与组织数据集成子域，不是整个企业化方案的边界。保持 00–13 编号与阅读顺序，当前不另拆子目录。
 
+**当前 proposal 的执行顺序、任务快照和阻断项**见 [企业化 proposal 执行顺序与进度](proposal-execution-progress.md)。下文部分历史表述仍待按 2026-09-26 OMS/TMS 新契约重订；有冲突时不要据此启动旧实施任务。
+
 ## 方案状态与最新决策
 
 - **修订日期**：2026-09-17；整体路线仍为待交付方案，不是已部署声明；首个身份/PG 会话子切片、生产 `data/` 外置化切片和 EduPlus2 API-only 联邦访问切片的实现与验证见下方独立记录。
 - **最新数据库范围**：用户已明确取消独立 local/SQLite 模式，默认 Web、CLI、SDK 与后台全部使用 PostgreSQL；本机部署仍可用，但也必须连接 PG。完整迁移规划见 [`migrate-all-sqlite-state-to-postgresql`](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/proposal.md)，已实施并归档，实际状态见该 change 的 tasks/执行证据，不把首切片验收当作全仓已经切换。
 - **唯一主线**：阶段一单租户 Kubernetes 上线 → 阶段二 EduPlus2 多租户及每租户自己的管理界面 → 阶段三统一运营管理后台。
 - **直接替换**：第一阶段就使用 PostgreSQL + S3-compatible；不开发 POC、租户独立部署、文件型多租户或双写过渡版本。
-- **界面边界**：TMS（Tenant Management System，租户管理系统）采用 `/tms`；OMS（Operations Management System，平台运营管理系统，非订单管理）采用 `/oms`。租户页面复用现有组件，两级管理并存。
+- **学校域术语与界面边界**：在 EduPlus2 教育业务中，一个技术 `tenant` 即一所学校，`school_code` 即该学校的 tenant code；业务界面统一称“学校”。保留 TMS 技术缩写及 `/tms` 路径，对外名称为**学校智能体管理后台**；OMS（Operations Management System，平台运营管理系统，非订单管理）采用 `/oms`。保留 `tenant_id`、`tenant.*` 等技术契约而不全仓重命名；`school_code` 不是授权凭据，也不能替代学校 ID。正式 TMS 使用 `/tms/{schoolCode}`，核对已验证管理员账号的学校绑定后才展示该学校数据；原型与正式路由的实施状态以相应 OpenSpec 为准。
 - **管理 API**：专属接口分别采用 `/api/v1/tms/*`、`/api/v1/oms/*`；角色与 `tenant.*` / `ops.*` 能力 key 不改名，通用业务 API、WS、`/api/v1/auth/eduplus2/exchange` 和 EduPlus2 接入路径各自保持契约。M1 `/tms` 仅管理固定租户，B1/B2 的 TMS 先锁定单租户 client/app 管理，普通第三方调用运行时仍按 EduPlus2 JWT `tid` 支持多租户；OMS 注册 client 后自动归口到对应 TMS。详见 [11](11-api-and-entrypoints.md)。
 - **多租户从首发设计**：A1 固定内部 tenant/user、KB/index-version 和授权边界，A2/G1 验证双租户及同租户私有 KB 负例；B1/B2/G2 才开放真实多租户。应用 binding、内部 ID 与 LightRAG 内部存储映射不因外部身份绑定而搬迁。
 - **执行粒度**：M1=A1/A2/A3，M2=B1/B2，M3=C1/C2；工作包不等于单独生产版本。

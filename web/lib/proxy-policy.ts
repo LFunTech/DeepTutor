@@ -10,7 +10,7 @@ export const LOGIN_PATH = "/login";
 export const COOKIE_NAME = "dt_token";
 export const CODEX_CALLBACK_PATH = "/auth/callback";
 export const CODEX_CALLBACK_API_PATH = "/api/auth/openai-codex/callback";
-const RETIRED_PAGE_PATHS = new Set(["/partners/groups"]);
+const RETIRED_PAGE_PATHS = new Set(["/partners/groups", "/oms", "/tms"]);
 const SELF_AUTHENTICATING_PAGE_PATHS = new Set([
   "/enterprise/eduplus2/conversation-test",
   "/enterprise/eduplus2/fronting-demo",
@@ -22,7 +22,12 @@ export function isCodexCallbackPath(pathname: string): boolean {
 
 /** Exact retired pages that would otherwise collide with a dynamic route. */
 export function isRetiredPagePath(pathname: string): boolean {
-  return RETIRED_PAGE_PATHS.has(pathname);
+  return RETIRED_PAGE_PATHS.has(pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname);
+}
+
+/** 通用开发态原型路径约定；生产环境由 proxy 在响应流开始前返回 404。 */
+export function isDevelopmentOnlyPagePath(pathname: string): boolean {
+  return !isBackendPath(pathname) && pathname.replace(/\/+$/, "").endsWith("/prototype");
 }
 
 // Paths whose responses come from the backend, not the Next app. The middleware

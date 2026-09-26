@@ -2199,6 +2199,7 @@ async def test_enterprise_wires_eduplus2_provider_from_env(monkeypatch):
     assert enterprise.eduplus2_revocation_cache_ttl_seconds == 20
     assert enterprise.eduplus2_audit_export_storage_ref == "s3://audit-bucket/eduplus2"
     assert enterprise.eduplus2_revocation_webhook_secret == "webhook-secret"
+    assert enterprise.eduplus2_webhook_secret == "webhook-secret"
 
 
 async def test_enterprise_env_can_disable_optional_eduplus2_profile_permission_clients(

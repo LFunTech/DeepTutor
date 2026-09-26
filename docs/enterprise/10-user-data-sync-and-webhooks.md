@@ -124,6 +124,10 @@ extensions/enterprise/src/deeptutor_enterprise/integrations/eduplus2/sync.py
 POST /api/v1/eduplus2/webhooks
 ```
 
+当前企业组合已提供此路径的**已验签控制台 mock 接收**：读取 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`（或本地兜底 `DT_EDUPLUS2_WEBHOOK_SECRET`），按 EduPlus2 的 `timestamp.event.raw-body` 三段式 HMAC-SHA256 校验 `X-EduPlus-*` 头；仅 `X-EduPlus-Mock: true` 且 `event_id=mock_...` 的 demo 请求返回 204，不修改租户状态。真实订阅事件在版本化 inbox、租户绑定及对账完成前返回可重试 503。控制台 URL demo 尚须对已部署的 HTTPS 测试 URL 实际执行，不能以本地 mock 测试代替；Secret 不写入本文或日志。
+
+`.secrets/.test-secrets` 仅是本地测试输入，不会自动同步至测试 K8s。`test-cn` 受保护 tag 发布步骤从 Woodpecker 仓库 Secret `dt_test_cn_eduplus2_webhook_secret` 注入密钥，仅同步目标命名空间运行时 Secret 的 `DT_EDUPLUS2_WEBHOOK_SECRET` 字段后才继续部署；后端通过已有 `envFrom` 和 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`/同名变量读取。应核对 Woodpecker、K8s 与 EduPlus2 对应 Webhook 使用同一密钥；不能靠本地文件存在便认定公网 URL 可验签。
+
 Webhook 用于应用安装、租户授权、client 配置变更、secret 轮换、用户/组织/权限变化等状态同步，不是 TMS/OMS 每次登录或第三方 `POST /api/v1/auth/eduplus2/exchange` 的主链路。普通第三方调用仍必须实时验签 EduPlus2 user JWT，并查 active client/app 注册状态；即使暂未接入 Webhook，也不能放松 token 校验或使用未审计的手工配置绕过注册流程。
 
 安全要求：

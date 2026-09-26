@@ -1,9 +1,11 @@
 import asyncio
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
 from pathlib import Path
+import time
 from types import SimpleNamespace
 import uuid
 
@@ -161,6 +163,117 @@ async def test_enterprise_health_ready_is_public_for_kubernetes_probe(app):
     assert response.json()["status"] == "ready"
 
 
+async def test_eduplus2_signed_webhook_demo_only_checks_delivery_without_state_change(app):
+    """EduPlus2 控制台 mock 投递必须验签；不得当成真实租户事件。"""
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    from deeptutor_enterprise.scope import TenantScope
+
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@preflight")
+    async with enterprise.db.transaction(scope) as c:
+        original_tenant = await (
+            await c.execute(
+                "SELECT external_eligibility FROM enterprise.tenants WHERE id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+    ts = str(int(time.time()))
+    event = "subscription.suspended"
+    body = json.dumps(
+        {
+            "event": event,
+            "event_id": "mock_" + str(uuid.uuid4()),
+            "timestamp": int(ts),
+            "tenant": {"id": 10001, "code": "synthetic-school"},
+            "subscription": {"id": 20001, "status": "suspended"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        b"synthetic-webhook-secret",
+        ts.encode() + b"." + event.encode() + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    headers = {
+        "X-EduPlus-Signature": "sha256=" + signature,
+        "X-EduPlus-Timestamp": ts,
+        "X-EduPlus-Event": event,
+        "X-EduPlus-Mock": "true",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        accepted = await client.post("/api/v1/eduplus2/webhooks", content=body, headers=headers)
+        assert accepted.status_code == 204, accepted.text
+        forged = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=body,
+            headers={**headers, "X-EduPlus-Signature": "sha256=" + "0" * 64},
+        )
+        assert forged.status_code == 401
+        stale = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=body,
+            headers={**headers, "X-EduPlus-Timestamp": str(int(ts) - 301)},
+        )
+        assert stale.status_code == 401
+        changed_event = "subscription.reactivated"
+        changed_signature = hmac.new(
+            b"synthetic-webhook-secret",
+            ts.encode() + b"." + changed_event.encode() + b"." + body,
+            hashlib.sha256,
+        ).hexdigest()
+        mismatch = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=body,
+            headers={
+                **headers,
+                "X-EduPlus-Event": changed_event,
+                "X-EduPlus-Signature": "sha256=" + changed_signature,
+            },
+        )
+        assert mismatch.status_code == 422
+        too_large = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=b"x" * (128 * 1024 + 1),
+            headers=headers,
+        )
+        assert too_large.status_code == 413
+        real_body = body.replace(b"mock_", b"real_")
+        real_signature = hmac.new(
+            b"synthetic-webhook-secret",
+            ts.encode() + b"." + event.encode() + b"." + real_body,
+            hashlib.sha256,
+        ).hexdigest()
+        real = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=real_body,
+            headers={
+                **headers,
+                "X-EduPlus-Mock": "false",
+                "X-EduPlus-Signature": "sha256=" + real_signature,
+            },
+        )
+        assert real.status_code == 503
+        enterprise.eduplus2_webhook_secret = ""
+        unavailable = await client.post("/api/v1/eduplus2/webhooks", content=body, headers=headers)
+        assert unavailable.status_code == 503
+
+    async with enterprise.db.transaction(scope) as c:
+        tenant = await (
+            await c.execute(
+                "SELECT external_eligibility FROM enterprise.tenants WHERE id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+        event_count = await (
+            await c.execute("SELECT count(*) AS event_count FROM eduplus2.revocation_events")
+        ).fetchone()
+    assert tenant["external_eligibility"] == original_tenant["external_eligibility"]
+    assert event_count["event_count"] == 0
+
+
 async def test_http_auth_csrf_revoke_and_closed_routes(app):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://school.example"
@@ -246,6 +359,69 @@ async def test_m1_does_not_expose_tms_or_oms_surfaces(app):
             assert anonymous.status_code in (401, 404, 405), (path, anonymous.status_code)
             assert authorized.status_code in (401, 404, 405), (path, authorized.status_code)
             assert forged_ops.status_code in (401, 404, 405), (path, forged_ops.status_code)
+
+
+async def test_enterprise_does_not_mount_legacy_management_writes(app):
+    """企业装配不得因复用 core router 而暴露租户管理员配置旁路。"""
+
+    enterprise = app.state.enterprise
+    token = await enterprise.identity.login("admin", "long-password-1", client="oms-boundary")
+    forbidden = (
+        ("PUT", "/api/settings/catalog"),
+        ("PUT", "/api/settings/draft"),
+        ("POST", "/api/settings/apply"),
+        ("PUT", "/api/settings/ui"),
+        ("PUT", "/api/settings/mcp/servers/example"),
+        ("PUT", "/api/v1/tms/settings/model"),
+        ("POST", "/api/v1/tms/settings/model/activate"),
+        ("PUT", "/api/v1/oms/secrets/provider"),
+        ("POST", "/api/settings/tests/llm/start"),
+        ("POST", "/api/settings/providers/openai-codex/oauth/start"),
+        ("POST", "/api/skills/create"),
+        ("POST", "/api/skills/install"),
+        ("PUT", "/api/skills/pdf"),
+        ("DELETE", "/api/skills/pdf"),
+        ("POST", "/api/partners"),
+        ("POST", "/api/v1/oms/releases"),
+        ("POST", "/api/v1/oms/providers"),
+        ("POST", "/api/v1/oms/tenants/foreign-tenant/grants"),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        for method, path in forbidden:
+            response = await client.request(
+                method,
+                path,
+                headers={
+                    "Authorization": "Bearer " + token,
+                    "Origin": "https://school.example",
+                    "X-Scopes": "ops.oms.access ops.providers.manage ops.quotas.manage",
+                },
+                json={},
+            )
+            expected = 405 if (method, path) == ("PUT", "/api/settings/ui") else 404
+            assert response.status_code == expected, (method, path, response.text)
+
+
+def test_enterprise_management_route_allowlist_is_narrow(app):
+    """新增 core 管理 router 时不能通过企业装配无意暴露。"""
+
+    paths = set(app.openapi()["paths"])
+    assert {path for path in paths if path.startswith("/api/settings")} == {
+        "/api/settings/ui"
+    }
+    for prefix in (
+        "/api/skills",
+        "/api/v1/tms",
+        "/api/v1/oms",
+        "/api/space/mcp",
+        "/api/partners",
+        "/api/system",
+        "/api/settings/workspace",
+        "/api/settings/video-learning",
+    ):
+        assert not any(path == prefix or path.startswith(prefix + "/") for path in paths)
 
 
 async def test_m1_fixed_tenant_rejects_b2_escape_attempts(app):

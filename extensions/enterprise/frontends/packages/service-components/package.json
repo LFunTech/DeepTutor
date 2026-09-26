@@ -1,0 +1,14 @@
+{
+  "name": "@deeptutor/service-components",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.tsx" },
+  "dependencies": {
+    "@deeptutor/admin-ui": "0.1.0",
+    "@deeptutor/api-contracts": "0.1.0",
+    "js-yaml": "4.3.2",
+    "lucide-react": "0.562.0",
+    "react": "19.0.0"
+  }
+}

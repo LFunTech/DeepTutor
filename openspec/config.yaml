@@ -9,9 +9,9 @@ context: |
   H 可用性工作线独立于租户数量：实际启用多执行者或发布要求高可用前必须通过 G-H，单执行模式需确认非 HA 与容量/恢复目标。
   Woodpecker 流水线为 M1/A3 必交付子环节，从 A1 并行开发，G1 前真实验收构建/推送/迁移/部署/smoke/回退；M2/M3 与 upstream 更新复用，不新增业务工作包。
   K8s 集成环境和 EduPlus2 外部契约准备从 A1 并行；B1 验证最终单租户接入，B2 才开放多租户；C2 不因 C1 可发布而省略。
-  企业 TMS 入口 /tms、专属 API /api/v1/tms/*：M1 固定租户既有管理功能，B2 完成多租户适配；OMS 入口 /oms、专属 API /api/v1/oms/*：B2 先交付治理 API，C1/C2 交付运营界面。
-  TMS 为 Tenant Management System，OMS 为 Operations Management System（平台运营，非订单）；角色与 tenant.* / ops.* 能力 key 不改名，通用 API、WS 与 EduPlus2 接入路径不变。
-  复用现有租户页面/组件，保留 web/app/(admin)/admin 作为源码基线引用，不宣称目标路由已实现；两级管理权限边界分开，EduPlus2 保持用户/组织/身份权限主数据权威。
+  云端目标入口仍使用 TMS /tms、专属 API /api/v1/tms/*，OMS /oms、专属 API /api/v1/oms/*，也可由独立域名映射；它们不再假设来自 DeepTutor 同一 Web 构建。原 M1 固定租户 TMS、B2 多租户、C1/C2 OMS 的里程碑及单体前端构建/发布方式须由相应实施提案按独立前端部署新决策重新校准，不能据旧文档宣称目标应用已交付。
+  TMS 为保留的技术缩写，对外产品名称为“学校智能体管理后台”；OMS 为 Operations Management System（平台运营，非订单）。在 EduPlus2 教育业务中，一个 tenant 就是一所学校，school_code 即学校的 tenant code；对运营和学校管理员的业务称呼统一使用“学校”，不再称“企业租户”。保留 /tms、tenant_id、tenant.*、Skill owner=tenant 等既有技术契约，不对 DeepTutor core 做全仓重命名。school_code 不是稳定 ID 或授权凭据；正式 TMS 路由 /tms/{schoolCode} 必须先与已验证账号的学校 ID/code 绑定核对，不能凭 URL 切换学校。角色与 tenant.* / ops.* 能力 key 不改名，通用 API、WS 与 EduPlus2 接入路径不变。
+  2026-09-26 新决策：DeepTutor 首先是本地用户本地部署产品，不将其现有 Web 应用视作云服务“用户端”或 OMS/TMS 的生产前端。云端 OMS 与 TMS 是面向平台运营、学校管理员的两个独立前端应用，分别构建和部署；可以使用云端 /oms、/tms 入口，但不依附 DeepTutor 本地 web 构建。两端通过同仓共享前端包复用设计规范、管理组件及 OCR 服务列表等业务组件，保持 UI/交互一致；由各自应用装配 API、权限和专有操作，不允许 TMS 获取 OMS 专有 Secret、供应商成本或跨学校数据。原 web/app/(admin)/admin 及现有 /oms、/tms 页面仅为源码/旧原型基线，不等于云端目标入口已交付。两级管理权限边界分开，EduPlus2 保持用户/组织/身份权限主数据权威。
   配置/现有扩展点优先；通用 PG 连接/事务/scope/身份/Store/迁移从首切片下沉 core，默认发行物包含 PG 支持；企业特有集成/资源/治理保留独立 deeptutor_enterprise 包/应用外壳。保持同一 schema_history/ID/数据，不让 core 反向依赖企业包，不复制第二套 PG。首切片无 PG 的 local 兼容只是被新决策替代的历史验收，不承诺零 diff，不采用全站 monkey patch。
   RAG 技术路线已确定：企业首发 lightrag-server，图检索必需，由 DeepTutor 回答，图后端采用用户 fork 的 HugeGraphStorage；WeKnora 不建首发企业实现。选型确定不等于生产验收；A1/A2 验证真实教材、引用、图事实忠实性、成本/容量、企业生命周期、安全及恢复，G1 继续阻断缺证据的发布。
   当前 LightRAG adapter 仅负责检索；企业服务补齐 PG/Secret binding、可信授权、固定 workspace 实例池、托管文档导入/状态/引用/删除/恢复。KV/vector/doc_status 存 PG，HugeGraphStorage 将图存入 HugeGraph；S3 原文由企业 ObjectStore 管理；原始文件提交后由 LightRAG 检索链统一解析，其解析组件唯一管理 S3 派生空间并上报 manifest，企业文档 worker 仅协调与对账，实际解析/任务必需组件纳入持久化与对账，不照搬 WeKnora 依赖。

@@ -83,7 +83,7 @@ DeepTutor 当前主要入口：
 | `GET` | `/api/v1/eduplus2/handoff/callback` | 未实现。后续 TMS/OMS 或 Handoff proposal 再定义。 |
 | `POST` | `/api/v1/eduplus2/logout` | 未实现。后续 session/handoff proposal 再定义。 |
 | `GET` | `/api/v1/eduplus2/session` | 未实现。后续 session/handoff proposal 再定义。 |
-| `POST` | `/api/v1/eduplus2/webhooks` | 未实现为该路径；当前可选 revocation 入口为 `/api/v1/auth/eduplus2/revocations`。 |
+| `POST` | `/api/v1/eduplus2/webhooks` | 企业组合已实现验签后的控制台 mock 接收（204，且不改变租户状态）；真实事件在版本化 inbox/绑定契约完成前返回 503。测试 URL 尚未联调；旧 revocation 入口是独立契约。 |
 | `POST` | `/api/v1/eduplus2/sync/{tenant_id}` | 未实现。后续同步 proposal 再定义。 |
 
 ### Token exchange 契约
@@ -109,16 +109,14 @@ Authorization: Bearer <eduplus2_user_jwt>
 
 校验流程：验签 EduPlus2 JWT → 校验 `iss/exp/iat/nbf` 并提取 `azp` 作为权威 `client_id` → 提取 `tid/eui/sub` → 校验 allowlist/registration → 调用 EduPlus2 通用 `POST /api/v1/open/oauth-clients/resolve` 刷新 app/tenant/client 状态 → 可选 profile/permission 复核 → 映射内部 tenant/user → 签发短期 `dt_token` → 写 `token.exchange` 审计。请求体、query 或非签名 header 中的 tenant/user/client 信息不能作为授权证据，也不能用来覆盖 JWT claims。错误码、WS refresh、审计排障和 smoke 入口见 [P1 接入契约](eduplus2-fronting-app-integration-contract.md)。通用 resolve API 需求草案见 [EduPlus2 通用 OAuth Client Resolve API 需求建议](eduplus2-oauth-client-resolve-api-proposal.md)。
 
-### TMS/OMS client 注册 API
+### TMS client 注册与 OMS 只读查询 API
 
 | Method | Path | 说明 |
 | --- | --- | --- |
 | `POST` | `/api/v1/tms/eduplus2/clients` | 当前 TMS 租户注册一个 EduPlus2 `client_id`；必须校验 EduPlus2 返回的外部 tenant 与当前 TMS tenant 完全一致 |
 | `DELETE` | `/api/v1/tms/eduplus2/clients/{id}` | 当前 TMS 租户注销/retire 自己归属的 client 注册 |
 | `GET` | `/api/v1/tms/eduplus2/clients` | 当前 TMS 租户查看归口到本 tenant 的 client/app 注册 |
-| `POST` | `/api/v1/oms/eduplus2/clients` | OMS 校验 `client_id` 后按 EduPlus2 返回的外部 tenant 自动归口到对应 TMS |
-| `DELETE` | `/api/v1/oms/eduplus2/clients/{id}` | OMS 注销/retire 任一已归口 client 注册 |
-| `GET` | `/api/v1/oms/eduplus2/clients` | OMS 跨租户检索 client/app 注册及状态 |
+| `GET` | `/api/v1/oms/eduplus2/clients` | OMS 按 `ops.clients.read` 跨租户只读检索 client/app 注册及状态；无 OMS POST/DELETE |
 
 同一 provider 下 active `client_id` 只能注册一次；同一租户同一 EduPlus2 app 只能有一个 active client。注册时应通过 EduPlus2 通用 resolve API 取得权威 `app_id/tenant_id/app_name/tenant_name/status`，不能只信任人工输入。冲突返回 409；tenant 不匹配返回 403 或 409（按 API 规范细分），未绑定 external tenant 时要求先做 tenant provisioning。
 
@@ -220,7 +218,7 @@ deeptutor eduplus2 tenant list
 
 1. **术语与权限分离**：本方案 OMS 指平台运营，不指订单管理。URL 改名不修改 `tenant_admin`、`platform_admin/platform_operator/platform_auditor` 或 `tenant.*`、`ops.*` 能力 key；页面与后端继续按同一具体能力鉴权，不根据路径名自动授予角色。
 2. **TMS 锁定当前租户**：租户来自可信身份 scope，不接受 query/body/header 覆盖。M1 仍使用受保护本地身份和固定内部租户，不提前引入 EduPlus2 或平台运营能力；B1/B2 的 TMS 首先做成单租户管理视图，只能管理与当前 TMS 绑定的 `external_tenant_id` 完全一致的 client/app；B2 使用 `tenant_admin` 及获具体能力的自定义角色。首页按已有授权显示可用管理模块，不要求所有角色都具备 KB 管理能力。
-3. **OMS 显式目标范围**：租户 ID 出现在运营路由时，必须先校验平台具体能力，再验证并绑定目标租户；列表只返回获授权管理元数据。OMS 注册 EduPlus2 client 时根据 EduPlus2 返回的外部 tenant 自动归口到对应 TMS。普通业务 API 不获得任意 tenant override，租户管理员不能因路径改名访问运营 API。
+3. **OMS 显式目标范围**：租户 ID 出现在运营路由时，必须先校验平台具体能力，再验证并绑定目标租户；列表只返回获授权管理元数据。OMS 只读查询已归口的 EduPlus2 client；写入在 TMS 或其他独立获授权流程，不由 OMS 自动注册。普通业务 API 不获得任意 tenant override，租户管理员不能因路径改名访问运营 API。
 4. **专属管理前缀，不迁移全部 API**：仅租户/运营专属管理接口采用 TMS/OMS 前缀；聊天、资源等通用业务 API、`/api/v1/ws`、`/api/v1/auth/eduplus2/exchange` 和 `/api/v1/eduplus2/*` 保持各自契约。共用业务服务不等于共用全局放行依赖。
 5. **源码基线与目标入口分开**：`web/app/(admin)/admin` 是现有源码位置，复用其页面/组件后由企业前端路由组合接入 `/tms`，不把该源码引用改写为已经存在的 `tms` 目录。企业目标入口不再使用 `/admin`、`/ops` 及旧管理 API 前缀；不默认增加旧 URL 重定向，原生未适配路由不得作为旁路暴露。默认应用也必须使用 PG；本次取消 SQLite 不自动改变非企业管理页面 URL，页面改名仍按各自入口契约实施。
 

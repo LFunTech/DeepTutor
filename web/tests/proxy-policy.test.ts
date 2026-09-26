@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
-import { config as proxyConfig } from "../proxy";
+import { NextRequest } from "next/server";
+import { config as proxyConfig, proxy } from "../proxy";
 
 // Unit tests for the pure middleware routing policy (web/lib/proxy-policy.ts).
 // The policy is deliberately decoupled from `next/server`, so it can be
@@ -17,6 +18,7 @@ import {
   isAuthExempt,
   isBackendPath,
   isCodexCallbackPath,
+  isDevelopmentOnlyPagePath,
   isRetiredPagePath,
 } from "../lib/proxy-policy";
 
@@ -72,6 +74,12 @@ test("isCodexCallbackPath matches only the exact public callback path", () => {
 
 test("retired pages cannot fall through to colliding dynamic routes", () => {
   assert.equal(isRetiredPagePath("/partners/groups"), true);
+  assert.equal(isRetiredPagePath("/oms"), true);
+  assert.equal(isRetiredPagePath("/oms/"), true);
+  assert.equal(isRetiredPagePath("/tms"), true);
+  assert.equal(isRetiredPagePath("/tms/"), true);
+  assert.equal(isRetiredPagePath("/oms/prototype"), false);
+  assert.equal(isRetiredPagePath("/tms/prototype"), false);
   assert.equal(isRetiredPagePath("/partners/groups/new"), false);
   assert.equal(isRetiredPagePath("/partners/groups/group-1"), false);
   assert.equal(isRetiredPagePath("/partners/group-1"), false);
@@ -125,6 +133,25 @@ test("isAuthExempt does NOT exempt protected app routes", () => {
   assert.equal(isAuthExempt("/dashboard"), false);
   assert.equal(isAuthExempt("/space/agents"), false);
   assert.equal(isAuthExempt("/knowledge-bases"), false);
+});
+
+test("prototype route segments are development-only without hiding ordinary OMS pages", () => {
+  assert.equal(isDevelopmentOnlyPagePath("/oms/prototype"), true);
+  assert.equal(isDevelopmentOnlyPagePath("/tms/prototype"), true);
+  assert.equal(isDevelopmentOnlyPagePath("/oms/prototype/"), true);
+  assert.equal(isDevelopmentOnlyPagePath("/oms"), false);
+  assert.equal(isDevelopmentOnlyPagePath("/api/v1/something/prototype"), false);
+  assert.equal(isDevelopmentOnlyPagePath("/ws/prototype"), false);
+  assert.equal(isDevelopmentOnlyPagePath("/files/prototype"), false);
+  assert.equal(isDevelopmentOnlyPagePath("/enterprise/eduplus2/fronting-demo"), false);
+});
+
+test("production proxy returns HTTP 404 before rendering a prototype page", () => {
+  if (process.env.NODE_ENV === "development") return;
+  assert.equal(proxy(new NextRequest("http://localhost/oms/prototype")).status, 404);
+  assert.equal(proxy(new NextRequest("http://localhost/tms/prototype")).status, 404);
+  assert.equal(proxy(new NextRequest("http://localhost/oms")).status, 404);
+  assert.equal(proxy(new NextRequest("http://localhost/tms")).status, 404);
 });
 
 test("classifyToken reports missing for absent or empty cookie", () => {

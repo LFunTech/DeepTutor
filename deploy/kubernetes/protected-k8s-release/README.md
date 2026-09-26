@@ -30,6 +30,11 @@ The following objects are intentionally **pre-provisioned by the target environm
 - `deeptutor-runtime` ServiceAccount and namespace-scoped runtime RBAC.
 - `deeptutor-migrator` ServiceAccount and namespace-scoped migration RBAC.
 - `deeptutor-runtime-secrets` from the target environment SecretStore / ExternalSecret binding.
+- For `test-cn` only, the tag preflight/deploy steps receive Woodpecker's
+  `dt_test_cn_eduplus2_webhook_secret`; deploy synchronizes only
+  `DT_EDUPLUS2_WEBHOOK_SECRET` in the pre-provisioned runtime Secret before
+  rollout. The sync is idempotent, namespace-locked, and never prints the value;
+  other runtime Secret keys remain under the target environment's ownership.
 - `deeptutor-migrator-secrets` with migrator-only PostgreSQL credentials.
 - `deeptutor-deployment-config` ConfigMap projected from the redacted target deployment contract.
 - Ingress/TLS issuer, imagePullSecrets and any stricter NetworkPolicy exceptions for the target namespace.

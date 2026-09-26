@@ -9,6 +9,7 @@ import {
   isAuthExempt,
   isBackendPath,
   isCodexCallbackPath,
+  isDevelopmentOnlyPagePath,
   isRetiredPagePath,
 } from "./lib/proxy-policy";
 
@@ -56,6 +57,14 @@ export function proxy(req: NextRequest): NextResponse {
   }
 
   if (isRetiredPagePath(pathname)) {
+    return new NextResponse(null, { status: 404 });
+  }
+
+  // 开发态原型在渲染前拦截；页面 notFound 可能因流式响应变成“404 内容 + HTTP 200”。
+  if (
+    process.env.NODE_ENV !== "development" &&
+    isDevelopmentOnlyPagePath(pathname)
+  ) {
     return new NextResponse(null, { status: 404 });
   }
 

@@ -233,6 +233,8 @@ steps:
         from_secret: dt_test_cn_lightrag_api_secret_ref
       EDUPLUS2_CLIENT_SECRET_REF:
         from_secret: dt_test_cn_eduplus2_client_secret_ref
+      EDUPLUS2_WEBHOOK_SECRET:
+        from_secret: dt_test_cn_eduplus2_webhook_secret
       SMOKE_TOKEN_ISSUER_SECRET:
         from_secret: dt_test_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
@@ -268,12 +270,15 @@ steps:
         from_secret: dt_test_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
         from_secret: dt_test_cn_evidence_store_write_token
+      DT_TEST_CN_EDUPLUS2_WEBHOOK_SECRET:
+        from_secret: dt_test_cn_eduplus2_webhook_secret
     commands:
       - set -euo pipefail
       - . ./.deeptutor-release.env
       - . ./.deeptutor-image.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
       - export KUBECONFIG_DATA="$${KUBECONFIG}"
+      - python scripts/protected-k8s-release/sync-test-webhook-secret.py
       - deploy/kubernetes/protected-k8s-release/deploy.sh
       - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"

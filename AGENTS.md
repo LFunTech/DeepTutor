@@ -7,6 +7,17 @@ around a two-layer plugin model — single-shot **Tools** invoked by the
 LLM, and multi-stage **Capabilities** that take over a turn — exposed
 through three entry points: CLI, WebSocket API, and Python SDK.
 
+## Education-domain terminology
+
+In the EduPlus2 enterprise education integration, one technical `tenant` is
+one **school**. Use “学校” in OMS/TMS business copy, navigation, proposals, and
+operator-facing explanations; TMS is externally named “学校智能体管理后台”. Retain
+`TMS`, `/tms`, `tenant_id`, `tenant.*`, and Skill `owner=tenant` as existing
+technical contracts rather than bulk-renaming DeepTutor core. EduPlus2
+`school_code` is the school's tenant code, but is not the stable tenant ID or
+an authorization credential. A code in a URL must be checked against the
+authenticated school's trusted ID/code binding before accessing data.
+
 ## Architecture
 
 ```
