@@ -1624,6 +1624,14 @@ DT_EDUPLUS2_WEBHOOK_SECRET=synthetic-webhook-secret
     assert values["DT_TEST_CN_EDUPLUS2_WEBHOOK_SECRET"] == "synthetic-webhook-secret"
     assert values["DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET"] == "generated-test-token"
     assert values["DT_TEST_CN_SECRET_PREFLIGHT_METADATA_JSON"]
+    from deeptutor_enterprise.protected_k8s_release import scan_secret_leakage
+
+    evidence = tmp_path / "preflight-evidence"
+    evidence.mkdir()
+    (evidence / "available-secrets.json").write_text(
+        values["DT_TEST_CN_SECRET_PREFLIGHT_METADATA_JSON"], encoding="utf8"
+    )
+    assert scan_secret_leakage(evidence)["ready"] is True
 
 
 def test_secret_preflight_status_script_outputs_only_metadata(monkeypatch, tmp_path):

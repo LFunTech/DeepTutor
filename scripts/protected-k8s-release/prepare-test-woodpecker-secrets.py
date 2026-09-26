@@ -96,7 +96,7 @@ def _preflight_metadata() -> str:
         "OBJECTSTORE_SECRET_REF": "runtime_secret_ref:test-cn/objectstore",
         "LIGHTRAG_API_SECRET_REF": "runtime_secret_ref:test-cn/lightrag-api",
         "EDUPLUS2_CLIENT_SECRET_REF": "runtime_secret_ref:test-cn/eduplus2-client",
-        "EDUPLUS2_WEBHOOK_SECRET": "runtime_secret_sync:test-cn/deeptutor-runtime-secrets/DT_EDUPLUS2_WEBHOOK_SECRET",
+        "EDUPLUS2_WEBHOOK_SECRET": "runtime_secret_sync:test-cn/deeptutor-runtime-secrets/webhook-key",
         "SMOKE_TOKEN_ISSUER_SECRET": "smoke_credentials:test-cn/token-issuer",
         "EVIDENCE_STORE_WRITE_TOKEN": "evidence_store:test-cn/release-evidence/*",
         "VCS_TAG_VERIFY_TOKEN": "tag_approval_verify:test-cn/read-only",
