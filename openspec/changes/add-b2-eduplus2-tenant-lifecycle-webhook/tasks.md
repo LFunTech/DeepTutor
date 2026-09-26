@@ -2,7 +2,7 @@
 
 ## B2.-1 控制台 Webhook URL 验证（不触碰租户状态）
 - [x] 0.1 提供企业组合的签名 mock 接收路径，使用 `timestamp.event.raw-body`、secret ref、大小/时效/事件校验；仅对 `X-EduPlus-Mock: true` 且 `mock_` event ID 的请求返回 204，真实事件未就绪时 503，隔离合成测试证明状态不变。见 `implementation-evidence.md`。
-- [ ] 0.2 在已配置的测试 URL 上由 EduPlus2 控制台实际触发 Webhook demo，核对其投递记录、响应和目标环境；不在文档/日志记录 Secret。未执行真实 demo 前不得声称 URL 已通过外部联调。
+- [x] 0.2 在已配置的测试 URL 上由 EduPlus2 控制台实际触发 Webhook demo，核对其投递记录、响应和目标环境；不在文档/日志记录 Secret。2026-09-26 `智能体基座` 的 test-cn 环境 8 类订阅事件均由发送端记录为 HTTP 204，见 `implementation-evidence.md`；此项仅证明 mock URL 联调，不代表真实生命周期事件已开放。
 
 ## B2.0 权威契约与迁移
 - [ ] 1.1 与 EduPlus2 锁定 `subscription.*` 对 DeepTutor 租户级资格的准确映射、单调版本、签名、租户/应用绑定、对账 API 和恢复时序；保存双方契约证据，OMS 额度耗尽不得发订阅停用或模型资格事件。

@@ -83,7 +83,7 @@ DeepTutor 当前主要入口：
 | `GET` | `/api/v1/eduplus2/handoff/callback` | 未实现。后续 TMS/OMS 或 Handoff proposal 再定义。 |
 | `POST` | `/api/v1/eduplus2/logout` | 未实现。后续 session/handoff proposal 再定义。 |
 | `GET` | `/api/v1/eduplus2/session` | 未实现。后续 session/handoff proposal 再定义。 |
-| `POST` | `/api/v1/eduplus2/webhooks` | 企业组合已实现验签后的控制台 mock 接收（204，且不改变租户状态）；真实事件在版本化 inbox/绑定契约完成前返回 503。测试 URL 尚未联调；旧 revocation 入口是独立契约。 |
+| `POST` | `/api/v1/eduplus2/webhooks` | 企业组合已实现验签后的控制台 mock 接收（204，且不改变租户状态）；test-cn URL 已由 EduPlus2 控制台 8 类 mock 事件联调成功。真实事件在版本化 inbox/绑定契约完成前返回 503，正式 Webhook 保持禁用；旧 revocation 入口是独立契约。 |
 | `POST` | `/api/v1/eduplus2/sync/{tenant_id}` | 未实现。后续同步 proposal 再定义。 |
 
 ### Token exchange 契约
