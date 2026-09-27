@@ -92,17 +92,9 @@ class ActiveResolver:
         }
 
 
-async def test_reconcile_allows_only_current_online_verified_bound_school(monkeypatch, app):
+async def test_webhook_projection_allows_verified_bound_school_without_resolver(app):
     enterprise = app.state.enterprise
-
-    class SkewedApplicationClock:
-        @staticmethod
-        def now(_timezone):
-            return datetime.now(timezone.utc) + timedelta(hours=1)
-
-    monkeypatch.setattr(lifecycle, "datetime", SkewedApplicationClock, raising=False)
-    enterprise.eduplus2_resolver = ActiveResolver()
-    enterprise.eduplus2_lifecycle_proof_ttl_seconds = 30
+    enterprise.eduplus2_resolver = None
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
@@ -128,16 +120,15 @@ async def test_reconcile_allows_only_current_online_verified_bound_school(monkey
         app_id=51,
         digest_key="d" * 48,
     )
-    await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    reconcile = getattr(lifecycle, "reconcile_lifecycle_target", None)
-    assert callable(reconcile), "缺少生命周期在线对账入口"
-    assert await reconcile(enterprise, external_tenant_id=10001, external_app_id=51) == "allowed"
+    from deeptutor_enterprise.eduplus2.webhook_authority import ingest_authoritative_webhook
+
+    assert await ingest_authoritative_webhook(enterprise, event, delivery_timestamp=1) == "allowed"
 
     async with enterprise.db.transaction(scope) as c:
-        proof = await (
+        projection = await (
             await c.execute(
-                "SELECT eligibility,verified_client_id,proof_expires_at "
-                "FROM eduplus2.lifecycle_targets WHERE tenant_id=%s "
+                "SELECT eligibility,generation,binding_version "
+                "FROM eduplus2.webhook_school_state WHERE tenant_id=%s "
                 "AND external_tenant_id=10001 AND external_app_id=51",
                 (enterprise.deployment.tenant_id,),
             )
@@ -148,14 +139,7 @@ async def test_reconcile_allows_only_current_online_verified_bound_school(monkey
                 (enterprise.deployment.tenant_id,),
             )
         ).fetchone()
-    assert proof["eligibility"] == "allowed"
-    assert proof["verified_client_id"] == "synthetic-school-client"
-    assert proof["proof_expires_at"] > datetime.now(timezone.utc)
-    async with enterprise.db.transaction(scope) as c:
-        db_time = (
-            await (await c.execute("SELECT clock_timestamp() AS current_time")).fetchone()
-        )["current_time"]
-    assert proof["proof_expires_at"] <= db_time + timedelta(seconds=30)
+    assert projection == {"eligibility": "allowed", "generation": 1, "binding_version": 1}
     assert tenant["external_eligibility"] == "allowed"
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     enterprise.eduplus2_webhook_app_id = 51
@@ -203,6 +187,38 @@ async def test_new_notification_invalidates_existing_school_allowance_before_ack
     assert tenant["external_eligibility"] == "denied"
 
 
+async def test_new_notification_invalidates_client_resolve_cache_before_ack(app):
+    enterprise = app.state.enterprise
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "INSERT INTO eduplus2.resolve_cache(tenant_id,client_id,resolved,expires_at) "
+            "VALUES(%s,'synthetic-school-client','{}'::jsonb,now()+interval '1 hour')",
+            (enterprise.deployment.tenant_id,),
+        )
+    event = lifecycle.parse_lifecycle_event(
+        {
+            "event_id": "synthetic-cache-invalidation-event",
+            "tenant": {"id": 10001},
+            "app": {"id": 51, "client_id": "synthetic-school-client"},
+            "subscription": {"id": 20001, "status": "suspended"},
+        },
+        "subscription.suspended",
+        app_id=51,
+        digest_key="d" * 48,
+    )
+    await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
+    async with enterprise.db.transaction(scope) as c:
+        cached = await (
+            await c.execute(
+                "SELECT count(*) AS count FROM eduplus2.resolve_cache "
+                "WHERE tenant_id=%s AND client_id='synthetic-school-client'",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+    assert cached["count"] == 0
+
+
 async def test_expired_online_proof_blocks_existing_session_and_new_login(app):
     enterprise = app.state.enterprise
     token = await enterprise.identity.login("admin", "long-password-1", client="synthetic-client")
@@ -235,9 +251,9 @@ async def test_expired_online_proof_blocks_existing_session_and_new_login(app):
         await enterprise.identity.login("admin", "long-password-1", client="synthetic-client-2")
 
 
-async def test_binding_reverification_cannot_reuse_previous_online_proof(app):
+async def test_binding_reverification_cannot_reuse_previous_webhook_projection(app):
     enterprise = app.state.enterprise
-    enterprise.eduplus2_resolver = ActiveResolver()
+    enterprise.eduplus2_resolver = None
     enterprise.eduplus2_webhook_app_id = 51
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
@@ -252,13 +268,21 @@ async def test_binding_reverification_cannot_reuse_previous_online_proof(app):
             "VALUES(%s,10001,'verified',now(),'synthetic-review','synthetic-proof')",
             (enterprise.deployment.tenant_id,),
         )
-        await c.execute(
-            "INSERT INTO eduplus2.external_client_registrations(tenant_id,id,client_id,"
-            "external_tenant_id,external_app_id,internal_tenant_id,registered_by_surface) "
-            "VALUES(%s,%s,'synthetic-school-client','10001','51',%s,'test_seed')",
-            (enterprise.deployment.tenant_id, uuid.uuid4(), enterprise.deployment.tenant_id),
-        )
-    assert await lifecycle.reconcile_due_lifecycle_targets(enterprise) == 1
+    event = lifecycle.parse_lifecycle_event(
+        {
+            "event_id": "synthetic-reverify-created",
+            "tenant": {"id": 10001},
+            "app": {"id": 51, "client_id": "synthetic-school-client"},
+            "subscription": {"id": 20001, "status": "active"},
+        },
+        "subscription.created",
+        app_id=51,
+        digest_key="d" * 48,
+    )
+    from deeptutor_enterprise.eduplus2.webhook_authority import ingest_authoritative_webhook
+
+    assert await ingest_authoritative_webhook(enterprise, event, delivery_timestamp=1) == "allowed"
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
     await enterprise.identity.login("admin", "long-password-1", client="synthetic-client")
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
@@ -384,9 +408,12 @@ async def test_online_outage_keeps_school_denied_and_persists_retry(app):
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10001, external_app_id=51
-    ) == "unknown"
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
+        )
+        == "unknown"
+    )
     async with enterprise.db.transaction(scope) as c:
         target = await (
             await c.execute(
@@ -452,7 +479,7 @@ async def test_reconcile_batch_processes_pending_bound_school(app):
     assert tenant["external_eligibility"] == "allowed"
 
 
-async def test_receiver_restart_reconciles_durable_pending_event(app):
+async def test_receiver_restart_retains_atomic_webhook_projection_without_resolver(app):
     enterprise = app.state.enterprise
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
@@ -479,28 +506,34 @@ async def test_receiver_restart_reconciles_durable_pending_event(app):
         app_id=51,
         digest_key="d" * 48,
     )
-    await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
+    from deeptutor_enterprise.eduplus2.webhook_authority import ingest_authoritative_webhook
+
+    assert await ingest_authoritative_webhook(enterprise, event, delivery_timestamp=1) == "allowed"
     await enterprise.close()
     from deeptutor_enterprise.bootstrap import Enterprise
 
     restarted = Enterprise(enterprise.deployment)
     restarted.eduplus2_lifecycle_receiver_enabled = True
     restarted.eduplus2_webhook_app_id = 51
-    restarted.eduplus2_resolver = ActiveResolver()
+    restarted.eduplus2_resolver = None
     try:
         await restarted.start()
-        for _ in range(30):
-            async with restarted.db.transaction(scope) as c:
-                tenant = await (
-                    await c.execute(
-                        "SELECT external_eligibility FROM enterprise.tenants WHERE id=%s",
-                        (enterprise.deployment.tenant_id,),
-                    )
-                ).fetchone()
-            if tenant["external_eligibility"] == "allowed":
-                break
-            await asyncio.sleep(0.1)
+        async with restarted.db.transaction(scope) as c:
+            tenant = await (
+                await c.execute(
+                    "SELECT external_eligibility FROM enterprise.tenants WHERE id=%s",
+                    (enterprise.deployment.tenant_id,),
+                )
+            ).fetchone()
+            state = await (
+                await c.execute(
+                    "SELECT eligibility,generation FROM eduplus2.webhook_school_state "
+                    "WHERE tenant_id=%s AND external_tenant_id=10001 AND external_app_id=51",
+                    (enterprise.deployment.tenant_id,),
+                )
+            ).fetchone()
         assert tenant["external_eligibility"] == "allowed"
+        assert state == {"eligibility": "allowed", "generation": 1}
     finally:
         await restarted.close()
 
@@ -539,7 +572,9 @@ async def test_periodic_scan_recovers_missed_webhook_for_verified_registration(a
     assert tenant["external_eligibility"] == "allowed"
 
 
-async def test_created_actor_handoff_remains_pending_without_current_subscription_proof(monkeypatch, app):
+async def test_created_actor_handoff_remains_pending_without_current_subscription_proof(
+    monkeypatch, app
+):
     enterprise = app.state.enterprise
     monkeypatch.setenv("DT_EDUPLUS2_OIDC_ISSUER", "https://synthetic-issuer.example")
     enterprise._configure_eduplus2_from_env()
@@ -548,7 +583,7 @@ async def test_created_actor_handoff_remains_pending_without_current_subscriptio
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
             "UPDATE enterprise.tenants SET external_tid='10001',"
-            "external_eligibility='denied' WHERE id=%s",
+            "external_eligibility='denied',bootstrap_completed=false WHERE id=%s",
             (enterprise.deployment.tenant_id,),
         )
         await c.execute(
@@ -571,9 +606,12 @@ async def test_created_actor_handoff_remains_pending_without_current_subscriptio
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10001, external_app_id=51
-    ) == "allowed"
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
+        )
+        == "allowed"
+    )
     async with enterprise.db.transaction(scope) as c:
         candidates = await (
             await c.execute(
@@ -606,7 +644,7 @@ async def test_late_created_actor_and_system_events_never_activate_admin(monkeyp
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
             "UPDATE enterprise.tenants SET external_tid='10001',"
-            "external_eligibility='denied' WHERE id=%s",
+            "external_eligibility='denied',bootstrap_completed=false WHERE id=%s",
             (enterprise.deployment.tenant_id,),
         )
         await c.execute(
@@ -636,12 +674,16 @@ async def test_late_created_actor_and_system_events_never_activate_admin(monkeyp
         )
         events.append(event)
         await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    assert await lifecycle.ingest_lifecycle_event(
-        enterprise, events[1], delivery_timestamp=2
-    ) == "duplicate"
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10001, external_app_id=51
-    ) == "allowed"
+    assert (
+        await lifecycle.ingest_lifecycle_event(enterprise, events[1], delivery_timestamp=2)
+        == "duplicate"
+    )
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
+        )
+        == "allowed"
+    )
     async with enterprise.db.transaction(scope) as c:
         candidates = await (
             await c.execute(
@@ -713,34 +755,88 @@ async def test_lifecycle_reconcile_metrics_aggregate_without_school_identifiers(
 
 
 async def test_lifecycle_worker_refreshes_internal_metrics(monkeypatch, app):
+    from deeptutor_enterprise.eduplus2 import webhook_authority
+
     enterprise = app.state.enterprise
     sampled = asyncio.Event()
-
-    async def reconcile(_enterprise):
-        assert _enterprise is enterprise
-        return 2
 
     async def snapshot(_enterprise):
         assert _enterprise is enterprise
         sampled.set()
-        return {"unknown": 3, "retry": 1}
+        return {"unknown_schools": 3, "legacy_pending_events": 1}
 
-    monkeypatch.setattr(lifecycle, "reconcile_due_lifecycle_targets", reconcile)
-    monkeypatch.setattr(lifecycle, "snapshot_lifecycle_reconcile_metrics", snapshot)
-    worker = asyncio.create_task(enterprise._lifecycle_reconcile_loop())
+    monkeypatch.setattr(webhook_authority, "snapshot_webhook_authority_metrics", snapshot)
+    worker = asyncio.create_task(enterprise._webhook_monitor_loop())
     try:
         await asyncio.wait_for(sampled.wait(), timeout=2)
         await asyncio.sleep(0)
-        assert enterprise.lifecycle_reconcile_metrics == {
-            "processed": 2,
-            "failures": 0,
-            "unknown": 3,
-            "retry": 1,
-        }
+        assert enterprise.webhook_metrics["monitor_failures"] == 0
+        assert enterprise.webhook_metrics["unknown_schools"] == 3
+        assert enterprise.webhook_metrics["legacy_pending_events"] == 1
     finally:
         worker.cancel()
         with pytest.raises(asyncio.CancelledError):
             await worker
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["signing_secret", "app_id", "digest_key", "issuer"],
+)
+async def test_enabled_lifecycle_receiver_rejects_missing_runtime_contract(
+    monkeypatch, app, missing
+):
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_resolver = ActiveResolver()
+    values = {
+        "DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED": "true",
+        "DT_EDUPLUS2_WEBHOOK_SECRET": "synthetic-signing-secret",
+        "DT_EDUPLUS2_WEBHOOK_APP_ID": "51",
+        "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "d" * 48,
+        "DT_EDUPLUS2_OIDC_ISSUER": "https://synthetic-issuer.example",
+    }
+    missing_key = {
+        "signing_secret": "DT_EDUPLUS2_WEBHOOK_SECRET",
+        "app_id": "DT_EDUPLUS2_WEBHOOK_APP_ID",
+        "digest_key": "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY",
+        "issuer": "DT_EDUPLUS2_OIDC_ISSUER",
+    }.get(missing)
+    for key, value in values.items():
+        if key != missing_key:
+            monkeypatch.setenv(key, value)
+    with pytest.raises(RuntimeError, match="lifecycle receiver configuration"):
+        enterprise._configure_eduplus2_from_env()
+
+
+async def test_enabled_lifecycle_receiver_rejects_digest_key_reuse(monkeypatch, app):
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_resolver = ActiveResolver()
+    for key, value in {
+        "DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED": "true",
+        "DT_EDUPLUS2_WEBHOOK_SECRET": "synthetic-shared-secret" * 3,
+        "DT_EDUPLUS2_WEBHOOK_APP_ID": "51",
+        "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "synthetic-shared-secret" * 3,
+        "DT_EDUPLUS2_OIDC_ISSUER": "https://synthetic-issuer.example",
+    }.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(RuntimeError, match="lifecycle receiver configuration"):
+        enterprise._configure_eduplus2_from_env()
+
+
+async def test_enabled_lifecycle_receiver_accepts_complete_independent_contract(monkeypatch, app):
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_resolver = ActiveResolver()
+    for key, value in {
+        "DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED": "true",
+        "DT_EDUPLUS2_WEBHOOK_SECRET": "synthetic-signing-secret",
+        "DT_EDUPLUS2_WEBHOOK_APP_ID": "51",
+        "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "d" * 48,
+        "DT_EDUPLUS2_OIDC_ISSUER": "https://synthetic-issuer.example",
+    }.items():
+        monkeypatch.setenv(key, value)
+    enterprise._configure_eduplus2_from_env()
+    assert enterprise.eduplus2_lifecycle_receiver_enabled
+    assert enterprise.eduplus2_webhook_app_id == 51
 
 
 async def test_lifecycle_receiver_requires_bound_school_and_explicit_secrets(monkeypatch, app):
@@ -814,9 +910,7 @@ async def test_reconcile_serializes_same_school_across_workers(app):
         async def resolve_client(self, client_id, *, expected_tenant_id=None):
             entered.set()
             await release.wait()
-            return await super().resolve_client(
-                client_id, expected_tenant_id=expected_tenant_id
-            )
+            return await super().resolve_client(client_id, expected_tenant_id=expected_tenant_id)
 
     enterprise.eduplus2_resolver = DelayedResolver()
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
@@ -873,9 +967,7 @@ async def test_new_event_fences_inflight_online_result(app):
         async def resolve_client(self, client_id, *, expected_tenant_id=None):
             entered.set()
             await release.wait()
-            return await super().resolve_client(
-                client_id, expected_tenant_id=expected_tenant_id
-            )
+            return await super().resolve_client(client_id, expected_tenant_id=expected_tenant_id)
 
     enterprise.eduplus2_resolver = DelayedResolver()
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
@@ -907,7 +999,8 @@ async def test_new_event_fences_inflight_online_result(app):
         )
 
     await lifecycle.ingest_lifecycle_event(
-        enterprise, event("synthetic-race-1", "subscription.created", "active"),
+        enterprise,
+        event("synthetic-race-1", "subscription.created", "active"),
         delivery_timestamp=1,
     )
     first = asyncio.create_task(
@@ -918,7 +1011,8 @@ async def test_new_event_fences_inflight_online_result(app):
     try:
         await asyncio.wait_for(entered.wait(), timeout=2)
         await lifecycle.ingest_lifecycle_event(
-            enterprise, event("synthetic-race-2", "subscription.suspended", "suspended"),
+            enterprise,
+            event("synthetic-race-2", "subscription.suspended", "suspended"),
             delivery_timestamp=2,
         )
     finally:
@@ -979,9 +1073,12 @@ async def test_seventeen_historical_clients_do_not_permanently_block_current_pro
             digest_key="d" * 48,
         )
         await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10001, external_app_id=51
-    ) == "allowed"
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
+        )
+        == "allowed"
+    )
 
 
 async def test_webhook_client_conflicting_with_verified_school_binding_is_rejected(app):
@@ -1057,9 +1154,12 @@ async def test_old_suspension_notification_uses_current_active_resolve(app):
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10001, external_app_id=51
-    ) == "allowed"
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
+        )
+        == "allowed"
+    )
     async with enterprise.db.transaction(scope) as c:
         tenant = await (
             await c.execute(
@@ -1117,9 +1217,12 @@ async def test_unavailable_old_client_does_not_override_new_current_client(app):
             digest_key="d" * 48,
         )
         await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10001, external_app_id=51
-    ) == "allowed"
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
+        )
+        == "allowed"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1171,9 +1274,12 @@ async def test_online_negative_and_contradictory_target_fail_closed(app, mode, e
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10001, external_app_id=51
-    ) == expected
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
+        )
+        == expected
+    )
     async with enterprise.db.transaction(scope) as c:
         tenant = await (
             await c.execute(
@@ -1247,6 +1353,9 @@ async def test_two_verified_schools_notifications_remain_separate(app):
         enterprise.deployment.tenant_id: "allowed",
         school_b: "denied",
     }
-    assert await lifecycle.reconcile_lifecycle_target(
-        enterprise, external_tenant_id=10002, external_app_id=51
-    ) == "allowed"
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10002, external_app_id=51
+        )
+        == "allowed"
+    )

@@ -98,6 +98,10 @@ async def test_eduplus2_migration_is_versioned_and_redacts_secret_material(enter
             "0005_lifecycle_inbox",
             "0006_lifecycle_binding_proof",
             "0007_actor_candidate_terminal_state",
+            "0008_webhook_authority",
+            "0009_school_projection_management_read",
+            "0010_school_database_onboarding",
+            "0011_webhook_school_controls",
         ]
         await c.execute(
             """

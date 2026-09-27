@@ -17,7 +17,7 @@
 
 - [ ] 3.1 以隔离合成双学校及同校双用户测试驱动 PG 事务 scope、连接池/RLS、owner/grant、session/event 订阅及资源 ID 防枚举；验证错学校码、重复外部用户、同名 KB、猜测 ID 和撤权并发。已新增[合成双校 PG 测试与 RLS 反例](external-contract-and-path-audit-2026-09-27.md#b2-合成-pg-负例与未解决的-rls-运行身份缺口)；用户确定迁移/运行使用同一个 PG 账号，后续 [FORCE RLS 严格审阅与风险边界](external-contract-and-path-audit-2026-09-27.md#单账号-force-rls-严格审阅及实施门禁) 未完成、同凭据直连风险未确认前不得勾选或放量。
 - [ ] 3.2 在 S3 对象/短期下载、LightRAG workspace/KB/index-version/图检索与源文引用、缓存和持久任务上传播可信学校/owner scope；受限服务端直接访问跨校资源必须拒绝，不能先跨校检索再过滤。
-- [ ] 3.3 实现学校初始化与任务重试的幂等/版本栅栏和待核对；外部状态、当前绑定、本地隔离取交集，OMS 额度仅按服务准入，不把 Webhook mock 当 lifecycle，不以默认学校或高权连接重试。
+- [ ] 3.3 实现**AI 多学校运行时**资源初始化与任务重试的幂等/版本栅栏和待核对；消费 Webhook 已完成的 PG onboarding/生命周期投影，与当前绑定、本地 enabled/ready/隔离取交集，OMS 额度仅按服务准入。不重做 Webhook 学校 PG 建档，不把 mock 当 lifecycle，不以默认学校或高权连接重试。
 - [ ] 3.4 消费管理授权 change 提供的版本化 OMS 目标学校绑定与 TMS 当前学校会话，不新建角色或审批权威；验证 OMS `ops.*` 逐校范围、TMS `tenant.*` 本校范围及普通 token 互不继承，OMS 不管理学校账号。
 
 ## 4. G2 集成验收和切换

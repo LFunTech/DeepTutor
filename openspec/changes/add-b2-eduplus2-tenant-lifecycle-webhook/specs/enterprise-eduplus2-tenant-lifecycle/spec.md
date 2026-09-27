@@ -1,77 +1,65 @@
 ## Purpose
 
-EduPlus2 提供学校及应用订阅生命周期权威；DeepTutor 企业扩展可靠接收签名通知，以受信在线状态证明决定本产品租户级准入。OMS 仅查询脱敏状态，不写开停；逐服务额度属于独立门禁。
+EduPlus2 的已验签订阅 Webhook 是智能体基座学校接入与订阅生命周期的业务权威。DeepTutor Enterprise 不再通过 online resolve 二次核验学校接入或开停；应用内权限、资源就绪、本地隔离及逐服务额度仍各自独立。
 
 ## ADDED Requirements
 
-### Requirement: 真实 Webhook 必须先安全持久接收再确认
+### Requirement: 真实 Webhook 必须验证传输并可靠接收
 
-系统 SHALL 验证 `timestamp.event.raw-body` HMAC、时间窗、大小和事件/header 一致；对真实事件另严格校验目标应用和学校/应用/订阅 ID 结构，仅对明确支持的真实 `subscription.*` 事件在 PG inbox 提交后返回 2xx。inbox SHALL 只保留必要脱敏投影、以独立稳定密钥计算的业务投影摘要和处理/重试状态，MUST NOT 保存或记录原始 body、OAuth client secret、bearer token、签名或 Webhook Secret。相同 event ID 与相同**规范化业务投影**幂等；同 ID 的学校/应用/订阅/状态/created actor 等关键事实不同则冲突并告警；合法重投时变化的投递时间、签名或 Secret 不构成业务冲突。2xx SHALL 只代表**可靠接收**，不代表学校已激活、对账已完成或管理员已授权。PG 不可用时 MUST 返回可重试 5xx。已验签 mock demo 只需符合既有 mock 结构，MUST NOT 写入 inbox 或改变业务状态。
+系统 SHALL 验证 `timestamp.event.raw-body` HMAC、时间窗、大小、event/header 一致、事件白名单、目标应用和必需 ID 结构。该验证只确认投递身份/完整性，不对 Webhook 业务事实调用 online resolve 二次核验。真实事件 SHALL 在 PG inbox 持久提交后才返回 2xx；失败返回可重试 5xx。inbox SHALL 保留最小脱敏投影、独立密钥的规范化业务摘要和状态，不得保存原始 body、OAuth Secret、token、签名或 Webhook Secret。同 event ID 同业务事实幂等；同 ID 不同学校/应用/订阅/状态/created actor 拒绝并告警。mock 只用于签名 URL demo，不产生业务事实。
 
-#### Scenario: 已签名真实事件入队但在线状态暂不可用
-- **WHEN** 真实 `subscription.created` 验签、目标校验及 inbox 提交成功，在线核验暂时超时
-- **THEN** 接收器可返回 2xx 表示已持久接收，处理状态保持待重试；学校新业务准入仍被拒绝，不创建可用管理员权限
+#### Scenario: 已签名真实事件与故障接收
+- **WHEN** 目标应用的真实 `subscription.created` 验签且结构正确
+- **THEN** inbox 提交后返回 2xx；若 PG 提交失败则返回 5xx，不能先确认后丢失事件
 
-#### Scenario: 重复 ID 与冲突业务事实
-- **WHEN** 已接收 event ID 再次投递相同业务事实但投递时间变化，或相同 ID 携带不同订阅/状态/created actor
-- **THEN** 前者幂等确认；后者拒绝并告警，不覆盖既存事实或状态
+#### Scenario: 重复与冲突
+- **WHEN** 同一 event ID 以不同投递时间重投相同投影，或以相同 ID 携带不同业务事实
+- **THEN** 前者幂等、不重建学校或重放状态；后者冲突隔离并告警，不覆盖事实
 
-#### Scenario: 控制台 mock 与伪造真实事件
-- **WHEN** 请求是已验签且匹配 `mock_` ID 的控制台 demo，或签名无效/过期/错误应用的请求
-- **THEN** demo 仅确认可达性而不写业务状态；无效请求拒绝且不入可处理队列
+### Requirement: 已验签 created 事件直接建立稳定学校映射
 
-### Requirement: 事件是失效通知而非可排序的状态版本
+系统 SHALL 基于目标应用真实 `subscription.created.tenant.id` 自动且幂等创建/定位内部学校 ID 与唯一绑定，不再要求 online resolve、人工补库或另一个外部学校接口确认该学校事实。`school_code` 只可展示或辅助定位，不是稳定键或凭据。显式非学校类型、目标应用错误、外部 ID 与既有不同内部学校冲突时 SHALL 隔离，不能开放学校业务。学校 UUID、绑定、目标应用 client、投影及数据库 onboarding 标记 SHALL 在一个 PG 事务中初始化；失败整体回滚、发送端同事件重试，2xx 不遗留待完成的本地数据库步骤。该标记只代表数据库学校空间完成，不能代替 AI 资源 ready。AI 多学校运行时、资源配置与执行隔离由 B1/B2 和 OMS/TMS 提案负责，不是本 Webhook 的完成前置。Webhook SHALL NOT 创建可用学校账号、TMS/OMS 管理权限或绕过本地隔离。
 
-系统 SHALL NOT 使用事件到达时间、投递 `timestamp`、事件 ID、online resolve 的不透明哈希或 Webhook payload 状态作为单调来源版本或直接开通资格。合法真实订阅事件 SHALL 使已绑定目标的旧允许证明失效并触发当前状态在线核验；本地 generation 仅防本系统并发旧查询覆写新通知。未知/未绑定学校 SHALL 保持待绑定和 fail closed，不能由学校码、URL 或单条 Webhook 自行推断内部学校。
+#### Scenario: 首所学校订阅
+- **WHEN** 无绑定的学校收到合法真实 `subscription.created`
+- **THEN** inbox、稳定映射、目标应用 client、投影及 PG onboarding 标记同事务完成；AI 资源仍可 pending，学校管理/激活与 AI 执行分别按自身门禁决定
 
-#### Scenario: 较旧停用事件晚于恢复到达
-- **WHEN** 旧 `subscription.suspended` 在当前学校—应用已恢复后才投递
-- **THEN** 系统不按事件时间直接停用或恢复，而使旧证明失效并查询当前受信状态；查询失败时保持拒绝，不把旧 payload 当成最终状态
+#### Scenario: 重投与学校码变更
+- **WHEN** 相同外部学校 ID 的事件重投或携带新学校码
+- **THEN** 仍定位同一内部学校，不新建第二个学校，也不因 URL/学校码改变授权范围
 
-#### Scenario: 首校通知尚无受控绑定
-- **WHEN** 目标应用正确的真实 `subscription.created` 到达，但稳定外部学校 ID 尚无已验证内部绑定
-- **THEN** 最小事件事实可入待绑定队列；不得创建可用内部学校、将 `external_eligibility` 标为 allowed 或授权 TMS/OMS
+### Requirement: 生命周期只投影已验签事件
 
-### Requirement: 租户资格必须来自当前受信在线证明
+系统 SHALL 对八类 `subscription.*` 按同一学校—应用的本地持久接收顺序串行投影，使用本地 generation 防并发旧结果覆写新结果；订阅状态有效才记录外部 allowed，停用/终止/到期和未知或矛盾状态不得放行。新事件的 inbox、映射和投影 SHALL 在一个事务内提交后才返回 2xx；投影失败整体回滚并返回可重试 5xx，不得先确认后沿用旧允许资格。系统 SHALL NOT 用 online resolve、证明 TTL、事件 timestamp、订阅 ID 大小或哈希再决定学校当前资格。恢复 SHALL NOT 覆盖本地 enabled/隔离/资源 ready 门禁。
 
-系统 SHALL 以现有已验证的 client↔稳定学校 ID↔应用 ID 绑定核验 EduPlus2 online resolve；只有响应 `verified=true` 且 client、学校、应用、租户状态、订阅状态均符合合同，并且本地学校绑定仍有效时才可产生有时效的外部 `allowed` 证明。已绑定 client 的明确不活跃响应，在**无其他当前有效 client 证明**时 SHALL 使该目标不可用；未知 client 的拒绝响应不得创建绑定。失败、超时、矛盾、证明过期或学校绑定撤权时新业务准入 MUST fail closed；多个历史/当前 client 须防止旧 client 的失败覆盖当前有效证明。外部恢复 MUST NOT 覆盖本地隔离。
+#### Scenario: 暂停后恢复
+- **WHEN** 已接入学校依次收到已验签的暂停和恢复事件
+- **THEN** 暂停事件使新业务拒绝；恢复事件按其订阅状态恢复外部资格，但本地隔离仍拒绝新业务
 
-#### Scenario: 在线解析超时或证明过期
-- **WHEN** 学校—应用的受信核验无法在有效期内完成
-- **THEN** 新业务准入拒绝并安排重试/告警；不得沿用过期的 allowed、OMS 额度或旧事件状态
+#### Scenario: 迟到旧事件或漏送
+- **WHEN** 不同 event ID 的旧事件迟到，或停用事件根本未送达
+- **THEN** 系统按已持久接收顺序处理、记录可观察冲突/积压并支持授权人工冻结；不得声称识别了外部真实最新状态或自动发现所有漏送。无来源版本/快照时，残余风险必须在验收与运营文档明确披露
 
-#### Scenario: 已绑定学校恢复但本地隔离
-- **WHEN** 在线核验确认订阅当前有效，而本地恢复隔离仍存在
-- **THEN** 外部资格可记录为 allowed，但新业务仍被本地隔离拒绝
+### Requirement: 首位管理员 actor 仅为待核验候选
 
-### Requirement: 首位管理员 actor 仅为待核验身份事实
+系统 SHALL 只从真实非 mock `subscription.created.actor.type=user`、非空 `actor.user_id` 保留未授权候选；system/null/其他事件不产生候选。学校稳定映射后，候选本人 SHALL 以已验签 OIDC Bearer JWT 的 `iss/sub/tid/azp`、目标应用 active client、Webhook 投影/PG onboarding、学校 binding_version 和本地一次性引导事务匹配，方可激活 DeepTutor 自有本校 `school_admin`，并在同一事务中写主体、assignment、候选终态、bootstrap 状态及审计。AI 资源尚 pending 不得阻止 TMS 首管激活，但不得因此开放 AI 新调用。若真实 `actor.user_id` 与 JWT `sub` 未能匹配，SHALL 拒绝而不是猜测映射。Webhook 本身不得赋权；`subscription.id` 仅保留为来源事实，不另查当前订阅 ID。引导已消费/撤销或绑定变化不得因迟到/重复事件复活候选权限。
 
-系统 SHALL 只从真实非 mock、已验签且目标应用正确的 `subscription.created` 中，随安全 inbox 可靠保存 `actor.type=user` 且非空的 `actor.user_id` 作为 Keycloak `sub` 的**未绑定来源事实**；仅在稳定学校绑定核验后才交付管理授权服务的待核验候选。MUST NOT 从 system/null、其他事件、重复事件或错误目标直接创建可用管理员。Webhook 接收器 SHALL NOT 授予 `tenant.*` 权限。事件 `subscription.id` SHALL 用于审计、幂等与事实冲突检查；本阶段不要求 DeepTutor 独立查询“当前订阅 ID”作为候选登录或一次性激活门禁，用户将事件当前性/旧事件处理归于 EduPlus2。`add-enterprise-management-authorization` 的一次性激活仍 SHALL 核验当前学校—应用在线有效、候选本人可信 TMS 登录的 issuer/sub/学校、已验证学校绑定与本地版本栅栏；Webhook 2xx、仅同校身份或人工填库均不得直接激活。
-
-#### Scenario: 迟到 created 与一次性学校引导
-- **WHEN** `subscription.created.actor` 迟到，且该校首位引导已消费或已撤销
-- **THEN** 重复或重订事件不得重建可用管理员；Webhook 接收器仍可保存脱敏事实，但不授予角色。若学校此前从未完成引导，DeepTutor 不独立判断事件是否属于当前订阅，发送端旧事件风险由 EduPlus2 侧处理
-
-#### Scenario: actor 缺失或系统触发
-- **WHEN** 真实 created 的 actor 为 null/system
-- **THEN** 生命周期通知可可靠接收并对账，但首位管理员状态保持待核验，不授予 `tenant.*`
+#### Scenario: system 或已完成引导
+- **WHEN** created actor 为 system/null，或学校已完成首位管理员引导后又收到 created
+- **THEN** 学校生命周期可处理，但不得新增可用管理员授权
 
 ### Requirement: 全入口租户准入与逐服务额度相互独立
 
-系统 SHALL 对新登录、token exchange、新 HTTP/WS turn、下载授权和后台派发检查当前外部资格、本地 enabled、资源 ready 及独立策略的交集；历史会话、审计与必要管理只读按各自权限保留。外部资格未知/暂停与 OMS 单服务额度不足 SHALL 使用不同稳定错误码和后端 display descriptor。OMS 的服务授权、供给和额度不足 MUST NOT 改写外部资格、本地开停、撤销状态或既有会话，也 MUST NOT 生成订阅 lifecycle 事件。
+系统 SHALL 提供可由正式入口消费的学校—目标应用 Webhook 投影、PG onboarding、binding_version 与本地人工冻结数据库资格；TMS 管理/首管激活入口不应被 AI `local_enabled/provisioning_status` 阻断，但必须检查生命周期、人工冻结和独立应用权限。各校新登录、token exchange、HTTP/WS 新 turn、下载授权和后台派发叠加本地 enabled、资源 ready、执行者隔离等门禁的**正式多学校运行时装配**归 B1/B2；OMS/TMS 正式界面和逐动作授权归各自提案。历史、审计、必要管理只读按各自权限保留。OMS 单服务额度不足只拒绝相应服务新调用，不改写学校生命周期、不生成订阅事件、不注销会话；生命周期拒绝与额度不足使用不同稳定业务码及后端 display descriptor。
 
-#### Scenario: 单服务额度耗尽
-- **WHEN** 学校 lifecycle 有效而图像服务额度耗尽
-- **THEN** 登录、管理、历史及其他获授权服务仍可用；仅图像服务新调用返回额度错误，不产生 `subscription.suspended` 或会话撤销
+#### Scenario: 单服务额度不足但学校有效
+- **WHEN** 学校处于已投影有效状态且图像服务额度耗尽
+- **THEN** 登录、管理、历史和其他获授权服务继续可用，仅图像服务新调用返回额度错误
 
-#### Scenario: 额度补充但学校仍暂停
-- **WHEN** OMS 补充额度而当前外部学校资格仍不可用
-- **THEN** 租户级新业务继续拒绝，额度不得覆盖学校停用
+### Requirement: 持久投影与运营风险必须可观察
 
-### Requirement: 漏送与处理失败必须对账
+系统 SHALL 保证 inbox 与投影原子提交、事务失败由发送端按 5xx 重试、重投幂等并按学校—应用串行处理并提供脱敏积压/失败/冲突指标及告警；保留/清理策略不得破坏 event ID 幂等与 actor 终态。不得以周期 online resolve 覆盖 Webhook 事实。系统 SHALL 提供经 DeepTutor 自有 `ops.reconciliation.manage` 与目标学校权限控制、版本化命令及审计的人工冻结/诊断/解除服务；后续 Webhook 不得清除本地冻结，解除本地冻结不得把外部 denied 变成 allowed。正式 OMS UI/身份适配器由管理授权/OMS 提案装配。无来源版本/快照时无法保证漏送或迟到事件后的外部最新状态。inbox、actor 终态和命令幂等事实默认不自动删除，容量阈值只告警，不直接清空。
 
-系统 SHALL 对已绑定学校—应用提供持久重试、启动/周期在线复核、处理指标和可审计失败；事件丢失、worker 中断或 online resolve 故障不得使过期 allowed 长期有效。对账结果 SHALL 受本地 generation 栅栏与学校绑定版本约束，不能覆盖较新失效通知或本地隔离。
-
-#### Scenario: 丢失停用通知
-- **WHEN** 停用 Webhook 未送达，但既有 allowed 证明到期或周期核验发现当前订阅不活跃
-- **THEN** 新业务准入被拒绝、资格状态和审计更新，并触发运营告警
+#### Scenario: 投影事务中断后重试
+- **WHEN** inbox 写入后投影事务中断或数据库不可用
+- **THEN** 不得返回 2xx；本地事务回滚，发送端重试后可幂等完成投影，不得出现已确认但仍沿用旧 allowed 的窗口

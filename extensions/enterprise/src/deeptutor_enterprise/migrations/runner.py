@@ -120,6 +120,9 @@ class MigrationRunner(CoreMigrationRunner):
             "lifecycle_inbox": ("r", True, True),
             "lifecycle_targets": ("r", True, True),
             "lifecycle_actor_candidates": ("r", True, True),
+            "webhook_school_state": ("r", True, True),
+            "webhook_school_controls": ("r", True, True),
+            "webhook_school_control_commands": ("r", True, True),
             "audit_export_jobs": ("r", True, False),
             "audit_events": ("r", True, False),
         }
@@ -145,13 +148,29 @@ class MigrationRunner(CoreMigrationRunner):
             for table in expected
             if table != "schema_history"
         }
+        expected_policies.add(
+            (
+                "webhook_school_state",
+                "school_projection_read",
+                "(school_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)",
+                None,
+            )
+        )
+        expected_policies.add(
+            (
+                "webhook_school_controls",
+                "school_control_read",
+                "(school_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)",
+                None,
+            )
+        )
         if actual != expected_policies:
             raise RuntimeError("eduplus2 schema drift: tenant RLS policies differ")
         indexes = await (
             await c.execute(
                 "SELECT indexname FROM pg_indexes WHERE schemaname='eduplus2' "
                 "AND tablename IN ('lifecycle_inbox','lifecycle_targets',"
-                "'lifecycle_actor_candidates')"
+                "'lifecycle_actor_candidates','webhook_school_state')"
             )
         ).fetchall()
         required_lifecycle_indexes = {
@@ -159,9 +178,59 @@ class MigrationRunner(CoreMigrationRunner):
             "eduplus2_lifecycle_targets_retry",
             "eduplus2_lifecycle_targets_expiry",
             "eduplus2_lifecycle_actor_candidates_school",
+            "eduplus2_webhook_school_state_school",
         }
         if not required_lifecycle_indexes.issubset({row[0] for row in indexes}):
             raise RuntimeError("eduplus2 schema drift: lifecycle indexes missing")
+        webhook_columns = await (
+            await c.execute(
+                "SELECT a.attname,a.atttypid::regtype::text,a.attnotnull "
+                "FROM pg_attribute a "
+                "WHERE a.attrelid='eduplus2.webhook_school_state'::regclass "
+                "AND a.attnum>0 AND NOT a.attisdropped"
+            )
+        ).fetchall()
+        required_webhook_columns = {
+            "tenant_id": ("uuid", True),
+            "external_tenant_id": ("bigint", True),
+            "external_app_id": ("bigint", True),
+            "school_id": ("uuid", True),
+            "school_code": ("text", True),
+            "binding_version": ("bigint", True),
+            "generation": ("bigint", True),
+            "eligibility": ("text", True),
+            "external_subscription_id": ("bigint", True),
+            "last_event_id": ("text", True),
+            "onboarding_event_id": ("text", False),
+            "onboarding_completed_at": ("timestamp with time zone", False),
+        }
+        actual_webhook_columns = {
+            name: (data_type, not_null) for name, data_type, not_null in webhook_columns
+        }
+        if any(
+            actual_webhook_columns.get(name) != expected
+            for name, expected in required_webhook_columns.items()
+        ):
+            raise RuntimeError("eduplus2 schema drift: webhook projection columns differ")
+        onboarding_constraint = await (
+            await c.execute(
+                "SELECT convalidated FROM pg_constraint "
+                "WHERE conrelid='eduplus2.webhook_school_state'::regclass "
+                "AND conname='webhook_school_onboarding_pair' AND contype='c'"
+            )
+        ).fetchone()
+        if onboarding_constraint != (True,):
+            raise RuntimeError("eduplus2 schema drift: school onboarding constraint missing")
+        school_unique_index = await (
+            await c.execute(
+                "SELECT i.indisunique,i.indisvalid,pg_get_expr(i.indpred,i.indrelid) "
+                "FROM pg_index i JOIN pg_class r ON r.oid=i.indexrelid "
+                "WHERE r.oid=to_regclass('enterprise.enterprise_external_tid_unique') "
+                "AND i.indrelid='enterprise.tenants'::regclass"
+            )
+        ).fetchone()
+        if school_unique_index != (True, True, "(external_tid IS NOT NULL)"):
+            raise RuntimeError("eduplus2 schema drift: external school uniqueness missing")
         proof_column = await (
             await c.execute(
                 "SELECT a.atttypid='bigint'::regtype,a.attnotnull "

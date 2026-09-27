@@ -1,5 +1,20 @@
 # EduPlus2 生命周期 Webhook 实施证据
 
+> **2026-09-27 权威变更**：下文的 online resolve/证明 TTL/人工学校绑定切片是此前版本的历史实施证据，不能用于新“已验签 Webhook 直接接校并驱动生命周期”任务验收。当前工作区已新增接收事务内自动建校/投影代码与隔离合成测试，仍未发布到 test-cn；该环境正式接收器继续关闭。旧版本地测试通过只证明旧逻辑没有回归，不证明新版学校可用。
+
+## 2026-09-27 Webhook-only 本地代码实施（未发布）
+
+- 接收路由继续先校验 HMAC、时间窗、128 KiB、事件/header、mock 标记、目标应用与规范化事件 ID；真实事件改由 `webhook_authority.ingest_authoritative_webhook` 在一个 PG 事务中完成 inbox、稳定外部学校 ID 映射、学校—应用 generation 投影、OAuth client 登记/暂停及 created.actor 最小候选。事务提交后才 204，冲突 409，投影/PG 故障 503；不调用 online resolve。`tenant.code` 仅保存为最新显示信息，不作为映射键。
+- 新学校初始 `local_enabled=false`、`provisioning_status=pending`，Webhook 不创建用户、赋予 `tenant.*`/`ops.*` 或标记资源 ready。旧固定学校若已占用同一外部 ID 而缺正式绑定，冲突拒绝，不自动合并；学校绑定重核验后的旧投影不能继续通过登录门禁或 actor 交接。新增 `eduplus2/0008_webhook_authority.sql`、外部学校 ID 唯一索引及 catalog 漂移检查。既有 0005–0007 历史表保留。
+- 用户澄清“多学校 AI 运行时归 OMS/TMS/B1/B2，不是 Webhook 前置”。本提案的资源初始化明确为 **PG 学校空间**：学校 UUID、稳定绑定、目标应用 client、投影和 `onboarding_event_id/completed_at`，全部随 created 同事务提交；失败整体回滚后发送端重试。`eduplus2/0010_school_database_onboarding.sql` 添加标记及配对约束，任何非 created 事件不得单独形成 onboarding。AI 资源仍 pending，管理首管激活可进行，AI 新业务仍受 enabled/ready 限制。未知学校非 created 的已确认事件现以 `denied/school_not_bound` 终结，不留永久 pending。
+- 新增 `eduplus2/0009_school_projection_management_read.sql`：FORCE RLS 下本校只读投影，写入仍仅部署收件箱作用域；`management.require_management_permission` 只接受与可信身份的目标 `webhook_app_id`、学校绑定版本一致且已 onboarding/allowed 的投影。旧无外部 ID 固定学校继续用原门禁。合成测试证明 TMS 首管可在 AI 资源 pending、本地 AI 开关关闭时访问 TMS；另一应用的 allowed 投影不能顶替目标应用的 denied。
+- 新增 `management/actor_activation.py`、`tms_identity.py` 与 `/api/v1/tms/school-bootstrap/{status,activate}`：只有已验签 OIDC JWT 的 issuer/sub/tid/azp 与 Webhook 生成的学校、目标应用 active client 一致时才构造 TMS 本人身份；首次角色/候选终态/学校 bootstrap/审计单事务提交，重复调用幂等。生产入口仅使用配置的 OIDC/JWKS verifier，合成测试替身为 HMAC verifier；不从 body/header 构造角色/学校。官方 created 文档示例未声明 `actor.user_id == JWT sub`，所以 test 环境真实本人匹配仍待脱敏证据；不匹配时拒绝，不猜映射。
+- 新增 `eduplus2/0011_webhook_school_controls.sql` 与内部 `management/lifecycle_controls.py`：PG 版本化本地冻结独立于外部投影，签名恢复不会清除冻结；经 `ops.reconciliation.manage` 目标学校程序授权后可冻结、审计诊断和解除，命令 ID 幂等/expected_version 防并发。当前没有可信 OMS 正式会话/UI 路由，**内部服务不是已完成的运营入口**。只读 Webhook 聚合指标、每分钟监测、静默学校/历史 pending/容量告警及 409/503 脱敏日志已接入；inbox、actor 终态、命令事实默认不自动清理，以免破坏重放与审计，冷归档须另设计。
+- 设计从异步 worker 改为**接收事务内原子投影**：没有“2xx 已确认但本地 worker 未完成”的窗口；事务失败由发送端按 5xx 重试。未知学校的非 created 事件仅留 inbox，绝不授予资格。该选择已同步 proposal/design/spec/tasks；不代表可以识别漏送或迟到事件的外部最终状态。
+- TDD 红→绿覆盖绑定版本重核验、投影学校冲突回滚、摘要密钥独立、旧未绑定学校不自动复制、显示码变更/缺省保留；合成双学校、八类状态、幂等/同 ID 冲突、乱序/重订、本地隔离、FORCE RLS、事务触发器故障 503/整体回滚及重启持久性均有回归。另有已绑定固定学校的签名 Webhook → 登录/既有会话门禁暂停 → 恢复完整回归。新增 TMS 本人激活、应用层入口授权、OMS 内部冻结/诊断/解除及聚合监测的隔离回归；异常 JWT 过大 `exp` 也在入口拒绝而不抛出未处理异常。企业全量测试：`.venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests --tb=short` → **500 passed, 3 skipped**；受影响文件 Ruff、`git diff --check` 和 Webhook/B1-B2/管理授权三份 OpenSpec strict validation 均通过。本地任务 2.3/2.4 的数据库/服务端范围据此验收，进度 **9/12**。
+- **仍未完成**：真实 `created.actor` 与 OIDC `sub` 脱敏联调、OMS 正式身份适配后的运营界面/告警接收端联调、test-cn 非 mock 实际投递和目标环境配置、上游兼容复核。正式 OMS 入口归管理授权/OMS change，不是 2.4 内部控制服务的完成条件。B1 多学校 AI 运行时及 OMS/TMS 正式界面/服务额度是其他 change 的任务，不能拿它们阻断本 Webhook 的 PG 链路，也不能用本地合成链路宣称它们完成。目标环境接收开关/配置未更动。
+- 本轮只读上游检查：改动路径仅位于 `extensions/enterprise/`、企业文档与 OpenSpec，没有新增 core runtime 补丁；`git merge-tree --write-tree HEAD upstream/main` 仍报告当前分支 **63 个既存冲突**，故 3.2 的上游 merge 门禁不能据此勾选。全量企业回归包含已有 HTTP/WS 身份与 session owner 测试，但真实环境审计关联仍待 3.1 联调。
+
 > 2026-09-26：用户要求先完成 Webhook URL demo，再推进发送端配置；本地忽略的 `.secrets/.test-secrets` 已有 `DT_EDUPLUS2_WEBHOOK_SECRET` 与 `DT_EDUPLUS2_WEBHOOK_SECRET_REF` 键。本文件不记录值、签名、请求体或真实租户资料。
 
 ## 0.1 已完成：签名 demo 接收（非生命周期生效）
@@ -76,3 +91,14 @@ Woodpecker 已新增仅 `tag` 事件可用的仓库 Secret `dt_test_cn_eduplus2_
 对账可观测性局部切片：新增仅内部使用的聚合快照，按 DB 时钟区分当前允许证明、过期证明、未知/拒绝目标、待绑定/待对账/重试 inbox 与待核验 actor 数量；worker 每轮刷新进程内计数，不向公开健康检查或未授权 API 泄露学校/订阅标识。合成测试验证计数及 worker 接线。保留/清理政策、长期监控出口及目标环境告警未验收，故 2.4 仍未勾选。
 
 以上新切片完成后重跑企业全量测试 **464 passed，3 skipped**；Ruff、`git diff --check`、Webhook 与管理授权两份 OpenSpec strict validation 均通过。该验证只在隔离合成环境，未替代 test-cn 真实事件与双学校放行证据。
+
+## 2026-09-27 test-cn `rc.50` 真实订阅重试反馈（未通过）
+
+- DeepTutor commit `f79059fc` 经 `deploy/test-cn/v1.4.0-rc.50` 触发 Woodpecker #61，构建、迁移和 `deploy-test-cn` 步骤均显示 success；目标 Deployment 1/1 Ready，release ID 为 `test-cn-v1-4-0-rc-50`。这只证明代码/迁移已部署，不证明正式 Webhook 已启用。
+- 用户随后反馈所有真实订阅重试均为 HTTP 503，响应 `Lifecycle receiver unavailable`。该响应发生在路由验签及 JSON/event 匹配之后，可确认请求到达当前接收路径并通过前置验签；不能据此推断 payload 中学校、应用、订阅及 actor 字段已通过真实事件解析。
+- 对 test-cn 目标数据库执行 `BEGIN READ ONLY`，迁移史已有 `0005`—`0007`，但 `eduplus2.lifecycle_inbox`、`lifecycle_targets`、`lifecycle_actor_candidates`、`oms.school_bindings` 都是 **0 行**；唯一既存租户仍为 `external_eligibility=not_required` 且未关联外部学校。未读取/输出学校 ID、事件 ID、Secret 或原始 body。
+- 只读检查 Deployment `env` 和 `deeptutor-runtime-secrets` **键名**发现未注入 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED`、`DT_EDUPLUS2_WEBHOOK_APP_ID`、独立的 `DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY`。正式接收器按设计默认关闭，因此当前重试 503 与空 inbox 符合 fail-closed；不能把 #61 success 或发送端重试解释为 B2 3.1 通过。未修改 test Secret、Deployment、发送端或目标数据。
+
+后续本地安全修正（未发布）：在显式启用真实接收器时，启动配置若缺签名密钥、目标应用 ID、独立且不少于 32 字符的 inbox 摘要密钥、OIDC issuer 或在线 resolver，直接失败而非以不完整配置启动；摘要密钥不得复用当前或上一版本签名密钥。新通知入队的同一事务内清除部署 owner 的旧 resolve 缓存，避免将先前在线结果当成事件之后的新证明；多学校缓存隔离仍需 B1 验收。已完成首位引导的学校不再向本人候选查询交出旧 `created.actor`，该校之后到达的 `created` 事件仍保留 inbox 事实、但不会新增待激活候选。测试以合成 PG 先观察失败再修复；这些局部改动不使 test-cn 的 503 自动变为 204，也不满足正式学校绑定/激活/全入口放行。
+
+最终本地回归（上述修正之后）：企业测试 `473 passed, 3 skipped`，定向生命周期/候选测试 `48 passed`；Ruff、`git diff --check` 与 `openspec validate add-b2-eduplus2-tenant-lifecycle-webhook --strict` 均通过。仍是 **6/12 项任务完成**；本轮没有 test-cn 部署、真实事件重试、真实学校数据写入、外部仓库修改或提交推送。

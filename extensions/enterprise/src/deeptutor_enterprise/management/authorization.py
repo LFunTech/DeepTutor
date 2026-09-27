@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
+from psycopg.pq import TransactionStatus
+
 
 class ManagementAuthorizationDenied(PermissionError):
     """身份、应用域、学校、动作或版本不满足当前授权。"""
@@ -29,6 +31,7 @@ class ManagementIdentity:
     external_active: bool
     external_checked_at: datetime
     external_verified_until: datetime
+    webhook_app_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +54,12 @@ class ManagementDelegationDecision:
     delegation_id: UUID
     delegation_version: int
     school_binding_version: int | None
+
+
+def _column(row, key: str, index: int):
+    """同时兼容企业连接的 dict_row 与独立权限测试的 tuple row。"""
+
+    return row[key] if isinstance(row, dict) else row[index]
 
 
 def _identity_is_current(identity: ManagementIdentity, *, write: bool) -> bool:
@@ -101,7 +110,11 @@ async def require_management_permission(
         identity, write=write
     ):
         raise ManagementAuthorizationDenied("external management identity is unavailable")
-    if write and connection.autocommit:
+    if (
+        write
+        and connection.autocommit
+        and connection.info.transaction_status != TransactionStatus.INTRANS
+    ):
         raise ManagementAuthorizationDenied("management write requires a transaction")
     if not isinstance(action, str) or not action or len(action) > 128:
         raise ManagementAuthorizationDenied("management action is invalid")
@@ -124,7 +137,9 @@ async def require_management_permission(
         tenant_setting = await (
             await connection.execute("SELECT current_setting('app.tenant_id',true)")
         ).fetchone()
-        if not tenant_setting or tenant_setting[0] != str(identity.school_id):
+        if not tenant_setting or _column(tenant_setting, "current_setting", 0) != str(
+            identity.school_id
+        ):
             raise ManagementAuthorizationDenied("transaction school scope is not trusted")
 
     await connection.execute(
@@ -140,27 +155,83 @@ async def require_management_permission(
             (identity.application, identity.issuer, identity.subject, identity.school_id),
         )
     ).fetchone()
-    if not principal or principal[2] != "active" or principal[3] != identity.policy_version:
+    if (
+        not principal
+        or _column(principal, "status", 2) != "active"
+        or _column(principal, "policy_version", 3) != identity.policy_version
+    ):
         raise ManagementAuthorizationDenied("management principal or policy version is invalid")
 
     binding_version = None
     binding_school_id = _lock_school_id or target_school_id
     if binding_school_id is not None:
+        lifecycle_governance = (
+            identity.application == "oms" and action == "ops.reconciliation.manage"
+        )
         binding_lock = " FOR SHARE OF b,t" if write else ""
         binding = await (
             await connection.execute(
                 "SELECT b.version,t.bootstrap_completed,t.local_enabled,"
-                "t.provisioning_status,t.recovery_state FROM oms.school_bindings b "
+                "t.provisioning_status,t.recovery_state,b.eduplus_tenant_id,t.external_tid "
+                "FROM oms.school_bindings b "
                 "JOIN enterprise.tenants t ON t.id=b.tenant_id "
                 "WHERE b.tenant_id=%s AND b.status='verified' "
-                "AND t.external_eligibility='allowed'" + binding_lock,
+                + ("" if lifecycle_governance else "AND t.external_eligibility='allowed' ")
+                + binding_lock,
                 (binding_school_id,),
             )
         ).fetchone()
         if not binding:
             raise ManagementAuthorizationDenied("target school binding is not verified")
-        binding_version = binding[0]
-        if (identity.application == "tms" or write) and binding[1:] != (
+        binding_version = _column(binding, "version", 0)
+        availability = tuple(
+            _column(binding, key, index)
+            for index, key in enumerate(
+                ("bootstrap_completed", "local_enabled", "provisioning_status", "recovery_state"),
+                start=1,
+            )
+        )
+        external_tid = _column(binding, "external_tid", 6)
+        if external_tid is not None:
+            external_school_id = _column(binding, "eduplus_tenant_id", 5)
+            if (
+                external_tid != str(external_school_id)
+                or type(identity.webhook_app_id) is not int
+                or identity.webhook_app_id <= 0
+            ):
+                raise ManagementAuthorizationDenied("school identity binding is inconsistent")
+            projection_lock = " FOR SHARE" if write else ""
+            projected = await (
+                await connection.execute(
+                    "SELECT 1 FROM eduplus2.webhook_school_state p "
+                    "JOIN eduplus2.webhook_school_controls k "
+                    "ON (k.tenant_id,k.school_id,k.external_app_id)="
+                    "(p.tenant_id,p.school_id,p.external_app_id) "
+                    "WHERE p.school_id=%s AND p.external_tenant_id=%s "
+                    "AND p.external_app_id=%s AND p.binding_version=%s "
+                    "AND p.onboarding_event_id IS NOT NULL "
+                    "AND p.onboarding_completed_at IS NOT NULL "
+                    + (
+                        ""
+                        if lifecycle_governance
+                        else "AND p.eligibility='allowed' AND NOT k.frozen "
+                    )
+                    + projection_lock,
+                    (
+                        binding_school_id,
+                        external_school_id,
+                        identity.webhook_app_id,
+                        binding_version,
+                    ),
+                )
+            ).fetchone()
+            if (
+                not projected
+                or (not lifecycle_governance and availability[3] != "normal")
+                or (identity.application == "tms" and not availability[0])
+            ):
+                raise ManagementAuthorizationDenied("target school management is unavailable")
+        elif (identity.application == "tms" or write) and availability != (
             True,
             True,
             "ready",
@@ -187,7 +258,7 @@ async def require_management_permission(
             "ORDER BY a.id LIMIT 1" + lock_assignment,
             (
                 identity.application,
-                principal[0],
+                _column(principal, "id", 0),
                 scope_kind,
                 target_school_id,
                 action,
@@ -200,12 +271,12 @@ async def require_management_permission(
         raise ManagementAuthorizationDenied("management action or scope is not granted")
     return ManagementDecision(
         application=identity.application,
-        principal_id=principal[0],
+        principal_id=_column(principal, "id", 0),
         action=action,
         school_id=target_school_id,
-        policy_version=principal[3],
-        assignment_id=assignment[0],
-        assignment_version=assignment[1],
+        policy_version=_column(principal, "policy_version", 3),
+        assignment_id=_column(assignment, "id", 0),
+        assignment_version=_column(assignment, "version", 1),
         school_binding_version=binding_version,
     )
 
@@ -280,7 +351,7 @@ async def require_management_delegation(
         governance=governance,
         delegated_action=action,
         school_id=target_school_id,
-        delegation_id=row[0],
-        delegation_version=row[1],
+        delegation_id=_column(row, "id", 0),
+        delegation_version=_column(row, "version", 1),
         school_binding_version=governance.school_binding_version,
     )

@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
+import hmac
 from importlib.metadata import PackageNotFoundError, version
 import logging
 import os
@@ -168,8 +169,13 @@ class Enterprise:
         )
         self.container = None
         self._monitor = None
-        self._lifecycle_worker = None
-        self.lifecycle_reconcile_metrics = {"processed": 0, "failures": 0}
+        self._webhook_monitor_task = None
+        self.webhook_metrics = {
+            "monitor_failures": 0,
+            "delivery_conflicts": 0,
+            "delivery_failures": 0,
+            "signature_rejections": 0,
+        }
         self.eduplus2_resolver = None
         self.eduplus2_verifier = None
         self.eduplus2_profile_client = None
@@ -192,7 +198,7 @@ class Enterprise:
         self._configure_eduplus2_from_env()
 
     async def _require_current_lifecycle_proof(self, c):
-        """企业入口在签发/复验会话时核对本产品当前在线证明。"""
+        """企业入口在签发/复验会话时核对本地 Webhook 投影。"""
 
         tenant = await (
             await c.execute(
@@ -210,16 +216,21 @@ class Enterprise:
             raise PermissionError("school lifecycle unavailable")
         if self.eduplus2_webhook_app_id <= 0:
             raise PermissionError("school lifecycle unavailable")
-        proof = await (
+        state = await (
             await c.execute(
                 "SELECT 1 FROM oms.school_bindings b "
-                "JOIN eduplus2.lifecycle_targets p "
+                "JOIN eduplus2.webhook_school_state p "
                 "ON p.external_tenant_id=b.eduplus_tenant_id "
                 "WHERE b.tenant_id=%s AND b.status='verified' "
                 "AND b.eduplus_tenant_id::text=%s "
                 "AND p.tenant_id=%s AND p.external_app_id=%s "
-                "AND p.eligibility='allowed' AND p.binding_version=b.version "
-                "AND p.proof_expires_at>clock_timestamp() "
+                "AND p.school_id=b.tenant_id AND p.eligibility='allowed' "
+                "AND p.binding_version=b.version "
+                "AND p.onboarding_event_id IS NOT NULL "
+                "AND p.onboarding_completed_at IS NOT NULL "
+                "AND EXISTS (SELECT 1 FROM eduplus2.webhook_school_controls k "
+                "WHERE (k.tenant_id,k.school_id,k.external_app_id)="
+                "(p.tenant_id,p.school_id,p.external_app_id) AND NOT k.frozen) "
                 "LIMIT 1",
                 (
                     self.deployment.tenant_id,
@@ -229,7 +240,7 @@ class Enterprise:
                 ),
             )
         ).fetchone()
-        if not proof:
+        if not state:
             raise PermissionError("school lifecycle unavailable")
 
     @staticmethod
@@ -298,9 +309,7 @@ class Enterprise:
             webhook_secret_ref = "env:DT_EDUPLUS2_WEBHOOK_SECRET"
         if webhook_secret_ref:
             self.eduplus2_webhook_secret = resolve_secret(webhook_secret_ref)
-        previous_webhook_ref = os.environ.get(
-            "DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF", ""
-        ).strip()
+        previous_webhook_ref = os.environ.get("DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF", "").strip()
         if previous_webhook_ref:
             self.eduplus2_webhook_previous_secret = resolve_secret(previous_webhook_ref)
         previous_until = os.environ.get("DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL", "").strip()
@@ -315,8 +324,7 @@ class Enterprise:
         if inbox_digest_ref:
             self.eduplus2_webhook_inbox_digest_key = resolve_secret(inbox_digest_ref)
         self.eduplus2_lifecycle_receiver_enabled = (
-            os.environ.get("DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED", "").strip().lower()
-            == "true"
+            os.environ.get("DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED", "").strip().lower() == "true"
         )
         try:
             proof_ttl = int(
@@ -397,6 +405,23 @@ class Enterprise:
                 client_id=client_id,
                 client_secret=resolve_secret(secret_ref),
             )
+        if self.eduplus2_lifecycle_receiver_enabled and (
+            not self.eduplus2_webhook_secret
+            or self.eduplus2_webhook_app_id <= 0
+            or len(self.eduplus2_webhook_inbox_digest_key) < 32
+            or not self.eduplus2_issuer
+            or hmac.compare_digest(
+                self.eduplus2_webhook_inbox_digest_key, self.eduplus2_webhook_secret
+            )
+            or (
+                self.eduplus2_webhook_previous_secret
+                and hmac.compare_digest(
+                    self.eduplus2_webhook_inbox_digest_key,
+                    self.eduplus2_webhook_previous_secret,
+                )
+            )
+        ):
+            raise RuntimeError("lifecycle receiver configuration is incomplete or unsafe")
 
     @property
     def eduplus2(self):
@@ -488,9 +513,7 @@ class Enterprise:
                     coordinator,
                     coordinator_factory,
                 ) = _build_enterprise_runtime_coordination()
-                requires_singleton_lease = _requires_singleton_executor_lease(
-                    coordination_settings
-                )
+                requires_singleton_lease = _requires_singleton_executor_lease(coordination_settings)
                 if requires_singleton_lease:
                     await self.lease.acquire()
                     self.db.execution_guard = self.lease.check
@@ -516,8 +539,9 @@ class Enterprise:
                 )
                 await self.container.start()
                 await self.recover()
+            # 生命周期由已验签 Webhook 同事务投影；仅启动只读聚合监测。
             if self.eduplus2_lifecycle_receiver_enabled:
-                self._lifecycle_worker = asyncio.create_task(self._lifecycle_reconcile_loop())
+                self._webhook_monitor_task = asyncio.create_task(self._webhook_monitor_loop())
             if requires_singleton_lease:
                 self._monitor = asyncio.create_task(self._watch_executor())
         except BaseException:
@@ -529,26 +553,30 @@ class Enterprise:
         if self.container is not None and not await self.container.coordinator.health():
             raise RuntimeError("turn coordination backend is unavailable")
 
-    async def _lifecycle_reconcile_loop(self):
-        from .eduplus2.lifecycle import (
-            reconcile_due_lifecycle_targets,
-            snapshot_lifecycle_reconcile_metrics,
-        )
+    async def _webhook_monitor_loop(self):
+        from .eduplus2.webhook_authority import snapshot_webhook_authority_metrics
 
         while True:
             try:
-                self.lifecycle_reconcile_metrics["processed"] += (
-                    await reconcile_due_lifecycle_targets(self)
-                )
-                self.lifecycle_reconcile_metrics.update(
-                    await snapshot_lifecycle_reconcile_metrics(self)
-                )
+                self.webhook_metrics.update(await snapshot_webhook_authority_metrics(self))
+                if self.webhook_metrics.get("legacy_pending_events", 0):
+                    logging.getLogger(__name__).warning(
+                        "EduPlus2 historical webhook inbox has pending rows"
+                    )
+                if self.webhook_metrics.get("quiet_schools", 0):
+                    logging.getLogger(__name__).warning(
+                        "EduPlus2 schools have no recent subscription delivery; "
+                        "external state cannot be inferred"
+                    )
+                if self.webhook_metrics.get("stored_events", 0) >= 1_000_000:
+                    logging.getLogger(__name__).warning(
+                        "EduPlus2 webhook inbox capacity review is required; "
+                        "idempotency facts must not be deleted automatically"
+                    )
             except Exception:
-                self.lifecycle_reconcile_metrics["failures"] += 1
-                logging.getLogger(__name__).warning(
-                    "EduPlus2 lifecycle reconciliation failed; durable targets remain pending"
-                )
-            await asyncio.sleep(5)
+                self.webhook_metrics["monitor_failures"] += 1
+                logging.getLogger(__name__).warning("EduPlus2 webhook aggregate monitoring failed")
+            await asyncio.sleep(60)
 
     async def _watch_executor(self):
         while True:
@@ -560,9 +588,7 @@ class Enterprise:
                 return
 
     async def authorize(self):
-        if self.container is None or _requires_singleton_executor_lease(
-            self.container.settings
-        ):
+        if self.container is None or _requires_singleton_executor_lease(self.container.settings):
             await self.lease.check()
         else:
             await self._runtime_coordination_guard()
@@ -612,11 +638,11 @@ class Enterprise:
                 )
 
     async def close(self):
-        if self._lifecycle_worker:
-            self._lifecycle_worker.cancel()
+        if self._webhook_monitor_task:
+            self._webhook_monitor_task.cancel()
             with suppress(asyncio.CancelledError):
-                await self._lifecycle_worker
-            self._lifecycle_worker = None
+                await self._webhook_monitor_task
+            self._webhook_monitor_task = None
         if self._monitor:
             self._monitor.cancel()
             with suppress(asyncio.CancelledError):

@@ -14,13 +14,13 @@
 
 ### 1. 外部证据与本地授权分层
 
-EduPlus2 只证明 `issuer/sub`、本人当前账号状态、client/app、权威学校 ID/状态；DeepTutor 内部 `tenant_id` 是资源和 RLS 的唯一稳定主键。B1 普通用户绑定复用现有 `eduplus2.identity_bindings` 与注册/换票链；OMS 目标学校的 `oms.school_bindings` 创建/撤权/版本由 `add-enterprise-management-authorization` 任务 2.2 负责，本 change 只消费其已验证版本，不再建设第二套学校授权主数据。学校码从权威绑定派生，只用于路由定位。相对方案“由 `tid` 或 code 直接推内部学校”会使改码、错类型和跨校写入不可审计，故拒绝。
+EduPlus2 OIDC 只证明 `issuer/sub`、client/app 与已签名学校身份字段；学校接入和订阅开停的业务权威由 `add-b2-eduplus2-tenant-lifecycle-webhook` 已验签 Webhook 提供。DeepTutor 内部 `tenant_id` 是资源和 RLS 的唯一稳定主键。B1 普通用户绑定复用现有 `eduplus2.identity_bindings` 与注册/换票链；`oms.school_bindings` 的首次学校 ID 映射/版本由 Webhook 的真实 created 事务创建，管理授权模块只消费该绑定并控制本产品人员权限，不再建立第二套学校接入权威。学校码仅用于路由定位并须与当前可信绑定核对。相对方案“由 URL code 或未经验签的 `tid` 直接推内部学校”会使改码、错类型和跨校写入不可审计，故拒绝。
 
 外部 API **适用性矩阵**先记录接口版本、调用身份、环境、脱敏样例、响应中的稳定学校 ID 类型/状态、失效与故障模式；未知处保持未装配管理写入口。既存 `/me/profile` 仅本人，M2M 客户端或 Webhook Secret 不能推导学校成员目录或负责人资格。任何接口未交付时不伪造响应，也不要求本项目改发送端。
 
 ### 2. 绑定及撤权版本栅栏
 
-新增 DeepTutor 后续版本 PG 迁移，而非改 `0011` 或已应用身份迁移：受控绑定保留内部学校 ID、外部权威 ID（原始类型和值的显式适配）、code 快照、来源/证据版本、状态、epoch 和审计；外部 ID 与内部学校一对一有效唯一。首校受控登记不扫描旧 admin/tenant 数据；改码仅更新 locator，解绑增加 epoch 且不改资源 owner。建/撤操作使用 expected_version、幂等键和审计，重复 apply/verify、drift/失败回退按企业迁移 runner 规则。具体表所有权由现有 `enterprise`/`oms` 权威分工决定：普通联邦 binding 在 `eduplus2`/`enterprise`；OMS 目标学校 binding 的迁移只由管理授权 change 实施。
+新增 DeepTutor 后续版本 PG 迁移，而非改 `0011` 或已应用身份迁移：消费 Webhook 已建的内部学校 UUID、稳定外部数字 ID、学校展示 code、当前绑定版本和 PG onboarding 标记；不扫描旧 admin/tenant 数据，不以普通 JWT 或 code 补建学校。改码仅更新 locator，绑定撤销/重核验增加版本且不改资源 owner。多学校 AI 资源初始化/撤权/任务用 expected_version、幂等键和审计，重复 apply/verify、drift/失败回退按企业迁移 runner 规则。Webhook 负责 PG 学校接入，管理授权 change 负责本产品人员的逐动作/目标范围判定，本 change 负责各校运行时隔离，三者不得互相冒充。
 
 写请求在外部状态复核后，用受限 PG 事务读取绑定及 epoch，随后再取业务版本和资源锁；同一事务中执行权限检查与业务变更。撤权走相同绑定锁，避免旧会话在撤权提交后继续写。读、下载、WS 新命令与后台派发用当前 epoch 门禁；缓存只加速非敏感展示，不作为状态未知时的允许依据。若远端状态/版本不确定，拒绝新敏感副作用并留下脱敏审计。
 
@@ -32,7 +32,7 @@ EduPlus2 只证明 `issuer/sub`、本人当前账号状态、client/app、权威
 
 ### 4. 外部生命周期、管理权限和额度正交
 
-生命周期由 `add-b2-eduplus2-tenant-lifecycle-webhook` 持有签名 inbox、单调版本和对账；本 change 只消费已确认的外部资格状态，与本地隔离取交集。OMS/TMS 权限由 `add-enterprise-management-authorization` 决策；OMS 只管理平台人员及其目标学校范围，TMS 学校侧开通不在本 change。服务额度由 OMS 权益/逐 attempt 总账持有，不反写学校生命周期。相对方案“一个 admin 或 active 标志放行全部能力”会抹掉权威边界，故拒绝。
+生命周期由 `add-b2-eduplus2-tenant-lifecycle-webhook` 持有签名 inbox、本地持久接收 generation 和 PG onboarding 标记；**来源没有单调版本或受信快照，本系统不以 online resolve 周期对账覆写 Webhook 投影**。本 change 负责把已投影外部资格、AI 本地 enabled/ready、绑定版本和受限资源 scope 组合进各校运行时入口；它不反向成为 Webhook 数据库初始化或 TMS 首管激活的前置。OMS/TMS 权限由 `add-enterprise-management-authorization` 决策；服务额度由 OMS 权益/逐 attempt 总账持有，不反写学校生命周期。相对方案“一个 admin 或 active 标志放行全部能力”会抹掉权威边界，故拒绝。
 
 ### 5. 验收与放量是独立状态机
 

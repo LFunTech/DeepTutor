@@ -33,6 +33,10 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "0005_lifecycle_inbox",
     "0006_lifecycle_binding_proof",
     "0007_actor_candidate_terminal_state",
+    "0008_webhook_authority",
+    "0009_school_projection_management_read",
+    "0010_school_database_onboarding",
+    "0011_webhook_school_controls",
     "oms/0001_ledger_base",
     "oms/0002_grant_source",
     "oms/0003_grant_command_idempotency",
@@ -97,21 +101,33 @@ async def test_eduplus2_extension_catalog_drift_blocks_verify(pg_dsn):
         await runner.apply()
 
 
+async def test_webhook_binding_version_catalog_drift_blocks_verify(pg_dsn):
+    runner = await migrated(pg_dsn)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("ALTER TABLE eduplus2.webhook_school_state DROP COLUMN binding_version")
+    with pytest.raises(RuntimeError, match="eduplus2 schema drift"):
+        await runner.verify()
+
+
+async def test_webhook_external_school_uniqueness_drift_blocks_verify(pg_dsn):
+    runner = await migrated(pg_dsn)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("DROP INDEX enterprise.enterprise_external_tid_unique")
+    with pytest.raises(RuntimeError, match="eduplus2 schema drift"):
+        await runner.verify()
+
+
 async def test_lifecycle_migration_failure_rolls_back_inbox_and_history(pg_dsn):
     runner_type = module("migrations.runner").MigrationRunner
 
     class FailingRunner(runner_type):
         def _extension_migrations(self):
-            return super()._extension_migrations() + [
-                ("0008_forced_failure", "SELECT 1/0;")
-            ]
+            return super()._extension_migrations() + [("0008_forced_failure", "SELECT 1/0;")]
 
     with pytest.raises(psycopg.errors.DivisionByZero):
         await FailingRunner(pg_dsn).apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
-        inbox = await (
-            await c.execute("SELECT to_regclass('eduplus2.lifecycle_inbox')")
-        ).fetchone()
+        inbox = await (await c.execute("SELECT to_regclass('eduplus2.lifecycle_inbox')")).fetchone()
         history = await (
             await c.execute("SELECT to_regclass('eduplus2.schema_history')")
         ).fetchone()

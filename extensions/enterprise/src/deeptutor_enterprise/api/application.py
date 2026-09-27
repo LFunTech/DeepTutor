@@ -80,6 +80,8 @@ class AuthenticationMiddleware:
             "/api/v1/auth/eduplus2/exchange",
             "/api/v1/auth/eduplus2/revocations",
             "/api/v1/eduplus2/webhooks",
+            "/api/v1/tms/school-bootstrap/status",
+            "/api/v1/tms/school-bootstrap/activate",
             "/api/v1/auth/eduplus2/demo/start",
             "/api/v1/auth/eduplus2/demo/callback",
             "/api/v1/auth/eduplus2/demo/result",
@@ -404,6 +406,7 @@ def create_application(enterprise):
 
     eduplus2_auth = APIRouter()
     eduplus2_audit = APIRouter()
+    tms_bootstrap = APIRouter()
     conversation_test = APIRouter()
     health = APIRouter()
 
@@ -426,7 +429,9 @@ def create_application(enterprise):
         except PermissionError as exc:
             reason = str(exc)
             if "rate limited" in reason:
-                return JSONResponse({"detail": "Authentication temporarily limited"}, status_code=429)
+                return JSONResponse(
+                    {"detail": "Authentication temporarily limited"}, status_code=429
+                )
             if "tenant mismatch" in reason:
                 return JSONResponse({"detail": "Operation conflict"}, status_code=409)
             if "azp is not registered" in reason or "inactive" in reason:
@@ -477,7 +482,7 @@ def create_application(enterprise):
 
     @eduplus2_auth.post("/eduplus2/webhooks")
     async def eduplus2_webhook(request: Request):
-        """接收已验签的控制台 mock；真实生命周期事件尚未开放确认。"""
+        """验签后隔离 mock；正式事件须显式开启并事务持久入队。"""
 
         secret = str(getattr(enterprise, "eduplus2_webhook_secret", "") or "")
         if not secret:
@@ -510,6 +515,7 @@ def create_application(enterprise):
             ).hexdigest()
             previous_matches = hmac.compare_digest(previous_expected, signature[7:])
         if not (current_matches or previous_matches):
+            enterprise.webhook_metrics["signature_rejections"] += 1
             return JSONResponse({"detail": "Authentication required"}, status_code=401)
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -531,9 +537,9 @@ def create_application(enterprise):
             LifecycleConflict,
             LifecycleInvalid,
             LifecycleWrongApp,
-            ingest_lifecycle_event,
             parse_lifecycle_event,
         )
+        from ..eduplus2.webhook_authority import ingest_authoritative_webhook
 
         try:
             event = parse_lifecycle_event(
@@ -542,12 +548,11 @@ def create_application(enterprise):
                 app_id=getattr(enterprise, "eduplus2_webhook_app_id", 0),
                 digest_key=getattr(enterprise, "eduplus2_webhook_inbox_digest_key", ""),
             )
-            await ingest_lifecycle_event(
-                enterprise, event, delivery_timestamp=int(timestamp)
-            )
+            await ingest_authoritative_webhook(enterprise, event, delivery_timestamp=int(timestamp))
         except LifecycleWrongApp:
             return JSONResponse({"detail": "Forbidden"}, status_code=403)
         except LifecycleConflict:
+            enterprise.webhook_metrics["delivery_conflicts"] += 1
             logging.getLogger(__name__).warning(
                 "lifecycle webhook conflict; no business state changed"
             )
@@ -555,8 +560,108 @@ def create_application(enterprise):
         except LifecycleInvalid:
             return JSONResponse({"detail": "Invalid request"}, status_code=422)
         except (RuntimeError, TimeoutError, psycopg.Error):
+            enterprise.webhook_metrics["delivery_failures"] += 1
+            logging.getLogger(__name__).warning(
+                "lifecycle webhook transaction failed; sender must retry"
+            )
             return JSONResponse({"detail": "Lifecycle receiver unavailable"}, status_code=503)
         return Response(status_code=204)
+
+    async def _tms_bootstrap_identity(request: Request):
+        from ..management.tms_identity import (
+            TmsAuthenticationDenied,
+            trusted_tms_identity_from_token,
+        )
+
+        bearer = request.headers.get("authorization", "")
+        if not bearer.lower().startswith("bearer "):
+            raise TmsAuthenticationDenied("TMS bearer token is missing")
+        return await trusted_tms_identity_from_token(enterprise, bearer[7:])
+
+    @tms_bootstrap.get("/school-bootstrap/status")
+    async def tms_bootstrap_status(request: Request):
+        from ..management.actor_handoff import find_pending_actor_candidates
+        from ..management.authorization import (
+            ManagementAuthorizationDenied,
+            require_management_permission,
+        )
+        from ..management.tms_identity import TmsAuthenticationDenied, TmsSchoolDenied
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            identity = await _tms_bootstrap_identity(request)
+            candidates = await find_pending_actor_candidates(enterprise, identity)
+            if candidates:
+                return JSONResponse({"status": "ready_to_activate"}, headers=headers)
+            async with enterprise.db.transaction(
+                TenantScope(str(identity.school_id), "@tms-bootstrap-status")
+            ) as c:
+                try:
+                    await require_management_permission(
+                        c, identity, "tenant.tms.access", target_school_id=identity.school_id
+                    )
+                except ManagementAuthorizationDenied:
+                    return JSONResponse({"status": "awaiting_actor"}, headers=headers)
+            return JSONResponse({"status": "active"}, headers=headers)
+        except TmsAuthenticationDenied:
+            return JSONResponse(
+                {"detail": "Authentication required"}, status_code=401, headers=headers
+            )
+        except TmsSchoolDenied:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403, headers=headers)
+        except (RuntimeError, TimeoutError, psycopg.Error):
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503, headers=headers)
+
+    @tms_bootstrap.post("/school-bootstrap/activate")
+    async def tms_bootstrap_activate(request: Request):
+        from ..management.actor_activation import activate_first_school_administrator
+        from ..management.actor_handoff import find_pending_actor_candidates
+        from ..management.authorization import (
+            ManagementAuthorizationDenied,
+            require_management_permission,
+        )
+        from ..management.tms_identity import TmsAuthenticationDenied, TmsSchoolDenied
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            identity = await _tms_bootstrap_identity(request)
+            candidates = await find_pending_actor_candidates(enterprise, identity)
+            if not candidates:
+                # 本人重试已提交的激活时保持幂等，但不为其他学校成员返回成功。
+                async with enterprise.db.transaction(
+                    TenantScope(str(identity.school_id), "@tms-bootstrap-replay")
+                ) as c:
+                    try:
+                        await require_management_permission(
+                            c, identity, "tenant.tms.access", target_school_id=identity.school_id
+                        )
+                    except ManagementAuthorizationDenied:
+                        return JSONResponse(
+                            {"detail": "Activation unavailable"}, status_code=409, headers=headers
+                        )
+                return JSONResponse(
+                    {"status": "active", "policy_version": identity.policy_version},
+                    headers=headers,
+                )
+            request_id = request.headers.get("x-request-id", "").strip() or str(uuid.uuid4())
+            result = await activate_first_school_administrator(
+                enterprise, identity, event_id=candidates[0].event_id, request_id=request_id
+            )
+            return JSONResponse(
+                {"status": "active", "policy_version": result.policy_version}, headers=headers
+            )
+        except TmsAuthenticationDenied:
+            return JSONResponse(
+                {"detail": "Authentication required"}, status_code=401, headers=headers
+            )
+        except TmsSchoolDenied:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403, headers=headers)
+        except ManagementAuthorizationDenied:
+            return JSONResponse(
+                {"detail": "Activation unavailable"}, status_code=409, headers=headers
+            )
+        except (RuntimeError, TimeoutError, psycopg.Error):
+            return JSONResponse({"detail": "Service unavailable"}, status_code=503, headers=headers)
 
     @eduplus2_auth.get("/auth/eduplus2/demo/start", name="eduplus2_demo_start")
     async def eduplus2_demo_start(request: Request):
@@ -807,6 +912,7 @@ def create_application(enterprise):
         routers=(
             (auth, "/api/auth"),
             (eduplus2_auth, "/api/v1"),
+            (tms_bootstrap, "/api/v1/tms"),
             (eduplus2_audit, "/api/v1/enterprise/audit/eduplus2"),
             (conversation_test, "/api/v1/enterprise/conversation-test"),
             # Next/AppShell 在登录前会读取界面语言和主题。只挂载核心的

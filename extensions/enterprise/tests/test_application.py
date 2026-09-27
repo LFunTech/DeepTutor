@@ -274,8 +274,8 @@ async def test_eduplus2_signed_webhook_demo_only_checks_delivery_without_state_c
     assert event_count["event_count"] == 0
 
 
-async def test_eduplus2_real_webhook_persists_only_safe_pending_fact_before_ack(app, caplog):
-    """真实事件 2xx 仅代表安全入队，不代表学校或管理员已开通。"""
+async def test_eduplus2_real_webhook_persists_safe_school_projection_before_ack(app, caplog):
+    """真实事件 2xx 包含安全学校投影，但不代表资源或管理员已开通。"""
 
     from deeptutor_enterprise.scope import TenantScope
 
@@ -355,9 +355,7 @@ async def test_eduplus2_real_webhook_persists_only_safe_pending_fact_before_ack(
         )
     assert duplicate.status_code == 204
     assert conflict.status_code == 409
-    assert any(
-        "lifecycle webhook conflict" in record.message for record in caplog.records
-    )
+    assert any("lifecycle webhook conflict" in record.message for record in caplog.records)
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-audit")
     async with enterprise.db.transaction(scope) as c:
         event = await (
@@ -383,10 +381,17 @@ async def test_eduplus2_real_webhook_persists_only_safe_pending_fact_before_ack(
         ).fetchone()
         target = await (
             await c.execute(
-                "SELECT generation,eligibility,proof_expires_at "
-                "FROM eduplus2.lifecycle_targets WHERE tenant_id=%s "
+                "SELECT generation,eligibility,school_id FROM eduplus2.webhook_school_state "
+                "WHERE tenant_id=%s "
                 "AND external_tenant_id=%s AND external_app_id=%s",
                 (enterprise.deployment.tenant_id, 10001, 51),
+            )
+        ).fetchone()
+        school = await (
+            await c.execute(
+                "SELECT t.external_eligibility,t.provisioning_status,t.local_enabled "
+                "FROM enterprise.tenants t JOIN oms.school_bindings b ON b.tenant_id=t.id "
+                "WHERE b.eduplus_tenant_id=10001"
             )
         ).fetchone()
     assert event == {
@@ -395,11 +400,17 @@ async def test_eduplus2_real_webhook_persists_only_safe_pending_fact_before_ack(
         "external_app_id": 51,
         "external_subscription_id": 20001,
         "actor_subject": "synthetic-keycloak-sub",
-        "processing_status": "pending_binding",
+        "processing_status": "verified",
     }
     assert tenant["external_eligibility"] == "not_required"
     assert count["n"] == 1
-    assert target == {"generation": 1, "eligibility": "unknown", "proof_expires_at": None}
+    assert target["generation"] == 1
+    assert target["eligibility"] == "allowed"
+    assert school == {
+        "external_eligibility": "allowed",
+        "provisioning_status": "pending",
+        "local_enabled": False,
+    }
     assert "must-not-persist-this-secret" not in json.dumps(event)
 
 
@@ -442,7 +453,7 @@ async def test_eduplus2_real_webhook_stays_closed_without_receiver_rollout_gate(
 
 
 async def test_eduplus2_real_webhook_does_not_ack_failed_inbox_transaction(app, monkeypatch):
-    from deeptutor_enterprise.eduplus2 import lifecycle
+    from deeptutor_enterprise.eduplus2 import webhook_authority
 
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
@@ -453,14 +464,14 @@ async def test_eduplus2_real_webhook_does_not_ack_failed_inbox_transaction(app, 
     async def failed_ingest(*args, **kwargs):
         raise RuntimeError("synthetic storage unavailable")
 
-    monkeypatch.setattr(lifecycle, "ingest_lifecycle_event", failed_ingest)
+    monkeypatch.setattr(webhook_authority, "ingest_authoritative_webhook", failed_ingest)
     ts = str(int(time.time()))
     body = json.dumps(
         {
             "event": "subscription.created",
             "event_id": "synthetic-failed-inbox-event",
             "tenant": {"id": 10001},
-            "app": {"id": 51},
+            "app": {"id": 51, "client_id": "synthetic-school-client"},
             "subscription": {"id": 20001, "status": "active"},
         },
         separators=(",", ":"),
@@ -652,12 +663,13 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
     """新增 core 管理 router 时不能通过企业装配无意暴露。"""
 
     paths = set(app.openapi()["paths"])
-    assert {path for path in paths if path.startswith("/api/settings")} == {
-        "/api/settings/ui"
+    assert {path for path in paths if path.startswith("/api/settings")} == {"/api/settings/ui"}
+    assert {path for path in paths if path.startswith("/api/v1/tms/")} == {
+        "/api/v1/tms/school-bootstrap/status",
+        "/api/v1/tms/school-bootstrap/activate",
     }
     for prefix in (
         "/api/skills",
-        "/api/v1/tms",
         "/api/v1/oms",
         "/api/space/mcp",
         "/api/partners",
@@ -734,9 +746,7 @@ async def test_m1_fixed_tenant_rejects_b2_escape_attempts(app):
 
     foreign_tenant = str(uuid.uuid4())
     foreign_resource_id = "res_cross_tenant_b2"
-    async with enterprise.db.transaction(
-        TenantScope(foreign_tenant, admin_identity.user_id)
-    ) as c:
+    async with enterprise.db.transaction(TenantScope(foreign_tenant, admin_identity.user_id)) as c:
         await c.execute(
             "INSERT INTO enterprise.tenants"
             "(id,external_eligibility,local_enabled,provisioning_status,"
@@ -922,7 +932,9 @@ async def test_upload_intent_completion_reports_missing_object_as_incomplete_upl
     """完成 pending intent 前必须真实看到对象；不能把未上传误报为 intent 不存在。"""
 
     enterprise = app.state.enterprise
-    token = await enterprise.identity.login("admin", "long-password-1", client="resource-incomplete")
+    token = await enterprise.identity.login(
+        "admin", "long-password-1", client="resource-incomplete"
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="https://school.example",
@@ -1049,8 +1061,6 @@ async def test_conversation_test_options_are_authenticated_and_non_secret(app, m
         assert "endpoint" not in serialized
 
 
-
-
 async def test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enabled(
     app,
 ):
@@ -1074,6 +1084,7 @@ async def test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enab
     assert kb["disabled"] is True
     assert "知识库检索" in kb["description"]
 
+
 async def test_conversation_test_options_show_skill_names_as_labels(app):
     """普通测试页的 Skills 选项必须展示可识别的 skill 名称，而不是长说明文案。"""
 
@@ -1094,9 +1105,7 @@ async def test_conversation_test_options_show_skill_names_as_labels(app):
     assert "Design and author DeepTutor skills" in skill_creator["description"]
 
 
-async def test_enterprise_voice_stt_is_available_to_authenticated_test_page(
-    app, monkeypatch
-):
+async def test_enterprise_voice_stt_is_available_to_authenticated_test_page(app, monkeypatch):
     """普通测试页语音输入应能用同一企业 Bearer token 调用服务端转写。"""
 
     from deeptutor.api.routers import voice as voice_router
@@ -1543,9 +1552,7 @@ async def test_enterprise_turn_environment_required_kb_unavailable_cases_fail_cl
     assert exc.value.error_code == "knowledge_base_unavailable"
 
 
-async def test_enterprise_turn_environment_loads_multi_model_catalog_from_pg(
-    app, monkeypatch
-):
+async def test_enterprise_turn_environment_loads_multi_model_catalog_from_pg(app, monkeypatch):
     """模型目录应来自 PG，DB 保存多个 profile 的 secret ref，而不是单本地 key。"""
 
     from deeptutor_enterprise.context import identity_context
@@ -1625,6 +1632,7 @@ async def test_websocket_auth_refresh_updates_copied_turn_execution_context(app,
     from deeptutor_enterprise.context import current_token, identity_context
 
     enterprise = app.state.enterprise
+
     class FakeEduPlus2:
         async def ensure_token_allowed(self, token):
             return None
@@ -1707,9 +1715,7 @@ async def test_enterprise_production_ws_rejects_legacy_payload_and_verifies_reso
     """放宽生产 WS 附件上传或跳过 resource_id 绑定校验时，本测试应失败。"""
 
     enterprise = app.state.enterprise
-    token = await enterprise.identity.login(
-        "admin", "long-password-1", client="resource-policy"
-    )
+    token = await enterprise.identity.login("admin", "long-password-1", client="resource-policy")
     identity = await enterprise.identity.authenticate(token)
 
     from deeptutor_enterprise.api.application import SocketAuthentication
@@ -1789,7 +1795,9 @@ async def test_enterprise_production_ws_rejects_cross_owner_resource_refs(app):
     from deeptutor.runtime.externalized_providers import ObjectBlobRef
 
     enterprise = app.state.enterprise
-    admin_token = await enterprise.identity.login("admin", "long-password-1", client="resource-owner")
+    admin_token = await enterprise.identity.login(
+        "admin", "long-password-1", client="resource-owner"
+    )
     await enterprise.identity.create_user(admin_token, "resource-other", "long-password-2")
     other_token = await enterprise.identity.login(
         "resource-other", "long-password-2", client="resource-owner"

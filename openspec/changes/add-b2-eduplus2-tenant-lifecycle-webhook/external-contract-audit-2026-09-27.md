@@ -1,5 +1,7 @@
 # 真实订阅 Webhook 权威契约核对（2026-09-27）
 
+> **后续用户决策再次改变权威边界**：已验签、目标应用匹配的 Webhook 业务数据直接用于学校接入和生命周期，不再用 online resolve 二次核验；本文件此前对在线方案的论证仅为历史背景。无来源版本、漏送和迟到风险并未因此消失，见最新 proposal/design/spec/tasks。
+
 > 本页保留重订前的只读合同与已部署 test 环境快照。用户随后已批准 DeepTutor-only 重订版，本地实现进度见 `implementation-evidence.md`；下文“尚待审阅/实施”“真实事件继续 503”描述的是核对当时及尚未更新的 test 部署，不代表当前工作区没有实现代码。
 
 > 后续用户决策进一步将 `subscription.created` 事件所属订阅的当前性与迟到旧事件处理归 EduPlus2 侧；本页当时提出的“DeepTutor 必须另查当前订阅 ID 才能激活”已不再是现行实施门禁。文档保留当时接口能力的事实核对；现行授权规则见本 change 的 proposal/design/spec/tasks 与管理授权 change。该发送端保证尚未由本仓库真实联调证实。
@@ -29,3 +31,7 @@
 DeepTutor-only 重订草案选择把事件作为通知，以已验证绑定 + online resolve 当前态核验、持久重试和保守禁用代替“版本化事件投影”；但现有 resolve 在停用时缺少完整目标快照，且不返回当前订阅 ID。前者只可对**事先已绑定**的 client 保守禁用；后者使旧 created actor 的首位激活保持待核验。不能把 SHA-256、投递时间或人工学校授权当作缺失的权威版本。
 
 核对点：本仓库 `extensions/enterprise/src/deeptutor_enterprise/api/application.py`、`eduplus2/client.py`、`eduplus2/service.py`；EduPlus2 仓库**只读** `backend/src/main/java/com/eduplus/dto/webhook/SubscriptionWebhookRequest.java`、`module/openapi/oauthclient/OAuthClientResolveService.java`、`module/registry/controller/AppSubscriptionCheckController.java`。测试与 test 数据库证据见 `implementation-evidence.md`。
+
+## 同日补充：公开文档与真实投递的证据边界
+
+再次只读获取官方 [`subscription.created` 文档](https://eduplus-test.f123.pub/docs/webhook/event-types/subscription-created/)：示例有 `subscription.id`、`actor.type=user` 与 `actor.user_id`，但字段说明表未声明 `actor.user_id` 必填，也未明确它与登录令牌 `sub` 的等价关系。故本系统只保存待核验候选，不能依据文档示例自动创建 TMS 管理员。`rc.50` 的真实重试在接收开关处返回 503，**尚未**产生可供核对的脱敏真实 payload 投影或在线解析/身份匹配证据；任务 1.1、2.2a 和 3.1 仍未验收。

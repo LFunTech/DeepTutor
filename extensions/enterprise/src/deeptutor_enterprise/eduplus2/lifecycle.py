@@ -1,4 +1,4 @@
-"""订阅 Webhook 的安全入队；事件内容不直接决定学校资格。"""
+"""订阅 Webhook 事件解析与历史在线对账兼容；正式接收使用 webhook_authority。"""
 
 from __future__ import annotations
 
@@ -49,6 +49,8 @@ class LifecycleEvent:
     client_id: str
     actor_type: str
     actor_subject: str
+    tenant_type: str
+    school_code: str
     semantic_digest: str
 
 
@@ -88,6 +90,10 @@ def parse_lifecycle_event(
     if not all(isinstance(value, dict) for value in (tenant, app, subscription)):
         raise LifecycleInvalid("missing event target")
     tenant_id = _positive_id(tenant.get("id"))
+    tenant_type = _safe_text(tenant.get("tenant_type"), max_length=32)
+    if tenant_type and tenant_type != "school":
+        raise LifecycleInvalid("event target is not a school")
+    school_code = _safe_text(tenant.get("code"), max_length=128)
     external_app_id = _positive_id(app.get("id"))
     subscription_id = _positive_id(subscription.get("id"))
     if external_app_id != app_id:
@@ -119,6 +125,8 @@ def parse_lifecycle_event(
         "client_id": client_id,
         "actor_type": actor_type,
         "actor_subject": actor_subject,
+        "tenant_type": tenant_type,
+        "school_code": school_code,
     }
     canonical = json.dumps(projection, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     digest = hmac.new(digest_key.encode("utf-8"), canonical.encode("ascii"), hashlib.sha256)
@@ -132,12 +140,14 @@ def parse_lifecycle_event(
         client_id=client_id,
         actor_type=actor_type,
         actor_subject=actor_subject,
+        tenant_type=tenant_type,
+        school_code=school_code,
         semantic_digest=digest.hexdigest(),
     )
 
 
 async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_timestamp: int):
-    """只有事务提交才返回；允许未知学校安全入队，但不授予资格。"""
+    """历史通知/在线核验兼容入口；正式 HTTP Webhook 不再调用。"""
 
     digest_key = str(getattr(enterprise, "eduplus2_webhook_inbox_digest_key", "") or "")
     signing_secrets = (
@@ -178,6 +188,11 @@ async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_
             )
         ).fetchone()
         if inserted:
+            # 事件只是通知，但旧在线解析缓存不能跨越本地 generation 继续使用。
+            await c.execute(
+                "DELETE FROM eduplus2.resolve_cache WHERE tenant_id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
             if event.client_id:
                 conflicting_client = await (
                     await c.execute(
@@ -351,9 +366,9 @@ async def _reconcile_lifecycle_target_locked(
                 ),
             )
         ).fetchall()
-        checked_at = (
-            await (await c.execute("SELECT clock_timestamp() AS checked_at")).fetchone()
-        )["checked_at"]
+        checked_at = (await (await c.execute("SELECT clock_timestamp() AS checked_at")).fetchone())[
+            "checked_at"
+        ]
     if not target:
         return "missing"
     if not binding:
@@ -371,9 +386,7 @@ async def _reconcile_lifecycle_target_locked(
         try:
             if resolver is None:
                 raise RuntimeError("online resolver is unavailable")
-            result = await resolver.resolve_client(
-                client_id, expected_tenant_id=external_tenant_id
-            )
+            result = await resolver.resolve_client(client_id, expected_tenant_id=external_tenant_id)
         except PermissionError as exc:
             if str(exc) in _KNOWN_INACTIVE:
                 negatives += 1
@@ -399,7 +412,9 @@ async def _reconcile_lifecycle_target_locked(
         result_status = "denied"
     proof_ttl = int(getattr(enterprise, "eduplus2_lifecycle_proof_ttl_seconds", 30) or 30)
     proof_ttl = max(1, min(proof_ttl, 60))
-    proof_expires_at = checked_at + timedelta(seconds=proof_ttl) if result_status == "allowed" else None
+    proof_expires_at = (
+        checked_at + timedelta(seconds=proof_ttl) if result_status == "allowed" else None
+    )
 
     async with enterprise.db.transaction(scope) as c:
         current_time = (
@@ -470,8 +485,11 @@ async def _reconcile_lifecycle_target_locked(
             "WHERE tenant_id=%s AND external_tenant_id=%s AND external_app_id=%s "
             "AND processing_status IN ('pending_binding','pending_reconcile','retry')",
             (
-                "verified" if result_status == "allowed" else "denied"
-                if result_status == "denied" else "retry",
+                "verified"
+                if result_status == "allowed"
+                else "denied"
+                if result_status == "denied"
+                else "retry",
                 result_status,
                 result_status,
                 enterprise.deployment.tenant_id,
@@ -491,6 +509,8 @@ async def _reconcile_lifecycle_target_locked(
                 "WHERE i.tenant_id=%s AND i.external_tenant_id=%s AND i.external_app_id=%s "
                 "AND i.event_type='subscription.created' AND i.actor_type='user' "
                 "AND i.actor_subject<>'' "
+                "AND EXISTS (SELECT 1 FROM enterprise.tenants t "
+                "WHERE t.id=%s AND NOT t.bootstrap_completed) "
                 "ON CONFLICT (tenant_id,event_id) DO NOTHING",
                 (
                     binding["tenant_id"],
@@ -499,6 +519,7 @@ async def _reconcile_lifecycle_target_locked(
                     enterprise.deployment.tenant_id,
                     external_tenant_id,
                     external_app_id,
+                    binding["tenant_id"],
                 ),
             )
     return result_status
