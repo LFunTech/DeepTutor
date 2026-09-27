@@ -50,7 +50,7 @@
 - [x] D6.1 在 `docs-site/` 增加独立、可复现的静态镜像构建，固定 `/docs/` 基础路径与 test-cn HTTPS origin；验证产物首页、静态资源和无内部演示内容。
 - [x] D6.2 Woodpecker 增加与 `compile-frontend-test-cn` 并行的 `compile-docs-test-cn`，test-cn 预部署门禁解析并校验文档 digest；其他环境的依赖/secret/路由不变。
 - [x] D6.3 test-cn 添加独立 docs Deployment/Service/NetworkPolicy 和同一 Ingress 的 `/docs` 路由；缺失或跨环境 docs digest 在调用 `kubectl` 前失败，等待 docs rollout。
-- [ ] D6.4 test-cn 经真实 HTTPS 验证 `/docs/` 首页和静态资源，保存脱敏 evidence；未运行 test-cn 内部 tag 和真实集群前保持未验证状态。
+- [x] D6.4 test-cn 经真实 HTTPS 验证 `/docs/` 首页和静态资源，保存脱敏 evidence；Woodpecker #64 与独立公网复验均通过，结果记录于 execution evidence。
 
 ## 验证与归档准备
 

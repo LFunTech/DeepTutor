@@ -2393,3 +2393,11 @@ OpenSpec validate --all --strict -> 28 passed, 0 failed
 实现改为：`test-cn` 从 Woodpecker tag event、canonical tag、环境 registry/ref 和检出提交 SHA 生成内部 gate report；不读取静态 `protected_ref` JSON、不要求 `VCS_TAG_VERIFY_TOKEN`，未知的 tag object SHA/创建者/审批信息不伪造。静态测试 bootstrap 脚本也不再生成声称 `protected_ref=true` 的元数据。预发/生产环境仍需可信元数据，且 `--internal-test` 不能用于它们。
 
 本地验证：企业回归 `504 passed, 3 skipped`；G1 定向 `28 passed`；Woodpecker strict lint 有效；OpenSpec strict validation 有效；在没有 `TRUSTED_TRIGGER_METADATA_JSON` 的本地 shell 模拟中，`validate-release-trigger` 和 `prepare-release-metadata` 两段均产出 `ready=true`、`target_env_id=test-cn`、`trust_source=woodpecker-internal-test`。真实新标签流水线结果另行记录；不得将这些本地结果视作已部署。
+
+### 2026-09-27 test-cn rc.53 内部标签发布结果
+
+提交 `313cd4b9e90310ab6433447161a343cd959982f1` 与新 tag `deploy/test-cn/v1.4.0-rc.53` 已推送，Woodpecker pipeline #64 最终为 `success`。`validate-release-trigger`、`prepare-release-metadata`、构建、Secret preflight、镜像 digest 检查和 `deploy-test-cn` 均为 `success`；旧的 rc.52 tag 未移动。test-cn migration Job `dt-migrate-test-cn-v1-4-0-rc-53` 为 `Complete 1/1`；backend 与 docs rollout 均完成。backend 当前 `1/1`，digest 为 `runtime@sha256:b266c5a86144f1b4dbd76bf87eaa61f4150795b107cc99d796f8cca35b9913e7`；docs 当前 `1/1`，digest 为 `docs@sha256:ec12277a426406dc931c47f8129b757e4d2968c6559114b30f67e0b383460ac9`。
+
+发布步骤运行 `sync-test-webhook-secret.py --retire-legacy-app-id` 并报告 `test-cn Webhook runtime keys synchronized`。部署后只读检查 `deeptutor-runtime-secrets` 的**键名**：`DT_EDUPLUS2_WEBHOOK_SECRET` 和 `DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY` 存在，`DT_EDUPLUS2_WEBHOOK_APP_ID` 不存在；未输出任何 Secret 值。
+
+独立从公网 HTTPS 再次运行 `check-docs-site.py`：`/docs/` 返回 200，引用资源 `/docs/assets/css/styles.e2e1390e.css` 返回 200，`ready=true`，目标环境 `test-cn`。这完成 D6.4 的真实 Ingress 文档验证；**不等于** EduPlus2 真实订阅 Webhook 已重试或 B2 Webhook 端到端任务已完成。
