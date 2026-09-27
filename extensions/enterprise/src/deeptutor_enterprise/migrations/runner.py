@@ -162,6 +162,57 @@ class MigrationRunner(CoreMigrationRunner):
         }
         if not required_lifecycle_indexes.issubset({row[0] for row in indexes}):
             raise RuntimeError("eduplus2 schema drift: lifecycle indexes missing")
+        proof_column = await (
+            await c.execute(
+                "SELECT a.atttypid='bigint'::regtype,a.attnotnull "
+                "FROM pg_attribute a "
+                "WHERE a.attrelid='eduplus2.lifecycle_targets'::regclass "
+                "AND a.attname='binding_version' AND NOT a.attisdropped"
+            )
+        ).fetchone()
+        proof_constraint = await (
+            await c.execute(
+                "SELECT convalidated FROM pg_constraint "
+                "WHERE conrelid='eduplus2.lifecycle_targets'::regclass "
+                "AND conname='lifecycle_allowed_requires_binding_version' "
+                "AND contype='c'"
+            )
+        ).fetchone()
+        if proof_column != (True, True) or proof_constraint != (True,):
+            raise RuntimeError("eduplus2 schema drift: lifecycle binding proof missing")
+        actor_column = await (
+            await c.execute(
+                "SELECT a.atttypid='timestamp with time zone'::regtype "
+                "FROM pg_attribute a "
+                "WHERE a.attrelid='eduplus2.lifecycle_actor_candidates'::regclass "
+                "AND a.attname='resolved_at' AND NOT a.attisdropped"
+            )
+        ).fetchone()
+        actor_constraints = await (
+            await c.execute(
+                "SELECT conname,convalidated FROM pg_constraint "
+                "WHERE conrelid='eduplus2.lifecycle_actor_candidates'::regclass "
+                "AND conname IN ('lifecycle_actor_candidate_status_check',"
+                "'lifecycle_actor_candidate_resolution_check')"
+            )
+        ).fetchall()
+        actor_trigger = await (
+            await c.execute(
+                "SELECT tgenabled FROM pg_trigger "
+                "WHERE tgrelid='eduplus2.lifecycle_actor_candidates'::regclass "
+                "AND tgname='guard_lifecycle_actor_candidate' AND NOT tgisinternal"
+            )
+        ).fetchone()
+        if (
+            actor_column != (True,)
+            or dict(actor_constraints)
+            != {
+                "lifecycle_actor_candidate_status_check": True,
+                "lifecycle_actor_candidate_resolution_check": True,
+            }
+            or actor_trigger != ("O",)
+        ):
+            raise RuntimeError("eduplus2 schema drift: lifecycle actor terminal state missing")
 
     def _oms_migrations(self):
         return [

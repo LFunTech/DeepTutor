@@ -54,7 +54,7 @@ OMS SHALL 只从可信 OMS 登录登记的待授权平台主体或单独核实�
 
 ### Requirement: 首位 TMS 管理员仅可由真实订阅事件 actor 一次性引导并本人激活
 
-TMS SHALL 仅在身份绑定有效、学校业务状态可用且该校尚无历史首位引导记录时执行一次性管理员开通；OMS MUST NOT 列出、选择、创建或审批任何学校账号。系统 MUST 只从目标应用、学校/订阅绑定、签名、时效和事件 ID 均核验通过的**真实非 mock** `subscription.created` 提取 `actor.type=user` 的非空 `actor.user_id`，以配置的 issuer 与 Keycloak User ID 登记待激活本校管理员身份。此身份指定是 **DeepTutor Enterprise 的产品授权规则**，不是 EduPlus2 外部权限判定；EduPlus2 的管理员角色、`eit=adm`、学校码、Webhook mock 或前端选择 MUST NOT 授权。候选本人完成 TMS 登录并精确匹配 `(issuer,sub,school)` 后，Enterprise 程序在同一事务重验事件栅栏、学校绑定/状态和版本，幂等激活唯一 `school_admin` assignment 与脱敏审计。`actor` 缺失/system/null、身份不匹配、旧/重复事件或恢复/重订 MUST NOT 产生新可用管理员；不允许通过无管理员现状重播历史事件复活已撤销权限。真实事件与本人激活尚未验收时开通写入口 MUST 保持关闭；后续学校角色只由本校 TMS 管理。
+TMS SHALL 仅在身份绑定有效、学校业务状态可用且该校尚无历史首位引导记录时执行一次性管理员开通；OMS MUST NOT 列出、选择、创建或审批任何学校账号。系统 MUST 只从目标应用、学校绑定、订阅 ID 结构、签名、时效和事件 ID 均核验通过的**真实非 mock** `subscription.created` 提取 `actor.type=user` 的非空 `actor.user_id`，以配置的 issuer 与 Keycloak User ID 登记待激活本校管理员身份。事件 `subscription.id` MUST 用于审计、幂等和冲突检查；本阶段不要求 DeepTutor 另查当前订阅 ID 作为登录或首位激活条件，事件当前性及迟到旧事件处理按用户决策由 EduPlus2 负责。此身份指定是 **DeepTutor Enterprise 的产品授权规则**，不是 EduPlus2 外部权限判定；EduPlus2 的管理员角色、`eit=adm`、学校码、Webhook mock 或前端选择 MUST NOT 授权。候选本人完成 TMS 登录并精确匹配 `(issuer,sub,school)` 后，Enterprise 程序在同一事务重验当前学校—应用有效、事件栅栏、学校绑定/状态和版本，幂等激活唯一 `school_admin` assignment 与脱敏审计。`actor` 缺失/system/null、身份不匹配、重复事件或恢复/重订 MUST NOT 绕过一次性栅栏产生新可用管理员；不允许通过无管理员现状重播已消费或已撤销的历史引导复活权限。真实事件与本人激活尚未验收时开通写入口 MUST 保持关闭；后续学校角色只由本校 TMS 管理。
 
 #### Scenario: 重放或非 actor 本人尝试激活
 - **WHEN** 重复/恢复订阅事件到达，或与事件 `actor.user_id` 不同的主体登录 TMS

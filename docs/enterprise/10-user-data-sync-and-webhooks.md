@@ -126,7 +126,7 @@ POST /api/v1/eduplus2/webhooks
 
 当前企业组合已提供此路径的**已验签控制台 mock 接收**：读取 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`（或本地兜底 `DT_EDUPLUS2_WEBHOOK_SECRET`），按 EduPlus2 的 `timestamp.event.raw-body` 三段式 HMAC-SHA256 校验 `X-EduPlus-*` 头；仅 `X-EduPlus-Mock: true` 且 `event_id=mock_...` 的 demo 请求返回 204，不修改租户状态。2026-09-26 已在 `test-cn` HTTPS URL 由 EduPlus2 `智能体基座` 控制台实际执行 8 类订阅事件 demo，发送端投递记录均为 HTTP 204；此证据只覆盖 mock URL 联调。
 
-2026-09-27 本地工作区另实现了**默认关闭**的真实 `subscription.*` 可靠入队与在线核验切片。仅在 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true` 且配置目标应用 ID、独立 inbox 摘要密钥和 online resolve 后，真实事件才可能事务入队返回 204；学校资格仍需经已验证绑定和当前状态短时证明，首位管理员候选仍待当前订阅 ID 证明。**test-cn 尚未部署此版，实际真实事件仍 503**；不得因代码存在就启用正式 Webhook、重试首校或声称学校已接入。Secret 不写入本文或日志，详情见对应 OpenSpec `implementation-evidence.md`。
+2026-09-27 本地工作区另实现了**默认关闭**的真实 `subscription.*` 可靠入队与在线核验切片。仅在 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true` 且配置目标应用 ID、独立 inbox 摘要密钥和 online resolve 后，真实事件才可能事务入队返回 204；学校资格仍需经已验证绑定和当前状态短时证明。证明绑定 `oms.school_bindings.version`，重绑后旧证明失效；证明时效以 PG `clock_timestamp()` 为准。首位管理员候选仍待真实事件、可信本人同校登录和本地一次性引导验收；事件当前订阅性按用户决策由 EduPlus2 侧负责，本产品不另查当前订阅 ID。**test-cn 尚未部署此版，实际真实事件仍 503**；不得因代码存在就启用正式 Webhook、重试首校或声称学校已接入。Secret 不写入本文或日志，详情见对应 OpenSpec `implementation-evidence.md`。
 
 `.secrets/.test-secrets` 仅是本地测试输入，不会自动同步至测试 K8s。`test-cn` 受保护 tag 发布步骤从 Woodpecker 仓库 Secret `dt_test_cn_eduplus2_webhook_secret` 注入密钥，仅同步目标命名空间运行时 Secret 的 `DT_EDUPLUS2_WEBHOOK_SECRET` 字段后才继续部署；后端通过已有 `envFrom` 和 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`/同名变量读取。应核对 Woodpecker、K8s 与 EduPlus2 对应 Webhook 使用同一密钥；不能靠本地文件存在便认定公网 URL 可验签。
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 import hashlib
 import hmac
 import json
@@ -202,7 +202,7 @@ async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_
                 ON CONFLICT (tenant_id,external_tenant_id,external_app_id)
                 DO UPDATE SET generation=eduplus2.lifecycle_targets.generation+1,
                               eligibility='unknown',proof_checked_at=NULL,
-                              proof_expires_at=NULL,resolve_etag='',
+                              proof_expires_at=NULL,resolve_etag='',binding_version=0,
                               retry_count=0,last_error_code='',
                               updated_at=now()
                 """,
@@ -339,7 +339,7 @@ async def _reconcile_lifecycle_target_locked(
                 "SELECT client_id FROM eduplus2.external_client_registrations "
                 "WHERE tenant_id=%s AND internal_tenant_id=%s AND provider='eduplus2' "
                 "AND external_tenant_id=%s AND external_app_id=%s AND status='active'"
-                ") candidates ORDER BY client_id LIMIT 17",
+                ") candidates ORDER BY client_id",
                 (
                     enterprise.deployment.tenant_id,
                     external_tenant_id,
@@ -351,19 +351,22 @@ async def _reconcile_lifecycle_target_locked(
                 ),
             )
         ).fetchall()
+        checked_at = (
+            await (await c.execute("SELECT clock_timestamp() AS checked_at")).fetchone()
+        )["checked_at"]
     if not target:
         return "missing"
     if not binding:
         return "pending_binding"
 
     resolver = getattr(enterprise, "eduplus2_resolver", None)
-    checked_at = datetime.now(timezone.utc)
     result_status = "unknown"
     verified_client = ""
     etag = ""
     negatives = 0
-    uncertain = len(clients) > 16
-    for row in clients[:16]:
+    incomplete = False
+    contradictory = False
+    for row in clients:
         client_id = row["client_id"]
         try:
             if resolver is None:
@@ -375,30 +378,36 @@ async def _reconcile_lifecycle_target_locked(
             if str(exc) in _KNOWN_INACTIVE:
                 negatives += 1
             else:
-                uncertain = True
+                incomplete = True
             continue
         except (LookupError, RuntimeError, TimeoutError):
-            uncertain = True
+            incomplete = True
             continue
         if not isinstance(result, dict) or not _current_active_binding(
             result, client_id, external_tenant_id, external_app_id
         ):
-            uncertain = True
+            contradictory = True
             continue
         if verified_client and verified_client != client_id:
             # 多个当前 client 可能合法；稳定目标相同才允许。此处均已核验目标。
             pass
         verified_client = client_id
         etag = str(result.get("version") or "")[:255]
-    if verified_client and not uncertain:
+    if verified_client and not contradictory:
         result_status = "allowed"
-    elif not verified_client and clients and negatives == len(clients) and not uncertain:
+    elif not verified_client and clients and negatives == len(clients) and not incomplete:
         result_status = "denied"
     proof_ttl = int(getattr(enterprise, "eduplus2_lifecycle_proof_ttl_seconds", 30) or 30)
     proof_ttl = max(1, min(proof_ttl, 60))
     proof_expires_at = checked_at + timedelta(seconds=proof_ttl) if result_status == "allowed" else None
 
     async with enterprise.db.transaction(scope) as c:
+        current_time = (
+            await (await c.execute("SELECT clock_timestamp() AS current_time")).fetchone()
+        )["current_time"]
+        if result_status == "allowed" and current_time >= proof_expires_at:
+            result_status = "unknown"
+            proof_expires_at = None
         current = await (
             await c.execute(
                 "SELECT generation,proof_checked_at FROM eduplus2.lifecycle_targets "
@@ -424,7 +433,7 @@ async def _reconcile_lifecycle_target_locked(
             return "stale"
         await c.execute(
             "UPDATE eduplus2.lifecycle_targets SET eligibility=%s,verified_client_id=%s,"
-            "resolve_etag=%s,proof_checked_at=%s,proof_expires_at=%s,"
+            "resolve_etag=%s,proof_checked_at=%s,proof_expires_at=%s,binding_version=%s,"
             "retry_count=CASE WHEN %s='unknown' THEN retry_count+1 ELSE 0 END,"
             "last_error_code=CASE WHEN %s='unknown' THEN 'online_unavailable' ELSE '' END,"
             "updated_at=now() "
@@ -435,6 +444,7 @@ async def _reconcile_lifecycle_target_locked(
                 etag if result_status == "allowed" else "",
                 checked_at,
                 proof_expires_at,
+                binding["version"] if result_status == "allowed" else 0,
                 result_status,
                 result_status,
                 enterprise.deployment.tenant_id,
@@ -541,3 +551,44 @@ async def reconcile_due_lifecycle_targets(enterprise, *, batch_size: int = 32) -
         if outcome not in {"missing", "pending_binding", "stale"}:
             processed += 1
     return processed
+
+
+async def snapshot_lifecycle_reconcile_metrics(enterprise) -> dict[str, int]:
+    """仅汇总本地对账状态，供内部监测；不暴露学校或事件标识。"""
+
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@eduplus2-metrics")
+    async with enterprise.db.transaction(scope) as c:
+        targets = await (
+            await c.execute(
+                "SELECT "
+                "count(*) FILTER (WHERE eligibility='allowed' "
+                "AND proof_expires_at>clock_timestamp()) AS allowed,"
+                "count(*) FILTER (WHERE eligibility='allowed' "
+                "AND proof_expires_at<=clock_timestamp()) AS expired_proofs,"
+                "count(*) FILTER (WHERE eligibility='unknown') AS unknown,"
+                "count(*) FILTER (WHERE eligibility='denied') AS denied "
+                "FROM eduplus2.lifecycle_targets WHERE tenant_id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+        inbox = await (
+            await c.execute(
+                "SELECT "
+                "count(*) FILTER (WHERE processing_status='pending_binding') "
+                "AS pending_binding,"
+                "count(*) FILTER (WHERE processing_status='pending_reconcile') "
+                "AS pending_reconcile,"
+                "count(*) FILTER (WHERE processing_status='retry') AS retry "
+                "FROM eduplus2.lifecycle_inbox WHERE tenant_id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+        actor = await (
+            await c.execute(
+                "SELECT count(*) AS pending_actor_candidates "
+                "FROM eduplus2.lifecycle_actor_candidates "
+                "WHERE tenant_id=%s AND status='pending_verification'",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+    return {key: int(value) for row in (targets, inbox, actor) for key, value in row.items()}

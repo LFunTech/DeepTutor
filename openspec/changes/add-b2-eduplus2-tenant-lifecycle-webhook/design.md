@@ -2,12 +2,12 @@
 
 ## 依据与方案选择
 
-现行 Webhook 的 `SubscriptionWebhookRequest` 有事件 ID、投递时间、学校/应用/订阅 ID 与状态，但**无单调订阅版本**；online resolve 的 `version` 是快照哈希，停用时 `verified=false` 不返回完整绑定；现有 `/v1/app-subscriptions/check` 无版本/订阅 ID 且调用身份受限。详见 [契约核对](external-contract-audit-2026-09-27.md)。曾批准的“按来源版本更新状态”无法在当前接口上兑现。拒绝按事件到达时间/`timestamp` 排序，也不要求本代理修改发送端。选用“Webhook 通知 + online resolve 当前态 + 本地代次栅栏”：**本地代次只保证本系统并发顺序，绝非外部状态版本**。代价是外部不可用或证明过期时拒绝新业务，且首位 actor 激活需另行证明当前订阅 ID。
+现行 Webhook 的 `SubscriptionWebhookRequest` 有事件 ID、投递时间、学校/应用/订阅 ID 与状态，但**无单调订阅版本**；online resolve 的 `version` 是快照哈希，停用时 `verified=false` 不返回完整绑定；现有 `/v1/app-subscriptions/check` 无版本/订阅 ID 且调用身份受限。详见 [契约核对](external-contract-audit-2026-09-27.md)。曾批准的“按来源版本更新状态”无法在当前接口上兑现。拒绝按事件到达时间/`timestamp` 排序，也不要求本代理修改发送端。选用“Webhook 通知 + online resolve 当前态 + 本地代次栅栏”：**本地代次只保证本系统并发顺序，绝非外部状态版本**。外部不可用或证明过期时拒绝新业务。按用户后续决策，首位 actor 事件的当前订阅有效性由 EduPlus2 保证，DeepTutor 不独立查询当前订阅 ID；该保证尚待真实事件合同验证，不能冒充已完成验收。
 
 | 方案 | 收益 | 取舍/结论 |
 | --- | --- | --- |
 | 来源单调版本 + 带版本快照 | 可作确定性事件投影 | 现有接口不提供；不得由本代理改发送端，故不作为本版实施前提 |
-| **持久通知 + 在线当前态核验** | 可只使用既存接口处理已验证学校的停用/恢复和乱序 | 需要保守失联策略、周期复核；首位 actor 当前订阅 ID 单独设门禁，**本版选用** |
+| **持久通知 + 在线当前态核验** | 可只使用既存接口处理已验证学校的停用/恢复和乱序 | 需要保守失联策略、周期复核；actor 事件的当前订阅有效性由 EduPlus2 负责，**本版选用** |
 | 按接收时间/事件 `timestamp` 覆盖 | 代码简单 | 投递重试和乱序会误开通或误停用，拒绝 |
 
 ## 1. 传输入口与可靠接收
@@ -26,7 +26,7 @@ online resolve 的哈希仅记为诊断 etag，不用于 `>`/`<` 比较或同版
 
 ## 3. 首位 TMS 管理员身份事实
 
-真实 `subscription.created` 的 `actor.type=user` 与非空 `actor.user_id`（Keycloak `sub`，不是 `eduplus_user_id`）可随安全 inbox 投影形成**尚未绑定的事件来源事实**，以免未知内部学校时 2xx 后丢失该事实；只有目标应用、稳定外部学校与内部学校绑定均核验后，才以同事务/持久 outbox 向管理授权服务交付**待核验候选**。mock、system/null、其他事件、错误应用/学校不产生候选。**在线 resolve 只证明当前学校—应用可用，不返回当前订阅 ID**；旧 `created` 延迟到新订阅之后时，不能因此把旧 actor 激活。管理授权服务只有在既有受权只读接口经目标环境验证可比对当前 `subscription.id`，且学校绑定、issuer/sub、本人 TMS 登录、一次性引导及本地版本栅栏都满足时才激活 `school_admin`。目前可见的 `/v1/tenants/{tenantId}/subscriptions` 需要 `subscription_view`，不能预设 Webhook 服务凭证可调；可在候选本人登录后验证调用身份适用性。无可靠订阅 ID 证明时保持 `pending_verification`，不得用人工填库、URL、角色声称或仅凭首次收到的事件绕过。激活与撤权属于 `add-enterprise-management-authorization`，本接收器不授予角色、不管理学校账号。
+真实 `subscription.created` 的 `actor.type=user` 与非空 `actor.user_id`（Keycloak `sub`，不是 `eduplus_user_id`）可随安全 inbox 投影形成**尚未绑定的事件来源事实**，以免未知内部学校时 2xx 后丢失该事实；只有目标应用、稳定外部学校与内部学校绑定均核验后，才以同事务/持久 outbox 向管理授权服务交付**待核验候选**。mock、system/null、其他事件、错误应用/学校不产生候选。事件 `subscription.id` 保留作审计、去重和冲突检测，**不**要求 DeepTutor 另查当前订阅 ID；其事件有效性及旧 `created` 的发送端处理归 EduPlus2。管理授权服务须核对学校—应用当前在线有效、学校绑定、候选本人 TMS 登录 issuer/sub/学校、一次性引导与本地版本栅栏，才能激活 `school_admin`。在 EduPlus2 对旧事件的保证未获真实合同验证前，残余风险须显式记录；不能将 Webhook 2xx、仅同校成员身份、人工填库、URL 或角色声称当作激活证据。激活与撤权属于 `add-enterprise-management-authorization`，本接收器不授予角色、不管理学校账号。
 
 ## 4. 租户与逐服务准入
 
@@ -38,4 +38,4 @@ online resolve 的哈希仅记为诊断 etag，不用于 `>`/`<` 比较或同版
 
 新增不可变的 DeepTutor PG 版本化 migration：平台级最小 inbox/待绑定队列、事件唯一与冲突约束、按学校—应用的本地 generation/在线证明/TTL、审计/重试、actor 待核验事实/交接状态；tenant-scoped 事实继续有租户约束和 RLS，平台队列仅服务端受控访问。旧外部资格保守映射，dry-run/apply/verify 与重复执行，回退保留已确认事实且回到 fail closed。**不做 EduPlus2/OpenFGA/Keycloak 迁移**。
 
-测试以双学校合成数据覆盖伪签名、过期、跨应用/学校、过大包、Secret 轮换、重复/冲突 ID、旧事件晚到、并发 worker、client 轮换、online resolve 拒绝/超时/矛盾、失联过期、恢复不覆盖本地隔离、actor 旧订阅/缺失/本人匹配及单服务额度隔离。真实 test smoke 必须分别证明：204 已持久接收、worker 核验的绑定/状态、租户级准入正负例、首位 actor 当前订阅 ID 证明与本人激活（若该接口适用），不能将 204 或外部“已启用”单独当成学校已接入。上游中立 core seam 另留认证、HTTP/WS turn、session ownership 和审计关联的兼容证据。
+测试以双学校合成数据覆盖伪签名、过期、跨应用/学校、过大包、Secret 轮换、重复/冲突 ID、旧事件晚到、并发 worker、client 轮换、online resolve 拒绝/超时/矛盾、失联过期、恢复不覆盖本地隔离、actor 缺失/本人匹配/一次性栅栏及单服务额度隔离。真实 test smoke 必须分别证明：204 已持久接收、worker 核验的绑定/状态、租户级准入正负例、真实 actor 来源与本人同校激活；不能将 204 或外部“已启用”单独当成学校已接入。上游中立 core seam 另留认证、HTTP/WS turn、session ownership 和审计关联的兼容证据。

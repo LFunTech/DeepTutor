@@ -96,6 +96,8 @@ async def test_eduplus2_migration_is_versioned_and_redacts_secret_material(enter
             "0003_revocation_state",
             "0004_audit_export_jobs",
             "0005_lifecycle_inbox",
+            "0006_lifecycle_binding_proof",
+            "0007_actor_candidate_terminal_state",
         ]
         await c.execute(
             """

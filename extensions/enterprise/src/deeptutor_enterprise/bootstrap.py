@@ -218,7 +218,8 @@ class Enterprise:
                 "WHERE b.tenant_id=%s AND b.status='verified' "
                 "AND b.eduplus_tenant_id::text=%s "
                 "AND p.tenant_id=%s AND p.external_app_id=%s "
-                "AND p.eligibility='allowed' AND p.proof_expires_at>now() "
+                "AND p.eligibility='allowed' AND p.binding_version=b.version "
+                "AND p.proof_expires_at>clock_timestamp() "
                 "LIMIT 1",
                 (
                     self.deployment.tenant_id,
@@ -269,6 +270,7 @@ class Enterprise:
         base_url = os.environ.get("DT_EDUPLUS2_BASE_URL", "").rstrip("/")
         discovery_url = os.environ.get("DT_EDUPLUS2_DISCOVERY_URL", "").strip()
         issuer = os.environ.get("DT_EDUPLUS2_OIDC_ISSUER", "").strip()
+        self.eduplus2_issuer = issuer
         jwks_uri = os.environ.get("DT_EDUPLUS2_JWKS_URI", "").strip()
         token_url = os.environ.get("DT_EDUPLUS2_TOKEN_ENDPOINT", "").strip()
         resolve_url = os.environ.get("DT_EDUPLUS2_RESOLVE_URL", "").strip()
@@ -528,12 +530,18 @@ class Enterprise:
             raise RuntimeError("turn coordination backend is unavailable")
 
     async def _lifecycle_reconcile_loop(self):
-        from .eduplus2.lifecycle import reconcile_due_lifecycle_targets
+        from .eduplus2.lifecycle import (
+            reconcile_due_lifecycle_targets,
+            snapshot_lifecycle_reconcile_metrics,
+        )
 
         while True:
             try:
                 self.lifecycle_reconcile_metrics["processed"] += (
                     await reconcile_due_lifecycle_targets(self)
+                )
+                self.lifecycle_reconcile_metrics.update(
+                    await snapshot_lifecycle_reconcile_metrics(self)
                 )
             except Exception:
                 self.lifecycle_reconcile_metrics["failures"] += 1

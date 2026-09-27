@@ -61,8 +61,18 @@ Woodpecker 已新增仅 `tag` 事件可用的仓库 Secret `dt_test_cn_eduplus2_
 
 用户已单独批准重订版实施，仅在 DeepTutor 工作区使用隔离合成数据推进。新增 `eduplus2/0005_lifecycle_inbox.sql`、`lifecycle.py` 及企业组合接线：真实事件的白名单投影、目标应用校验、独立稳定 HMAC 业务摘要、事件 ID 幂等/冲突、事务性 inbox；同一事务使已验证学校旧允许状态失效。`204` 仅表示安全入队，存储失败返回 `503`。mock 不入队。OAuth Secret、原始 body、签名未加入持久字段。接收器运行开关 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED` **默认关闭**；本地合成测试临时启用，不代表 test-cn 已部署或真实事件已被确认。
 
-已增加已验证学校—应用的 online resolve 对账、PG advisory lock 串行、本地 generation/绑定版本栅栏、证明 TTL、未知重试退避、重启与周期扫描，以及无 Webhook 时从既有已验证 registration 发现目标。现有会话及新登录在启用接收器后复核短时证明；原固定租户 `not_required` 且无外部学校绑定的路径仍保持兼容。`created.actor` 仅在学校绑定后落入 `pending_verification` 候选表；**没有**创建 TMS principal、assignment 或激活角色。当前 resolve 不含当前订阅 ID，候选本人可用的既存只读证明尚未核实，故首位管理员激活写入口继续关闭。
+已增加已验证学校—应用的 online resolve 对账、PG advisory lock 串行、本地 generation/绑定版本栅栏、证明 TTL、未知重试退避、重启与周期扫描，以及无 Webhook 时从既有已验证 registration 发现目标。现有会话及新登录在启用接收器后复核短时证明；原固定租户 `not_required` 且无外部学校绑定的路径仍保持兼容。`created.actor` 仅在学校绑定后落入 `pending_verification` 候选表；**没有**创建 TMS principal、assignment 或激活角色。按用户后续决策，本产品不再以独立取得当前订阅 ID 为首位激活门禁；候选仍须真实事件、可信本人同校登录、学校当前有效与一次性本地授权验收，故写入口继续关闭。
 
 本地针对入队、重投/冲突与脱敏告警、Secret 轮换/独立性、过期证明、停用与恢复门禁、在线拒绝/超时/矛盾、重启重试、漏送扫描、并发锁、generation、超量 client、双学校隔离及 actor 待核验编写合成测试。新增 lifecycle 表已启用 `FORCE ROW LEVEL SECURITY`，隔离 PG 中验证 owner 无租户 GUC 不可旁路；版本化迁移的计划、重复执行、schema/index 漂移阻断和失败回滚均有测试。`PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests --tb=short` 完整执行 **451 passed，3 skipped**；随后针对最新补充的入口/双学校用例执行 **4 passed**，相关应用/生命周期/迁移集合 **98 passed，1 skipped**。Ruff、`git diff --check` 与 OpenSpec strict validation 通过。未在目标 test 环境应用迁移、开启正式接收、重投首校事件或读取/写入真实学校业务数据。
 
-**剩余放行门禁**：B1 的正式稳定内部学校绑定及跨校应用授权/运行角色验证（新增 lifecycle 表的 FORCE RLS 不替代 B1 全系统隔离）；当前订阅 ID 的受权只读证明与本人 TMS 引导；所有入口（尤其管理、下载和后台派发）的短时证明与逐服务额度负例；生产所需的候选/收件箱保留清理政策及可观测指标；目标环境只读契约与真实事件 smoke。未完成前本 change 不勾选完成，接收器开关继续关闭，不能把外部学校“已订阅”解释为本产品已接入。
+**剩余放行门禁**：B1 的正式稳定内部学校绑定及跨校应用授权/运行角色验证（新增 lifecycle 表的 FORCE RLS 不替代 B1 全系统隔离）；真实 actor 投递合同与本人 TMS 一次性引导；所有入口（尤其管理、下载和后台派发）的短时证明与逐服务额度负例；生产所需的候选/收件箱保留清理政策及可观测指标；目标环境只读契约与真实事件 smoke。未完成前本 change 不勾选完成，接收器开关继续关闭，不能把外部学校“已订阅”解释为本产品已接入。
+
+后续代码审查修复（仍只在隔离合成环境）：新增不可变 `0006_lifecycle_binding_proof.sql`，令旧在线证明迁移时失效，并把新证明绑定到 `oms.school_bindings.version`，撤销后重新核验不得复用旧证明；迁移 catalog 校验覆盖新增约束。配置的 OIDC issuer 已传至 `created.actor` 待核验交接，不再依赖测试手动赋值。对账改为逐个核验全部已知 client，旧 client 超时不覆盖另一当前有效证明，明确相互矛盾目标仍拒绝；消除原 16 个历史 client 上限造成的永久 `unknown`。证明时间和准入过期判断均使用 PostgreSQL `clock_timestamp()`，不受应用节点时钟偏移延长。针对绑定重新核验、issuer 传递、旧 client 故障、17 个历史 client、数据库时钟域及迁移约束漂移补回归；迟到旧 `created`、system/null 与重复事件仍只产生待核验事实，不激活管理员。企业全量测试 **455 passed，3 skipped**。Ruff、`git diff --check`、OpenSpec strict validation 均通过。迁移任务 1.2 仅在隔离合成 PG 验收；此处修复不改变上述目标环境与管理/多入口门禁，仍不得启用正式接收或宣称 change 已完成。
+
+上游兼容只读复核：本轮没有修改 DeepTutor core，新增代码仍在 `extensions/enterprise/`；`git merge-tree --write-tree HEAD upstream/main` 对当前分支报告 63 个既存合并冲突（未涉及本次 enterprise 扩展路径），因此不能声称当前分支已可无冲突合并 upstream/main。任务 3.2 的完整上游兼容和认证、HTTP/WS、session ownership、审计关联验收仍未完成；未在工作树执行实际 merge。
+
+后续 TMS actor 交接局部切片：新增 `management/actor_handoff.py` 的内部只读候选发现，仅对短时有效的可信 TMS `(issuer,sub,school,binding_version)` 返回同校、同应用、当前 issuer 且在线证明未过期的 `pending_verification` 事件事实，不授予角色或开放 API。新增不可变 `eduplus2/0007_actor_candidate_terminal_state.sql`，让候选可进入 `consumed`/`revoked` 终态并记录 `resolved_at`，触发器阻止身份事实修改、终态回退和删除；这是数据库完整性栅栏，**不是**以 PG 权限代替 Enterprise 程序授权。合成测试覆盖错 issuer/sub/学校/绑定版本、身份失效、过期证明、receiver 关闭、绑定撤销、终态后重新对账不复活；迁移重复执行及触发器漂移也已覆盖。交接服务尚未接可信 TMS 登录与事务性本人激活，因此 2.2a 和管理授权 3.3 仍未勾选；真实 `created.actor` 合同尚未验收，正式写入口保持关闭。
+
+对账可观测性局部切片：新增仅内部使用的聚合快照，按 DB 时钟区分当前允许证明、过期证明、未知/拒绝目标、待绑定/待对账/重试 inbox 与待核验 actor 数量；worker 每轮刷新进程内计数，不向公开健康检查或未授权 API 泄露学校/订阅标识。合成测试验证计数及 worker 接线。保留/清理政策、长期监控出口及目标环境告警未验收，故 2.4 仍未勾选。
+
+以上新切片完成后重跑企业全量测试 **464 passed，3 skipped**；Ruff、`git diff --check`、Webhook 与管理授权两份 OpenSpec strict validation 均通过。该验证只在隔离合成环境，未替代 test-cn 真实事件与双学校放行证据。

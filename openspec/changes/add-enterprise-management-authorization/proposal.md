@@ -1,6 +1,6 @@
 # 智能体基座 OMS/TMS 双应用域权限体系
 
-> **实施中，完整任务尚未验收；局部结果见 implementation-evidence.md。** 2026-09-27 用户进一步明确：**权限由 DeepTutor Enterprise 程序控制**；PG 只保存权限事实、版本和审计，数据库权限/RLS 不是操作者授权决策器；EduPlus2 在权限链路中只提供认证及稳定身份识别，不提供本产品角色或动作许可。OMS 仅管理平台人员；首位 TMS 管理员的身份由已验签的真实 `subscription.created.actor.user_id` 提供，并按本产品规则受控激活，不走旧学校侧双负责人开通。本代理不得修改 EduPlus2 仓库、Keycloak 或 OpenFGA；本文不授权真实数据操作、部署、归档或提交。
+> **实施中，完整任务尚未验收；局部结果见 implementation-evidence.md。** 2026-09-27 用户进一步明确：**权限由 DeepTutor Enterprise 程序控制**；PG 只保存权限事实、版本和审计，数据库权限/RLS 不是操作者授权决策器；EduPlus2 在权限链路中只提供认证及稳定身份识别，不提供本产品角色或动作许可。OMS 仅管理平台人员；首位 TMS 管理员的身份由已验签的真实 `subscription.created.actor.user_id` 提供，并按本产品规则受控激活，不走旧学校侧双负责人开通。用户后续指定事件所属订阅是否仍为当前订阅由 EduPlus2 处理，本产品不额外查询当前订阅 ID。本代理不得修改 EduPlus2 仓库、Keycloak 或 OpenFGA；本文不授权真实数据操作、部署、归档或提交。
 
 ## Why
 
@@ -12,7 +12,7 @@
 - OMS 只负责平台人员、OMS 角色及平台人员在指定学校的 `ops.*` 操作范围；学校账号、学校成员角色与首位 TMS 管理员开通全部归 TMS／学校侧。OMS 不提供学校账号候选、首位管理员审批或学校人员读写 API。TMS 不发放服务权益或额度。
 - OMS 对接的 EduPlus2 OAuth Client ID 按用户提供的合同固定为 `eduplus-platform-admin`；实施时须在目标环境核对其授权码登录能力、issuer、实际 token `azp`/`aud`、平台人员身份及账号状态接口。指定 Client ID 不等于已取得平台人员目录，也不自动授予智能体基座 `ops.*` 权限。
 - 区分“查找外部用户”与“给已核验主体授权”：TMS 可在第三方应用授权码用户令牌、有效应用凭证/学校订阅和数据访问策略均获证实后，按当前学校的最小范围检索已有账号；目录记录不能直接成为授权主体，候选仍须本人登录完成 `(issuer,sub,school)` 绑定。OMS 的平台候选只来自可信 OMS 登录登记或另行验证的平台人员合同，不借学校用户目录或通用机器令牌查询。Webhook 下发的 OAuth Client 凭据本身不赋予两端人员目录权限。
-- **首位 TMS 管理员来源**：仅接受目标应用、学校绑定和 HMAC 签名均核验通过的真实 `subscription.created` 事件中 `actor.type=user` 且非空的 `actor.user_id`，将其按配置的 OIDC issuer 登记为该校初始管理员待激活主体；该映射是 DeepTutor Enterprise 的产品策略，不声称 EduPlus2 `actor` 本身就是外部管理员角色。候选本人随后须完成 TMS 登录，精确匹配 `(issuer,sub,school)` 后才激活可用权限。`actor` 缺失、system/null、mock、错应用/学校、重放、重订或身份不匹配时均不得产生可用管理权；已消费的学校引导记录不得因恢复订阅自动重发。后续学校角色由 TMS 本校授权服务管理，OMS 不管理学校账号。
+- **首位 TMS 管理员来源**：仅接受目标应用、学校绑定和 HMAC 签名均核验通过的真实 `subscription.created` 事件中 `actor.type=user` 且非空的 `actor.user_id`，将其按配置的 OIDC issuer 登记为该校初始管理员待激活主体；该映射是 DeepTutor Enterprise 的产品策略，不声称 EduPlus2 `actor` 本身就是外部管理员角色。候选本人随后须完成 TMS 登录，精确匹配 `(issuer,sub,school)`，且当前学校—应用有效、本地引导未消费/撤销后才激活可用权限。事件订阅 ID 只作审计/幂等，不作本产品当前订阅 ID 比对。`actor` 缺失、system/null、mock、错应用/学校或身份不匹配时不得产生可用管理权；已消费或已撤销的学校引导不得因重复、恢复或重订事件自动重发。发送端对迟到旧事件的保证尚待真实合同验收。后续学校角色由 TMS 本校授权服务管理，OMS 不管理学校账号。
 - 为 OMS 的“平台人员／角色与动作／平台人员学校范围／授权审计”和 TMS 的“学校侧开通／成员与权限／角色／应用及服务访问／资源授权”设计完整入口、列表→聚焦详情→独立操作模态框、有效权限预览、变更确认、审批、撤权回读和失效状态。两端独立构建、会话和 API；共用组件只接安全 DTO，不共享授权缓存。
 - 每条管理 API 和已启用的 CLI、HTTP/WS、SDK、后台路径必须调用同一 DeepTutor Enterprise 授权服务；认证得到的身份标识仅用于定位本产品主体，写事务由程序重新核验主体、动作、对象、范围、学校绑定和业务版本。PG 事务锁/约束只保障并发和隔离，不自行决定操作者是否有权；EduPlus2 权限 API、旧管理 router、请求 header、JWT role、`eit=adm`、Webhook secret、原型 fixture 均不得授予本产品权限。
 - **BREAKING**：撤销旧 `ops.tms.bootstrap`、OMS `/tms-bootstrap-requests` 及 TMS 学校侧双负责人首位开通规划；改由签名真实 `subscription.created.actor` 身份线索触发 DeepTutor Enterprise 一次性初始授权登记。现有 8/8 mock 204 仅证明接收，绝不创建管理员。OMS 从不接触学校管理员账号或本产品 `tenant.*` 授权。

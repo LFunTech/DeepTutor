@@ -46,11 +46,11 @@ EduPlus2 提供学校及应用订阅生命周期权威；DeepTutor 企业扩展�
 
 ### Requirement: 首位管理员 actor 仅为待核验身份事实
 
-系统 SHALL 只从真实非 mock、已验签且目标应用正确的 `subscription.created` 中，随安全 inbox 可靠保存 `actor.type=user` 且非空的 `actor.user_id` 作为 Keycloak `sub` 的**未绑定来源事实**；仅在稳定学校绑定核验后才交付管理授权服务的待核验候选。MUST NOT 从 system/null、其他事件、重放或错误目标创建可用管理员。Webhook 接收器 SHALL NOT 授予 `tenant.*` 权限。`add-enterprise-management-authorization` 的一次性激活 SHALL 另验证该事件的订阅 ID 是当前学校—应用订阅、候选本人可信 TMS 登录的 issuer/sub/学校、已验证学校绑定与本地版本栅栏。现有 online resolve 不含当前订阅 ID，未取得可用的既存受权只读证明时 MUST 保持 `pending_verification`，不得凭 Webhook 2xx 或人工填库激活。
+系统 SHALL 只从真实非 mock、已验签且目标应用正确的 `subscription.created` 中，随安全 inbox 可靠保存 `actor.type=user` 且非空的 `actor.user_id` 作为 Keycloak `sub` 的**未绑定来源事实**；仅在稳定学校绑定核验后才交付管理授权服务的待核验候选。MUST NOT 从 system/null、其他事件、重复事件或错误目标直接创建可用管理员。Webhook 接收器 SHALL NOT 授予 `tenant.*` 权限。事件 `subscription.id` SHALL 用于审计、幂等与事实冲突检查；本阶段不要求 DeepTutor 独立查询“当前订阅 ID”作为候选登录或一次性激活门禁，用户将事件当前性/旧事件处理归于 EduPlus2。`add-enterprise-management-authorization` 的一次性激活仍 SHALL 核验当前学校—应用在线有效、候选本人可信 TMS 登录的 issuer/sub/学校、已验证学校绑定与本地版本栅栏；Webhook 2xx、仅同校身份或人工填库均不得直接激活。
 
-#### Scenario: 旧 created 在重新订阅后才送达
-- **WHEN** 旧订阅的 `subscription.created.actor` 真实有效，但当前学校—应用已是另一订阅
-- **THEN** 旧 actor 不得成为可用首位管理员，即使当前 online resolve 返回有效
+#### Scenario: 迟到 created 与一次性学校引导
+- **WHEN** `subscription.created.actor` 迟到，且该校首位引导已消费或已撤销
+- **THEN** 重复或重订事件不得重建可用管理员；Webhook 接收器仍可保存脱敏事实，但不授予角色。若学校此前从未完成引导，DeepTutor 不独立判断事件是否属于当前订阅，发送端旧事件风险由 EduPlus2 侧处理
 
 #### Scenario: actor 缺失或系统触发
 - **WHEN** 真实 created 的 actor 为 null/system

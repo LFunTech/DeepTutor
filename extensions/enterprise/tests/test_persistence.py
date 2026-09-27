@@ -31,6 +31,8 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "0003_revocation_state",
     "0004_audit_export_jobs",
     "0005_lifecycle_inbox",
+    "0006_lifecycle_binding_proof",
+    "0007_actor_candidate_terminal_state",
     "oms/0001_ledger_base",
     "oms/0002_grant_source",
     "oms/0003_grant_command_idempotency",
@@ -101,7 +103,7 @@ async def test_lifecycle_migration_failure_rolls_back_inbox_and_history(pg_dsn):
     class FailingRunner(runner_type):
         def _extension_migrations(self):
             return super()._extension_migrations() + [
-                ("0006_forced_failure", "SELECT 1/0;")
+                ("0008_forced_failure", "SELECT 1/0;")
             ]
 
     with pytest.raises(psycopg.errors.DivisionByZero):
@@ -117,6 +119,35 @@ async def test_lifecycle_migration_failure_rolls_back_inbox_and_history(pg_dsn):
     assert history == (None,)
     await runner_type(pg_dsn).apply()
     await runner_type(pg_dsn).verify()
+
+
+async def test_lifecycle_migration_preserves_legacy_fixed_school_eligibility(pg_dsn):
+    from deeptutor.persistence.postgres.migrations.runner import MigrationRunner as CoreRunner
+
+    runner_type = module("migrations.runner").MigrationRunner
+    await CoreRunner(pg_dsn).apply()
+    school_id = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "INSERT INTO enterprise.tenants(id,external_eligibility,auth_epoch) "
+            "VALUES(%s,'not_required','synthetic-epoch')",
+            (school_id,),
+        )
+    await runner_type(pg_dsn).apply()
+    await runner_type(pg_dsn).verify()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        tenant = await (
+            await c.execute(
+                "SELECT external_eligibility,external_tid,external_version "
+                "FROM enterprise.tenants WHERE id=%s",
+                (school_id,),
+            )
+        ).fetchone()
+        target_count = await (
+            await c.execute("SELECT count(*) FROM eduplus2.lifecycle_targets")
+        ).fetchone()
+    assert tenant == ("not_required", None, 1)
+    assert target_count == (0,)
 
 
 async def test_lifecycle_due_proof_has_expiry_index(pg_dsn):
@@ -138,6 +169,30 @@ async def test_lifecycle_index_drift_blocks_verify(pg_dsn):
     async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
         await c.execute("DROP INDEX eduplus2.eduplus2_lifecycle_targets_expiry")
     with pytest.raises(RuntimeError, match="lifecycle indexes"):
+        await runner.verify()
+
+
+async def test_lifecycle_binding_proof_constraint_drift_blocks_verify(pg_dsn):
+    runner = module("migrations.runner").MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_targets "
+            "DROP CONSTRAINT lifecycle_allowed_requires_binding_version"
+        )
+    with pytest.raises(RuntimeError, match="lifecycle binding proof"):
+        await runner.verify()
+
+
+async def test_lifecycle_actor_terminal_trigger_drift_blocks_verify(pg_dsn):
+    runner = module("migrations.runner").MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_actor_candidates "
+            "DISABLE TRIGGER guard_lifecycle_actor_candidate"
+        )
+    with pytest.raises(RuntimeError, match="actor terminal state"):
         await runner.verify()
 
 
