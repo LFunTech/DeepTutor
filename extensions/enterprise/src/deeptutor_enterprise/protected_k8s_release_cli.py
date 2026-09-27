@@ -267,7 +267,12 @@ def _validate_release_trigger(
         error_codes.append("ambiguous_environment_alias")
     if parsed and env is not None and not _ref_matches(str(_value(env, "allowed_ref", "")), ref):
         error_codes.append("ref_environment_mismatch")
-    if not protected_ref:
+    internal_test = bool(
+        env is not None
+        and _value(env, "env_id") == "test-cn"
+        and _value(env, "env_class") == "test"
+    )
+    if not protected_ref and not internal_test:
         error_codes.append("tag_not_protected")
     if env is not None and _value(env, "env_class") == "prod":
         approval_policy = _nested(env, ("woodpecker", "approval_policy"), {}) or {}
@@ -294,7 +299,10 @@ def _validate_release_trigger(
         if historical != current:
             error_codes.append("deployment_tag_reused_or_moved")
 
-    for name, value in {"tag_object_sha": tag_object_sha, "commit_sha": commit_sha}.items():
+    hashes = {"commit_sha": commit_sha}
+    if not internal_test or tag_object_sha:
+        hashes["tag_object_sha"] = tag_object_sha
+    for name, value in hashes.items():
         if not _SHA_RE.fullmatch(str(value or "")):
             error_codes.append(name + "_invalid")
 
@@ -306,7 +314,7 @@ def _validate_release_trigger(
         "tag": parsed["raw"] if parsed else tag,
         "target_env_id": parsed["env_id"] if parsed else None,
         "version": parsed["version"] if parsed else None,
-        "tag_object_sha": tag_object_sha,
+        "tag_object_sha": tag_object_sha or None,
         "commit_sha": commit_sha,
         "approval": {
             "approved": approved,
@@ -425,7 +433,33 @@ def _scan_secret_leakage(path: str | Path) -> dict[str, Any]:
 
 def _trusted_trigger_report(args: argparse.Namespace):
     registry = _load_registry(args.registry)
-    metadata = _load_json(args.trusted_metadata)
+    if args.internal_test:
+        if args.trusted_metadata:
+            raise SystemExit("internal test release must not use trusted metadata")
+        try:
+            parsed = _parse_deployment_tag(args.tag)
+        except ValueError:
+            parsed = None
+        env = _find_env(registry, parsed["env_id"]) if parsed else None
+        if parsed and not (
+            parsed["env_id"] == "test-cn"
+            and env is not None
+            and _value(env, "env_class") == "test"
+        ):
+            raise SystemExit("internal test release is restricted to test-cn")
+        metadata = {
+            "protected_ref": False,
+            "approved": False,
+            "approval_id": "",
+            "actor": "",
+            "tag_object_sha": "",
+            "commit_sha": args.commit_sha or "",
+            "trust_source": "woodpecker-internal-test",
+        }
+    else:
+        if not args.trusted_metadata:
+            raise SystemExit("trusted metadata is required outside internal test release")
+        metadata = _load_json(args.trusted_metadata)
     missing = [
         name
         for name in (
@@ -574,9 +608,10 @@ def main(argv: list[str] | None = None) -> int:
     trigger.add_argument("--tag", required=True)
     trigger.add_argument(
         "--trusted-metadata",
-        required=True,
         help="JSON from a trusted VCS/Woodpecker approval verifier; not PR-editable YAML.",
     )
+    trigger.add_argument("--internal-test", action="store_true")
+    trigger.add_argument("--commit-sha")
     trigger.add_argument("--manual-target-env-id")
     trigger.add_argument("--previous-evidence")
     trigger.add_argument("--output", required=True)
@@ -588,9 +623,10 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--tag", required=True)
     prepare.add_argument(
         "--trusted-metadata",
-        required=True,
         help="JSON from a trusted VCS/Woodpecker approval verifier; not PR-editable YAML.",
     )
+    prepare.add_argument("--internal-test", action="store_true")
+    prepare.add_argument("--commit-sha")
     prepare.add_argument("--manual-target-env-id")
     prepare.add_argument("--previous-evidence")
     prepare.add_argument("--output-env-file", required=True)

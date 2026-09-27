@@ -14,7 +14,7 @@
         "server_version": "3.18.2",
         "agent_version": "3.18.2",
         "agent_backend": "kubernetes",
-        "protected_refs": ["refs/tags/deploy/test-cn/**"],
+        "protected_refs": [],
         "approval_policy": {"required": false, "approvers": [], "window": "not-required"},
         "secret_resolution_mode": "secret-extension",
         "secrets": [
@@ -29,8 +29,7 @@
           {"logical_name": "EDUPLUS2_WEBHOOK_SECRET", "ref": "woodpecker:DT_TEST_CN_EDUPLUS2_WEBHOOK_SECRET", "purpose": "runtime_secret_sync", "scope_env_id": "test-cn", "permission_summary": "synchronize only deeptutor-test-cn runtime webhook key", "rotation_state": "current", "least_privilege": true, "required": true},
           {"logical_name": "EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY", "ref": "woodpecker:DT_TEST_CN_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY", "purpose": "runtime_secret_sync", "scope_env_id": "test-cn", "permission_summary": "preserve stable deeptutor-test-cn webhook inbox digest key", "rotation_state": "current", "least_privilege": true, "required": true},
           {"logical_name": "SMOKE_TOKEN_ISSUER_SECRET", "ref": "woodpecker:DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET", "purpose": "smoke_credentials", "scope_env_id": "test-cn", "permission_summary": "short ttl smoke tokens only", "rotation_state": "current", "least_privilege": true, "required": true},
-          {"logical_name": "EVIDENCE_STORE_WRITE_TOKEN", "ref": "woodpecker:DT_TEST_CN_EVIDENCE_STORE_WRITE_TOKEN", "purpose": "evidence_store", "scope_env_id": "test-cn", "permission_summary": "write release-evidence/test-cn only", "rotation_state": "current", "least_privilege": true, "required": true},
-          {"logical_name": "VCS_TAG_VERIFY_TOKEN", "ref": "woodpecker:DT_TEST_CN_VCS_TAG_VERIFY_TOKEN", "purpose": "tag_approval_verify", "scope_env_id": "test-cn", "permission_summary": "read tag protection metadata only", "rotation_state": "current", "least_privilege": true, "required": true}
+          {"logical_name": "EVIDENCE_STORE_WRITE_TOKEN", "ref": "woodpecker:DT_TEST_CN_EVIDENCE_STORE_WRITE_TOKEN", "purpose": "evidence_store", "scope_env_id": "test-cn", "permission_summary": "write release-evidence/test-cn only", "rotation_state": "current", "least_privilege": true, "required": true}
         ]
       },
       "registry": {"repository": "docker-hub.f123.pub/lfun/deeptutor/test-cn", "credentials_ref": "woodpecker:DT_TEST_CN_REGISTRY_PUSH_TOKEN", "immutable_tags": true},

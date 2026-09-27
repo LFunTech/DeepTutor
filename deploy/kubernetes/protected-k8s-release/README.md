@@ -2,6 +2,8 @@
 
 This directory is a release-source skeleton consumed by the protected K8s release baseline. It is not a complete cluster bootstrap package.
 
+`test-cn` is triggered directly by the team's canonical `deploy/test-cn/*` tag. Its early gate checks tag syntax, registered target environment and checked-out commit SHA, but does not require GitHub tag protection, approval or static trusted-trigger JSON. Pre-release and production targets retain their separate trusted-metadata gate.
+
 `deploy.sh` is the pipeline entrypoint for an already approved release. It fails before
 calling `kubectl` unless `DEEPTUTOR_DEPLOY_APPROVED=yes` is set, renders the
 digest-pinned migration/backend manifests, waits for the migration Job, and then waits

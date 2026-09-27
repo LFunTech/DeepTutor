@@ -73,19 +73,6 @@ def _generated_token(args: argparse.Namespace) -> str:
     return args.fixed_generated_token or secrets.token_urlsafe(48)
 
 
-def _trusted_metadata(commit_sha: str) -> str:
-    metadata = {
-        "protected_ref": True,
-        "approved": True,
-        "approval_id": "test-cn-local-bootstrap",
-        "actor": "release-manager",
-        "tag_object_sha": commit_sha,
-        "commit_sha": commit_sha,
-        "trust_source": "local-test-bootstrap-static-replace-with-verifier",
-    }
-    return json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
-
-
 def _preflight_metadata() -> str:
     purposes = {
         "REGISTRY_PUSH_TOKEN": "registry_push:test-cn/runtime",
@@ -100,7 +87,6 @@ def _preflight_metadata() -> str:
         "EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "runtime_secret_sync:test-cn/deeptutor-runtime-secrets/stable-inbox-digest-key",
         "SMOKE_TOKEN_ISSUER_SECRET": "smoke_credentials:test-cn/token-issuer",
         "EVIDENCE_STORE_WRITE_TOKEN": "evidence_store:test-cn/release-evidence/*",
-        "VCS_TAG_VERIFY_TOKEN": "tag_approval_verify:test-cn/read-only",
     }
     payload = {
         name: {
@@ -152,13 +138,6 @@ def prepare(args: argparse.Namespace) -> None:
         "# native-yaml: kubeconfig_test is the namespace-scoped kubectl credential used by deploy.sh.",
         "",
     ]
-    _write_entry(
-        lines,
-        "DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON",
-        _trusted_metadata(args.commit_sha),
-        source="generated:test-only-static-metadata",
-        note="Only for test-cn bootstrap; production must use a trusted tag/approval verifier.",
-    )
     _write_entry(lines, "DT_TEST_CN_SECRETSTORE_ROLE", "external-secret:test-cn/platform", source="generated-ref:test-cn secretstore role/ref")
     _write_entry(lines, "DT_TEST_CN_PG_MIGRATOR_DSN", _postgres_dsn(sections), source=".secrets/.test-secrets: PostgreSQL derived")
     _write_entry(lines, "DT_TEST_CN_APP_DB_SECRET_REF", "external-secret:test-cn/pg-runtime", source=".secrets/.test-secrets: PostgreSQL derived-ref")
@@ -191,7 +170,6 @@ def prepare(args: argparse.Namespace) -> None:
         generated,
         source="generated:random-url-safe-token; replace with object-store writer token when external evidence upload is enabled",
     )
-    _write_entry(lines, "DT_TEST_CN_VCS_TAG_VERIFY_TOKEN", generated, source="generated:random-url-safe-token:test-only")
     _write_entry(
         lines,
         "DT_TEST_CN_SECRET_PREFLIGHT_METADATA_JSON",
@@ -209,11 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--input", required=True, help="Path to .secrets/.test-secrets")
     parser.add_argument("--output", required=True, help="Output path, e.g. .secrets/woodpecker-secrets/test.secrets")
-    parser.add_argument("--commit-sha", required=True, help="Trusted metadata fixture SHA for test bootstrap")
+    parser.add_argument("--commit-sha", help="Deprecated compatibility option; not used for internal test releases")
     parser.add_argument("--fixed-generated-token", help="Deterministic generated token for tests")
     args = parser.parse_args(argv)
-    if not re.fullmatch(r"[a-fA-F0-9]{40}", args.commit_sha):
-        raise SystemExit("--commit-sha must be a 40-character Git SHA")
     prepare(args)
     return 0
 

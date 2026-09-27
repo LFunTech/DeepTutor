@@ -2385,3 +2385,11 @@ OpenSpec validate --all --strict -> 28 passed, 0 failed
 获用户授权后，包含工作区全部未忽略改动的 `e7fc7311` 已推送至 `origin/master`，并推送 `deploy/test-cn/v1.4.0-rc.48`。Woodpecker pipeline `#59` 中 `compile-docs-test-cn` 与 `compile-frontend-test-cn` 同时运行；文档镜像构建、typecheck、Docusaurus build 和 registry push 成功，`docs@sha256:5c47a1f1b05a89cc5775f056c7f941204dc5716dad5791ef5c8ea2688ac1446d`。runtime、主前端、Python 依赖、runtime base 与 secret preflight 也成功。但 `pre-deploy-check-test-cn` 在查询 docs manifest 时返回 404，`deploy-test-cn` 被跳过，真实 Ingress/TLS 尚未验证。
 
 根因已用相同 registry 的只读 HEAD 请求复现：docs 镜像 manifest 类型是 `application/vnd.oci.image.manifest.v1+json`，原预部署查询只接受 `application/vnd.docker.distribution.manifest.v2+json`，因此 registry 返回 404；加入 OCI 类型的 Accept 后返回 200 及上述 digest。runtime 镜像为 Docker v2 manifest，原请求保持可用。本轮将 docs 查询改为同时接受 Docker v2 与 OCI manifest，并新增回归断言；不得复用或移动 rc.48 tag，修复须经新的受保护 test-cn tag 验证。D6.1 据真实 CI 文档镜像构建与推送结果勾选，D6.4 仍未验证。
+
+### 2026-09-27 test-cn 内部 tag 发布门禁修订
+
+`deploy/test-cn/v1.4.0-rc.52` 已推送，但 Woodpecker #63 在 `validate-release-trigger` 失败；本地复现错误码为 `tag_not_protected`。仓库及继承的 GitHub rulesets 查询为空。该轮没有部署。用户随后明确决定：当前 `test-cn` 是团队内部流水线，不需要外部标签保护/审批校验，应直接运行。此决定只适用于 `test-cn`，不改变预发和生产环境门禁。
+
+实现改为：`test-cn` 从 Woodpecker tag event、canonical tag、环境 registry/ref 和检出提交 SHA 生成内部 gate report；不读取静态 `protected_ref` JSON、不要求 `VCS_TAG_VERIFY_TOKEN`，未知的 tag object SHA/创建者/审批信息不伪造。静态测试 bootstrap 脚本也不再生成声称 `protected_ref=true` 的元数据。预发/生产环境仍需可信元数据，且 `--internal-test` 不能用于它们。
+
+本地验证：企业回归 `504 passed, 3 skipped`；G1 定向 `28 passed`；Woodpecker strict lint 有效；OpenSpec strict validation 有效；在没有 `TRUSTED_TRIGGER_METADATA_JSON` 的本地 shell 模拟中，`validate-release-trigger` 和 `prepare-release-metadata` 两段均产出 `ready=true`、`target_env_id=test-cn`、`trust_source=woodpecker-internal-test`。真实新标签流水线结果另行记录；不得将这些本地结果视作已部署。

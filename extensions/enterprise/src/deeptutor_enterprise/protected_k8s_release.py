@@ -209,7 +209,7 @@ class WoodpeckerEnvironmentContract(BaseModel):
     server_version: str = Field(min_length=1)
     agent_version: str = Field(min_length=1)
     agent_backend: Literal["kubernetes", "docker", "exec"]
-    protected_refs: tuple[str, ...] = Field(min_length=1)
+    protected_refs: tuple[str, ...]
     approval_policy: ApprovalPolicy = Field(default_factory=ApprovalPolicy)
     secret_resolution_mode: Literal["secret-extension", "configuration-extension", "native-static"]
     secrets: tuple[WoodpeckerSecret, ...] = Field(min_length=1)
@@ -382,7 +382,6 @@ _REQUIRED_SECRET_PURPOSES = {
     "runtime_secret_ref",
     "smoke_credentials",
     "evidence_store",
-    "tag_approval_verify",
 }
 
 
@@ -460,8 +459,14 @@ class DeploymentEnvironment(BaseModel):
         _require_env_marker(self.evidence.read_scope, self.env_id, "evidence.read_scope")
         if self.env_class == "prod" and not self.woodpecker.approval_policy.required:
             raise ValueError("prod environment requires approval policy")
+        internal_test = self.env_id == "test-cn" and self.env_class == "test"
+        if not internal_test and not self.woodpecker.protected_refs:
+            raise ValueError("protected refs required outside test-cn")
         purposes = {secret.purpose for secret in self.woodpecker.secrets if secret.required}
-        missing = _REQUIRED_SECRET_PURPOSES - purposes
+        required_purposes = _REQUIRED_SECRET_PURPOSES | (
+            set() if internal_test else {"tag_approval_verify"}
+        )
+        missing = required_purposes - purposes
         if missing:
             raise ValueError(
                 "required Woodpecker secret purposes missing: " + ",".join(sorted(missing))
@@ -629,7 +634,8 @@ def validate_release_trigger(
         error_codes.append("ambiguous_environment_alias")
     if parsed and env is not None and not _ref_matches(env.allowed_ref, ref):
         error_codes.append("ref_environment_mismatch")
-    if not protected_ref:
+    internal_test = bool(env and env.env_id == "test-cn" and env.env_class == "test")
+    if not protected_ref and not internal_test:
         error_codes.append("tag_not_protected")
     if env and env.env_class == "prod" and env.woodpecker.approval_policy.required:
         if not approved or not approval_id:
@@ -656,7 +662,10 @@ def validate_release_trigger(
         if historical != current:
             error_codes.append("deployment_tag_reused_or_moved")
 
-    for name, value in {"tag_object_sha": tag_object_sha, "commit_sha": commit_sha}.items():
+    hashes = {"commit_sha": commit_sha}
+    if not internal_test or tag_object_sha:
+        hashes["tag_object_sha"] = tag_object_sha
+    for name, value in hashes.items():
         if not _SHA_RE.fullmatch(str(value or "")):
             error_codes.append(name + "_invalid")
 
@@ -668,7 +677,7 @@ def validate_release_trigger(
         "tag": parsed.raw if parsed else tag,
         "target_env_id": parsed.env_id if parsed else None,
         "version": parsed.version if parsed else None,
-        "tag_object_sha": tag_object_sha,
+        "tag_object_sha": tag_object_sha or None,
         "commit_sha": commit_sha,
         "approval": {
             "approved": approved,

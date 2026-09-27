@@ -337,6 +337,73 @@ def test_release_trigger_fails_closed_for_untrusted_tags_and_manual_env_override
     assert "deployment_tag_reused_or_moved" in moved["error_codes"]
 
 
+def test_internal_test_tag_does_not_require_protected_ref_or_tag_object_sha():
+    from deeptutor_enterprise.protected_k8s_release import (
+        EnvironmentRegistry,
+        validate_release_trigger,
+    )
+
+    registry = EnvironmentRegistry.model_validate(_registry())
+    report = validate_release_trigger(
+        registry,
+        event="tag",
+        ref="refs/tags/deploy/test-cn/v1.4.0-rc.53",
+        tag="deploy/test-cn/v1.4.0-rc.53",
+        protected_ref=False,
+        approved=False,
+        approval_id="",
+        actor="",
+        tag_object_sha="",
+        commit_sha=_SHA_A,
+        trust_source="woodpecker-internal-test",
+    )
+    assert report["ready"] is True
+    assert report["target_env_id"] == "test-cn"
+    assert report["tag_object_sha"] is None
+    assert report["trust_source"] == "woodpecker-internal-test"
+
+    for changed, expected_code in (
+        ({"event": "pull_request"}, "event_not_tag"),
+        ({"ref": "refs/tags/deploy/prod-cn-east/v1.4.0"}, "ref_environment_mismatch"),
+        ({"commit_sha": "invalid"}, "commit_sha_invalid"),
+    ):
+        args = {
+            "event": "tag",
+            "ref": "refs/tags/deploy/test-cn/v1.4.0-rc.53",
+            "tag": "deploy/test-cn/v1.4.0-rc.53",
+            "protected_ref": False,
+            "approved": False,
+            "approval_id": "",
+            "actor": "",
+            "tag_object_sha": "",
+            "commit_sha": _SHA_A,
+            "trust_source": "woodpecker-internal-test",
+        }
+        args.update(changed)
+        rejected = validate_release_trigger(registry, **args)
+        assert rejected["ready"] is False
+        assert expected_code in rejected["error_codes"]
+
+
+def test_internal_test_environment_needs_no_protected_ref_or_tag_verifier_secret():
+    from deeptutor_enterprise.protected_k8s_release import EnvironmentRegistry
+
+    registry_data = _registry()
+    test_env = next(env for env in registry_data["environments"] if env["env_id"] == "test-cn")
+    test_env["woodpecker"]["protected_refs"] = []
+    test_env["woodpecker"]["secrets"] = [
+        secret for secret in test_env["woodpecker"]["secrets"]
+        if secret["logical_name"] != "VCS_TAG_VERIFY_TOKEN"
+    ]
+    registry = EnvironmentRegistry.model_validate(registry_data)
+    assert registry.find_env("test-cn").woodpecker.protected_refs == ()
+
+    prod_env = next(env for env in registry_data["environments"] if env["env_id"] == "prod-cn-east")
+    prod_env["woodpecker"]["protected_refs"] = []
+    with pytest.raises(ValueError):
+        EnvironmentRegistry.model_validate(registry_data)
+
+
 def test_secret_preflight_requires_environment_scoped_least_privilege_refs():
     from deeptutor_enterprise.protected_k8s_release import EnvironmentRegistry, secret_preflight
 
@@ -663,22 +730,6 @@ def test_protected_k8s_release_cli_runs_gate_without_pydantic_dependency(tmp_pat
     root = Path(__file__).resolve().parents[2].parent
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(json.dumps(_registry(), ensure_ascii=False), encoding="utf8")
-    metadata_path = tmp_path / "trusted-trigger-metadata.json"
-    metadata_path.write_text(
-        json.dumps(
-            {
-                "protected_ref": True,
-                "approved": True,
-                "approval_id": "approval-123",
-                "actor": "release-manager",
-                "tag_object_sha": _TAG_SHA,
-                "commit_sha": _SHA_A,
-                "trust_source": "vcs-protected-tag-api",
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf8",
-    )
     (tmp_path / "sitecustomize.py").write_text(
         """
 import builtins
@@ -712,8 +763,9 @@ builtins.__import__ = _blocked_import
             "refs/tags/deploy/test-cn/v1.4.0-rc.8",
             "--tag",
             "deploy/test-cn/v1.4.0-rc.8",
-            "--trusted-metadata",
-            str(metadata_path),
+            "--internal-test",
+            "--commit-sha",
+            _SHA_A,
             "--output-env-file",
             str(output_env),
             "--output",
@@ -732,6 +784,7 @@ builtins.__import__ = _blocked_import
     env_values = _read_shell_exports(Path(captured["release_env"]))
     assert payload["ready"] is True
     assert payload["target_env_id"] == "test-cn"
+    assert payload["trust_source"] == "woodpecker-internal-test"
     assert env_values["DEEPTUTOR_TARGET_ENV_ID"] == "test-cn"
     assert env_values["DEEPTUTOR_RELEASE_VERSION"] == "v1.4.0-rc.8"
     assert env_values["DEEPTUTOR_INGRESS_HOST"] == "llm-agent-test.f123.pub"
@@ -758,6 +811,10 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     registry = EnvironmentRegistry.model_validate(registry_payload)
     assert registry.production_env_ids == ("prod-cn-east", "prod-overseas-a")
     assert registry.find_env("test-cn").kubernetes.ingress_host == "llm-agent-test.f123.pub"
+    assert registry.find_env("test-cn").woodpecker.protected_refs == ()
+    assert "VCS_TAG_VERIFY_TOKEN" not in {
+        secret.logical_name for secret in registry.find_env("test-cn").woodpecker.secrets
+    }
     assert "deeptutor-test-cn.example.internal" not in registry_text
 
     pipeline = pipeline_path.read_text(encoding="utf8")
@@ -839,6 +896,9 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "--approved" not in pipeline
     assert "--protected-ref" not in pipeline
     assert "trusted metadata" in pipeline.lower()
+    assert 'case "$${CI_COMMIT_TAG}" in' in pipeline
+    assert 'deploy/test-cn/*)' in pipeline
+    assert '--internal-test --commit-sha "$$(git rev-parse HEAD)"' in pipeline
     assert "$${TRUSTED_TRIGGER_METADATA_JSON:-}" in pipeline
     assert "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" in pipeline
     assert 'test -n "${TRUSTED_TRIGGER_METADATA_JSON:-}"' not in pipeline
@@ -1618,6 +1678,8 @@ DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY=synthetic-independent-inbox-digest-key-0123
     assert "DOCKER_USERNAME" in rendered
     assert "DOCKER_PASSWORD" in rendered
     assert "kubeconfig_test" in rendered
+    assert "DT_RELEASE_TRUSTED_TRIGGER_METADATA_JSON" not in rendered
+    assert "DT_TEST_CN_VCS_TAG_VERIFY_TOKEN" not in rendered
 
     values = {}
     for line in rendered.splitlines():
@@ -1803,6 +1865,39 @@ def test_protected_k8s_release_cli_trigger_requires_trusted_metadata(tmp_path, c
     payload = json.loads(Path(captured["trigger_gate"]).read_text(encoding="utf8"))
     assert payload["ready"] is True
     assert payload["trust_source"] == "vcs-protected-tag-api"
+
+
+def test_protected_k8s_release_cli_accepts_internal_test_tag_without_metadata(tmp_path, capsys):
+    from deeptutor_enterprise.protected_k8s_release_cli import main
+
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps(_registry(), ensure_ascii=False), encoding="utf8")
+    output_dir = tmp_path / "metadata"
+    output_env = tmp_path / ".deeptutor-release.env"
+    args = [
+        "--registry", str(registry_path),
+        "--event", "tag",
+        "--ref", "refs/tags/deploy/test-cn/v1.4.0-rc.53",
+        "--tag", "deploy/test-cn/v1.4.0-rc.53",
+        "--internal-test",
+        "--commit-sha", _SHA_A,
+    ]
+    assert main(["prepare-metadata", *args, "--output-env-file", str(output_env), "--output", str(output_dir)]) == 0
+    capsys.readouterr()
+    report = json.loads((output_dir / "trigger-gate.json").read_text(encoding="utf8"))
+    assert report["ready"] is True
+    assert report["trust_source"] == "woodpecker-internal-test"
+    assert report["tag_object_sha"] is None
+    assert _read_shell_exports(output_env)["DEEPTUTOR_TARGET_ENV_ID"] == "test-cn"
+
+    with pytest.raises(SystemExit, match="internal test release is restricted to test-cn"):
+        main([
+            "trigger", "--registry", str(registry_path), "--event", "tag",
+            "--ref", "refs/tags/deploy/prod-cn-east/v1.4.0",
+            "--tag", "deploy/prod-cn-east/v1.4.0",
+            "--internal-test", "--commit-sha", _SHA_A,
+            "--output", str(output_dir),
+        ])
 
 
 def test_release_manifest_and_rollback_digest_must_match_target_env_registry():

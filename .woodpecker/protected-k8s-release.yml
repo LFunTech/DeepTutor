@@ -1,5 +1,5 @@
 # Protected K8s release pipeline for semantic deployment tags.
-# The release trigger must be backed by trusted metadata from the protected-tag / approval verifier.
+# test-cn is an internal tag-triggered release. Other environments retain trusted tag/approval metadata.
 
 labels:
   platform: linux/amd64
@@ -37,19 +37,26 @@ steps:
     commands:
       - mkdir -p release-evidence/gate
       - |
-        test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
-          test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
-            echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
-            exit 2
-          }
-        }
-        if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
-          trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
-        else
-          trusted_metadata_file="release-evidence/gate/trusted-trigger-metadata.json"
-          printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
-        fi
-        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli trigger --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output release-evidence/gate
+        case "$${CI_COMMIT_TAG}" in
+          deploy/test-cn/*)
+            PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli trigger --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --internal-test --commit-sha "$$(git rev-parse HEAD)" --output release-evidence/gate
+            ;;
+          *)
+            test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
+              test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
+                echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
+                exit 2
+              }
+            }
+            if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
+              trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
+            else
+              trusted_metadata_file="release-evidence/gate/trusted-trigger-metadata.json"
+              printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
+            fi
+            PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli trigger --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output release-evidence/gate
+            ;;
+        esac
       - test "$(python -c 'import json; print(json.load(open("release-evidence/gate/trigger-gate.json"))["ready"])')" = "True"
 
   - name: prepare-release-metadata
@@ -61,19 +68,26 @@ steps:
     commands:
       - mkdir -p release-evidence/metadata
       - |
-        test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
-          test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
-            echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
-            exit 2
-          }
-        }
-        if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
-          trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
-        else
-          trusted_metadata_file="release-evidence/metadata/trusted-trigger-metadata.json"
-          printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
-        fi
-        PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli prepare-metadata --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output-env-file .deeptutor-release.env --output release-evidence/metadata
+        case "$${CI_COMMIT_TAG}" in
+          deploy/test-cn/*)
+            PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli prepare-metadata --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --internal-test --commit-sha "$$(git rev-parse HEAD)" --output-env-file .deeptutor-release.env --output release-evidence/metadata
+            ;;
+          *)
+            test -n "$${TRUSTED_TRIGGER_METADATA_JSON:-}" || {
+              test -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" || {
+                echo "trusted metadata is required; do not infer protection or approval in YAML" >&2
+                exit 2
+              }
+            }
+            if [ -n "$${PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE:-}" ]; then
+              trusted_metadata_file="$PROTECTED_K8S_RELEASE_TRUSTED_METADATA_FILE"
+            else
+              trusted_metadata_file="release-evidence/metadata/trusted-trigger-metadata.json"
+              printf '%s' "$TRUSTED_TRIGGER_METADATA_JSON" > "$trusted_metadata_file"
+            fi
+            PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli prepare-metadata --registry extensions/enterprise/protected-k8s-release-environments.example.json --event "${CI_PIPELINE_EVENT}" --ref "refs/tags/${CI_COMMIT_TAG}" --tag "${CI_COMMIT_TAG}" --trusted-metadata "$trusted_metadata_file" --output-env-file .deeptutor-release.env --output release-evidence/metadata
+            ;;
+        esac
       - test -s .deeptutor-release.env
 
 
@@ -274,8 +288,6 @@ steps:
         from_secret: dt_test_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
         from_secret: dt_test_cn_evidence_store_write_token
-      VCS_TAG_VERIFY_TOKEN:
-        from_secret: dt_test_cn_vcs_tag_verify_token
       SECRET_PREFLIGHT_METADATA_JSON:
         from_secret: dt_test_cn_secret_preflight_metadata_json
     commands:

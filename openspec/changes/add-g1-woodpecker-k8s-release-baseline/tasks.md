@@ -1,26 +1,26 @@
 # 实施任务
 
-范围以 [proposal](proposal.md)、[design](design.md) 和 `enterprise-g1-woodpecker-k8s-release-baseline` delta spec 为准。本 proposal 只交付 G1 Woodpecker/K8s 发布闭环；固定租户 runtime、resource binding、EduPlus2 demo 和 smoke harness 由 `add-m1-fixed-tenant-runtime-baseline` 提供。未接入目标环境的占位 pipeline、通用 YAML、默认 `prod`、手工覆盖环境变量或只适配单一生产环境的实现不得标记完成；部署目标必须由受保护 deployment tag 解析。
+范围以 [proposal](proposal.md)、[design](design.md) 和 `enterprise-g1-woodpecker-k8s-release-baseline` delta spec 为准。本 proposal 只交付 G1 Woodpecker/K8s 发布闭环；固定租户 runtime、resource binding、EduPlus2 demo 和 smoke harness 由 `add-m1-fixed-tenant-runtime-baseline` 提供。未接入目标环境的占位 pipeline、通用 YAML、默认 `prod`、手工覆盖环境变量或只适配单一生产环境的实现不得标记完成；部署目标必须由符合目标环境门禁的 deployment tag 解析。
 
 ## D0 环境 registry 与多生产环境边界
 
 - [x] D0.1 迁移/配置：定义环境 registry 与 deployment tag schema，覆盖 `env_id`、`env_class`、`prod_group`、允许 tag pattern、Woodpecker 契约、Woodpecker secrets 清单、registry、K8s cluster/namespace、Ingress/TLS、SecretStore/RBAC、NetworkPolicy、数据面 binding、approval policy、release/migration lock、rollback policy 和 evidence prefix；支持多个 `env_class=prod`。Canonical tag 为 `deploy/<env_id>/v<major>.<minor>.<patch>[-rc.<n>|-hotfix.<n>]`。
-- [x] D0.2 真实入口：读取并校验每个已登记环境，至少包含 test/pre 以及所有计划内生产环境；流水线必须从受保护 deployment tag 解析 `target_env_id`，不得默认选择生产环境或接受手工覆盖。
-- [ ] D0.3 权限/异常测试：覆盖非 deployment tag、tag 格式错误、未保护 tag、未授权 tag、tag moved/reused、不存在环境、歧义 `prod`、缺失必需 secret、超权 secret、跨环境 Secret/namespace/Ingress/evidence path、生产环境未审批、多生产环境其中一个失败等拒绝或隔离路径。
+- [x] D0.2 真实入口：读取并校验每个已登记环境，至少包含 test/pre 以及所有计划内生产环境；流水线必须从 deployment tag 解析 `target_env_id`；`test-cn` 内部 tag 不要求外部保护/审批，预发/生产仍要求受保护 tag，不得默认选择生产环境或接受手工覆盖。
+- [ ] D0.3 权限/异常测试：覆盖非 deployment tag、tag 格式错误、`test-cn` 内部直通与预发/生产未保护/未授权/tag moved/reused、不存在环境、歧义 `prod`、缺失必需 secret、超权 secret、跨环境 Secret/namespace/Ingress/evidence path、生产环境未审批、多生产环境其中一个失败等拒绝或隔离路径。
 - [x] D0.4 切换证据：保存脱敏环境矩阵、tag 规则、Woodpecker secrets 矩阵、生产环境清单、晋级路径、每个环境 verified/unverified 状态和未验证项；一个生产环境 tag 通过不得替代其他生产环境。
 
 ## D1 目标部署契约
 
-- [x] D1.1 迁移/配置：按 deployment tag 可解析出的 `target_env_id` 登记目标 Woodpecker server/agent 版本、agent backend、受保护 tag/ref、审批/Secret 边界、Woodpecker secrets 清单、registry 凭证、K8s namespace、Ingress/TLS、SecretStore/RBAC、NetworkPolicy、发布锁、回退策略和 evidence 存放位置。
+- [x] D1.1 迁移/配置：按 deployment tag 可解析出的 `target_env_id` 登记目标 Woodpecker server/agent 版本、agent backend、`test-cn` 内部 tag 与其他环境受保护 tag/ref、审批/Secret 边界、Woodpecker secrets 清单、registry 凭证、K8s namespace、Ingress/TLS、SecretStore/RBAC、NetworkPolicy、发布锁、回退策略和 evidence 存放位置。
 - [ ] D1.2 真实入口：用每个目标环境只读/校验命令验证 Woodpecker、registry、K8s、Ingress/TLS、SecretStore、ObjectStore/LightRAG/EduPlus2 test binding 可达或明确缺口。
-- [ ] D1.3 权限/异常测试：验证 PR、非 deployment tag、未保护 tag、未批准 tag、过期批准、tag 环境与契约不匹配、缺失必需 secret、跨环境 Secret 越权、超权 DB/K8s/ObjectStore/SecretStore 凭证、registry 凭证缺失或 namespace/RBAC 不匹配被拒绝。
+- [ ] D1.3 权限/异常测试：验证 PR、非 deployment tag、`test-cn` 内部直通及预发/生产未保护 tag、未批准 tag、过期批准、tag 环境与契约不匹配、缺失必需 secret、跨环境 Secret 越权、超权 DB/K8s/ObjectStore/SecretStore 凭证、registry 凭证缺失或 namespace/RBAC 不匹配被拒绝。
 - [x] D1.4 切换证据：按 `target_env_id` 保存脱敏 deployment contract、审批人/窗口、Woodpecker secret name/ref 与权限摘要、Secret ref、evidence store ref 和未验证项；不得保存明文 Secret 或真实 token。
-- [x] D1.5 Secret preflight：实现并实测按 `target_env_id` 校验 registry push、K8s deploy、SecretStore、PG migrator、runtime secret refs、smoke credentials、evidence store、tag/approval verify 等必需 secret/ref 的存在性、环境归属、最小权限和轮换状态。
+- [x] D1.5 Secret preflight：实现并实测按 `target_env_id` 校验 registry push、K8s deploy、SecretStore、PG migrator、runtime secret refs、smoke credentials、evidence store 等必需 secret/ref；预发/生产另校验 tag/approval verify 的存在性、环境归属、最小权限和轮换状态。
 
 ## D2 Woodpecker build/push/digest
 
 - [x] D2.1 迁移/配置：实现 build-once、按 `target_env_id` 的 registry image push、digest resolve、SBOM/scan 摘要和 mutable tag 禁用/限制策略。
-- [x] D2.2 真实入口：在受保护且批准的 deployment tag 上运行 pipeline，从 tag 解析 `target_env_id` 和 version，生成 frontend/backend 镜像 digest，并将 digest 写入该环境发布清单。
+- [x] D2.2 真实入口：在符合目标环境门禁的 deployment tag 上运行 pipeline；`test-cn` 内部 tag 不要求保护/审批，从 tag 解析 `target_env_id` 和 version，生成 frontend/backend 镜像 digest，并将 digest 写入该环境发布清单。
 - [ ] D2.3 权限/异常测试：验证旧构建覆盖、新 tag 指向旧 digest、非 deployment tag、tag moved/reused、未批准 ref/tag、歧义/错误 `target_env_id`、缺失/错误 registry push secret、agent 中断和 registry 推送失败不会进入部署阶段。
 - [x] D2.4 切换证据：记录原始 tag、tag object SHA、tag creator、`target_env_id`、version、源码 SHA、upstream SHA、企业包版本、镜像 digest、build run ID、扫描摘要和失败证据。
 
@@ -50,7 +50,7 @@
 - [x] D6.1 在 `docs-site/` 增加独立、可复现的静态镜像构建，固定 `/docs/` 基础路径与 test-cn HTTPS origin；验证产物首页、静态资源和无内部演示内容。
 - [x] D6.2 Woodpecker 增加与 `compile-frontend-test-cn` 并行的 `compile-docs-test-cn`，test-cn 预部署门禁解析并校验文档 digest；其他环境的依赖/secret/路由不变。
 - [x] D6.3 test-cn 添加独立 docs Deployment/Service/NetworkPolicy 和同一 Ingress 的 `/docs` 路由；缺失或跨环境 docs digest 在调用 `kubectl` 前失败，等待 docs rollout。
-- [ ] D6.4 test-cn 经真实 HTTPS 验证 `/docs/` 首页和静态资源，保存脱敏 evidence；未运行受保护 tag 和真实集群前保持未验证状态。
+- [ ] D6.4 test-cn 经真实 HTTPS 验证 `/docs/` 首页和静态资源，保存脱敏 evidence；未运行 test-cn 内部 tag 和真实集群前保持未验证状态。
 
 ## 验证与归档准备
 

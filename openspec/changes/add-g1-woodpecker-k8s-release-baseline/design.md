@@ -2,7 +2,7 @@
 
 ## Context
 
-本 change 专注 G1 发布流水线。它不建模租户 runtime，而是把已有/待完成的 enterprise runtime 制品通过目标 Woodpecker 和 Kubernetes 环境发布、验证和留证。租户数量只影响 smoke scope 和 runtime 配置，不决定 CI/K8s 拓扑。部署环境可能包含 local/test/pre/staging 和多个不同生产环境；流水线必须从受保护 deployment tag 解析 `target_env_id`，并按环境隔离 Secret、锁、namespace、Ingress/TLS、审批和 evidence。
+本 change 专注 G1 发布流水线。它不建模租户 runtime，而是把已有/待完成的 enterprise runtime 制品通过目标 Woodpecker 和 Kubernetes 环境发布、验证和留证。租户数量只影响 smoke scope 和 runtime 配置，不决定 CI/K8s 拓扑。部署环境可能包含 local/test/pre/staging 和多个不同生产环境；流水线必须从符合目标环境门禁的 deployment tag 解析 `target_env_id`，并按环境隔离 Secret、锁、namespace、Ingress/TLS、审批和 evidence。
 
 
 ## 决策 0：环境 registry 是发布契约的一部分
@@ -36,10 +36,10 @@ deploy/<env_id>/v<major>.<minor>.<patch>[-rc.<n>|-hotfix.<n>]
 - `env_id` 正则：`[a-z][a-z0-9-]{1,40}`，必须精确匹配环境 registry 中的 `env_id`。
 - `version` 正则：`v[0-9]+\.[0-9]+\.[0-9]+(-(rc|hotfix)\.[0-9]+)?`。
 - 完整 canonical 正则：`^deploy/(?P<env_id>[a-z][a-z0-9-]{1,40})/(?P<version>v[0-9]+\.[0-9]+\.[0-9]+(-(rc|hotfix)\.[0-9]+)?)$`。
-- tag 必须是受保护 tag；生产环境 tag 还必须满足审批策略，可选要求 annotated/signed tag 或等价签名校验。
+- `test-cn` 团队内部流水线允许直接由 canonical deployment tag 触发，不依赖 GitHub tag protection、静态 `protected_ref` 元数据或审批校验；仍校验 tag 格式、registry 环境匹配和源提交 SHA。预发/生产环境 tag 必须满足受保护 tag 门禁；生产环境还必须满足审批策略，可选要求 annotated/signed tag 或等价签名校验。
 - `prod`、`production`、`latest`、`stable` 等别名不得作为部署目标；多个生产环境必须各自打精确 tag。
 - pipeline 只从 tag 解析 `target_env_id`，不得接受手工覆盖；如 tag 与手工变量不一致，以拒绝为准，不做覆盖。
-- tag object SHA、commit SHA、创建者、创建时间、审批记录和解析出的 `target_env_id` 必须进入 evidence。
+- 预发/生产环境的 tag object SHA、commit SHA、创建者、创建时间、审批记录和解析出的 `target_env_id` 必须进入 evidence。`test-cn` 内部运行只记录从 checkout 得到的 commit SHA、原始 tag、解析出的 `target_env_id` 和 `trust_source=woodpecker-internal-test`；未知的 tag object SHA/创建者/审批信息不得伪造。
 - 已用于成功或失败发布的 deployment tag 不得移动、复用到其他 commit 或改指向其他环境；检测到 tag moved/reused 必须 fail closed。
 
 示例：
@@ -99,7 +99,7 @@ Woodpecker secrets 必须按 `target_env_id` 隔离登记。Secret Extension 模
 | Runtime secret refs | `DT_<ENV_KEY>_APP_DB_SECRET_REF`、`DT_<ENV_KEY>_OBJECTSTORE_SECRET_REF`、`DT_<ENV_KEY>_LIGHTRAG_API_SECRET_REF`、`DT_<ENV_KEY>_MODEL_PROFILE_SECRET_REF`、`DT_<ENV_KEY>_EDUPLUS2_CLIENT_SECRET_REF` | 将 runtime 所需 secret ref 写入 manifest/ConfigMap/ExternalSecret | 仅引用该环境 secret；Woodpecker 不读取明文 | 这些是 ref，不是 secret 明文；evidence 记录 ref kind/短 hash |
 | Smoke credentials | `DT_<ENV_KEY>_SMOKE_EDUPLUS2_CLIENT_SECRET` 或 `DT_<ENV_KEY>_SMOKE_TOKEN_ISSUER_SECRET`、可选 `DT_<ENV_KEY>_SMOKE_TEST_USER_SECRET` | 获取测试 user JWT / `dt_token`、运行 HTTP/WS/EduPlus2/resource smoke | 只用于该环境 smoke；短 TTL；最小测试用户权限 | 禁止长期保存 JWT 或 `dt_token`；运行后只记录短 hash/request id |
 | Evidence store | `DT_<ENV_KEY>_EVIDENCE_STORE_WRITE_TOKEN`，可选 `DT_<ENV_KEY>_EVIDENCE_STORE_READ_TOKEN` | 上传 release evidence、smoke 摘要、rollback 记录、scan 结果 | 写入限定 env/release prefix；读取权限分离 | evidence path 必须包含 `target_env_id` |
-| Tag / approval verify | `DT_VCS_TAG_VERIFY_TOKEN` 或环境级 `DT_<ENV_KEY>_VCS_TAG_VERIFY_TOKEN` | 查询受保护 tag、tag object SHA、审批记录和 tag creator | 只读仓库/tag/approval 元数据 | 若 Woodpecker 原生提供可信元数据，可不单独配置，但必须记录信任来源 |
+| Tag / approval verify | `DT_VCS_TAG_VERIFY_TOKEN` 或环境级 `DT_<ENV_KEY>_VCS_TAG_VERIFY_TOKEN` | 查询受保护 tag、tag object SHA、审批记录和 tag creator | 只读仓库/tag/approval 元数据 | 仅预发/生产环境要求；`test-cn` 内部发布不使用该 secret。若 Woodpecker 原生提供可信元数据，可不单独配置，但必须记录信任来源 |
 
 ### 条件性 secrets
 
@@ -168,7 +168,7 @@ Woodpecker 构建把前端 bundle、Python dependency tree 和 runtime OS/base l
 
 `docs-site/` 是独立 Docusaurus 构建上下文，不并入 DeepTutor runtime 镜像。`compile-docs-test-cn` 与 `compile-frontend-test-cn` 同样只依赖 `prepare-release-metadata`，以 test-cn registry 凭证推送 `docs:<tag>`。预部署门禁同时等待 runtime 与 docs 镜像构建，解析两者不可变 digest；缺失或环境仓库不匹配时不得进入部署。文档镜像以构建时 `https://<test-cn ingress host>` 和 `/docs/` 生成站点链接，不包含凭证或演示身份。
 
-test-cn 使用独立的静态 Deployment、Service 与最小化 NetworkPolicy。`deploy.sh` 在执行任何 `kubectl` 前校验 test-cn docs digest，并在 migration 成功后部署 docs 服务；同名 Ingress 使用 test-cn 专用清单明确包含 `/docs` 和 `/` 两条 Prefix 路径，避免依赖控制器对多个同域名 Ingress 的合并行为。pre/prod 沿用只有 `/` 的基础 Ingress，不创建 docs 服务或路径。部署步骤等待 docs rollout，经真实 HTTPS 校验 `/docs/` 首页和其引用的一项静态资源；失败即阻断发布，不得把静态文件构建成功等同于发布成功。文档构建和路由结果写入 test-cn 脱敏 evidence。正式触发仍依赖受保护 tag、环境审批和实际入库的 `docs-site/` 文件，本次源码改动不代表已部署。
+test-cn 使用独立的静态 Deployment、Service 与最小化 NetworkPolicy。`deploy.sh` 在执行任何 `kubectl` 前校验 test-cn docs digest，并在 migration 成功后部署 docs 服务；同名 Ingress 使用 test-cn 专用清单明确包含 `/docs` 和 `/` 两条 Prefix 路径，避免依赖控制器对多个同域名 Ingress 的合并行为。pre/prod 沿用只有 `/` 的基础 Ingress，不创建 docs 服务或路径。部署步骤等待 docs rollout，经真实 HTTPS 校验 `/docs/` 首页和其引用的一项静态资源；失败即阻断发布，不得把静态文件构建成功等同于发布成功。文档构建和路由结果写入 test-cn 脱敏 evidence。test-cn 正式触发依赖内部 deployment tag 和实际入库的 `docs-site/` 文件，本次源码改动不代表已部署。
 
 ## 决策 3：迁移和 rollout 由发布步骤编排
 

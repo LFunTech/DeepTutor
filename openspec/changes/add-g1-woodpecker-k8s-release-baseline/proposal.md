@@ -2,7 +2,7 @@
 
 ## Why
 
-Woodpecker 流水线与租户数量没有必然关系。它属于生产交付和 G1 release gate：从受信提交构建一次、推送镜像、锁定 digest、按显式目标环境执行迁移、部署到对应 Kubernetes、运行业务 smoke、归档 evidence，并在失败时受控回退或进入维护/前向修复状态。实际部署可能存在 local/test/pre/staging 以及多个不同生产环境，流水线必须从受保护 deployment tag 解析 `target_env_id`，再用环境 registry 校验目标，不能把“prod”当成唯一、默认或隐含环境。
+Woodpecker 流水线与租户数量没有必然关系。它属于生产交付和 G1 release gate：从受信提交构建一次、推送镜像、锁定 digest、按显式目标环境执行迁移、部署到对应 Kubernetes、运行业务 smoke、归档 evidence，并在失败时受控回退或进入维护/前向修复状态。实际部署可能存在 local/test/pre/staging 以及多个不同生产环境，流水线必须从 deployment tag 解析 `target_env_id`，再用环境 registry 校验目标，不能把“prod”当成唯一、默认或隐含环境。`test-cn` 是团队内部 tag 流水线，不要求外部标签保护或审批校验；预发、生产环境仍保持原受保护发布门禁。
 
 此前 `add-m1-g1-single-tenant-production-baseline` 把固定租户 runtime 与 Woodpecker/K8s 发布闭环放在同一 proposal，容易误导为 CI/K8s 拓扑可以由“单租户/多租户”推导。该误导已经在历史 execution evidence 中导致通用 `.woodpecker` 与 K8s YAML 被撤回。本 proposal 专门承接 A3/V.3：发布拓扑必须来自目标部署契约，而不是来自租户模型。
 
@@ -16,7 +16,7 @@ Woodpecker 流水线与租户数量没有必然关系。它属于生产交付和
 - 交付 Woodpecker build/push/migration/deploy/smoke/rollback/evidence 阶段，使用镜像 digest、从 tag 解析出的 `target_env_id`、环境锁和批准门禁；一次 deployment tag 只能部署一个目标环境，多生产环境必须逐环境打 tag、逐环境留证。
 - 交付 K8s 部署源或等价发布清单：backend/frontend/Job/Service/Ingress/ConfigMap/Secret ref/NetworkPolicy/ServiceAccount/probes/resources，并明确单执行 rollout 策略。
 - 复用 `add-m1-fixed-tenant-runtime-baseline` 的 readiness、smoke harness、resource binding 和 EduPlus2/API/WS 测试入口；不在本 proposal 重新定义 tenant runtime 规则。
-- 固化 Woodpecker secrets 契约：按 `target_env_id` 声明 registry push、K8s deploy、SecretStore、migration、runtime Secret ref、smoke credentials、evidence store、tag/approval 校验等 secret；Secret Extension 模式下 pipeline 使用稳定逻辑名（如 `REGISTRY_PUSH_TOKEN`），由 extension 根据 tag/env registry 返回对应环境的值；native/static 模式下才使用 `DT_<ENV_KEY>_*` 静态名称。只记录 secret 名称/ref、用途、权限、作用域和轮换要求，不记录明文。
+- 固化 Woodpecker secrets 契约：按 `target_env_id` 声明 registry push、K8s deploy、SecretStore、migration、runtime Secret ref、smoke credentials、evidence store 等 secret；预发/生产环境另需 tag/approval 校验；Secret Extension 模式下 pipeline 使用稳定逻辑名（如 `REGISTRY_PUSH_TOKEN`），由 extension 根据 tag/env registry 返回对应环境的值；native/static 模式下才使用 `DT_<ENV_KEY>_*` 静态名称。只记录 secret 名称/ref、用途、权限、作用域和轮换要求，不记录明文。
 - 归档 release evidence：源码 SHA、upstream SHA、digest、schema、配置/Secret ref、smoke run ID、批准人、失败/rollback 结果、未验证项和 secret leakage scan 摘要。
 - 在 `test-cn` 发布同仓第三方 Agent 文档站：独立静态镜像与服务、与 `compile-frontend-test-cn` 并行的 Woodpecker 构建、digest 锁定、现有测试域名 `/docs/` 的 Ingress 路由和 HTTPS 首页/静态资源检查。预发及生产环境暂不新增文档路由。
 
@@ -27,7 +27,7 @@ Woodpecker 流水线与租户数量没有必然关系。它属于生产交付和
 - 环境 registry、目标部署契约登记与验证；支持多个生产环境并禁止默认生产目标。
 - Woodpecker pipeline：受信 ref、审批、Secret 边界、build once、push image、digest lock、migration、deploy、smoke、rollback、evidence。
 - Kubernetes 发布源：namespace、Deployment/Service/Ingress、ConfigMap/Secret ref、Job、NetworkPolicy/ServiceAccount/RBAC、probe、资源请求/限制、单执行 rollout 策略。
-- 发布期 fail-closed：tag 缺失/格式错误/未保护/未授权/被移动、无法从 tag 精确解析 `target_env_id`、PR/未批准 tag/过期批准/环境不匹配/缺失必需 secret/跨环境 Secret 越权/旧构建覆盖/迁移失败/rollout 失败/smoke 失败/agent 中断/并发发布竞争。
+- 发布期 fail-closed：tag 缺失/格式错误、无法从 tag 精确解析 `target_env_id`、PR/环境不匹配/缺失必需 secret/跨环境 Secret 越权/旧构建覆盖/迁移失败/rollout 失败/smoke 失败/agent 中断/并发发布竞争；预发/生产环境另拒绝未保护、未授权、被移动或未批准的 tag。`test-cn` 不使用静态 JSON 伪造标签保护状态。
 - Release evidence 与脱敏/secret leakage scan。
 
 ### Out of scope

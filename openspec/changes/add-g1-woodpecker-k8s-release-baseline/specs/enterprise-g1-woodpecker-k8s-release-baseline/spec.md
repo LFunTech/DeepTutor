@@ -1,15 +1,15 @@
 ## Purpose
 
-定义 DeepTutor G1 Woodpecker/K8s 发布流水线基线：以环境 registry 和目标部署契约为边界，从受信提交构建一次、推送镜像、锁定 digest，通过受保护 deployment tag 解析 `target_env_id`，再执行迁移、部署到对应 Kubernetes、调用固定租户 runtime smoke、归档 release evidence，并在失败时受控回退或进入维护/前向修复状态。该能力支持多个不同生产环境逐一验收，不定义固定租户业务规则，不交付 B2 多租户/TMS、C1/C2 OMS 或 H 高可用。
+定义 DeepTutor G1 Woodpecker/K8s 发布流水线基线：以环境 registry 和目标部署契约为边界，从受信提交构建一次、推送镜像、锁定 digest，通过 deployment tag 解析 `target_env_id`，再执行迁移、部署到对应 Kubernetes、调用固定租户 runtime smoke、归档 release evidence，并在失败时受控回退或进入维护/前向修复状态。`test-cn` 是团队内部发布入口，不要求标签保护或审批校验；预发/生产环境仍要求原有受保护发布门禁。该能力支持多个不同生产环境逐一验收，不定义固定租户业务规则，不交付 B2 多租户/TMS、C1/C2 OMS 或 H 高可用。
 
 ## ADDED Requirements
 
 ### Requirement: test-cn 第三方 Agent 文档必须独立构建并经现有 Ingress 发布
 
-系统 SHALL 仅在 `test-cn` 受保护发布分支，从同一受信提交独立构建 `docs-site/`，使文档构建节点与 `compile-frontend-test-cn` 并行，并将文档镜像推送至 test-cn 环境仓库。部署前 MUST 锁定文档镜像 digest，缺失、格式错误或跨环境 digest MUST 阻断部署。文档 Deployment/Service MUST 与 runtime 分离；现有 test-cn TLS host 的 Ingress MUST 将 `/docs` Prefix 路由至文档服务，并保留 `/` 到 runtime 的路由。pre/prod 不得因 test-cn 发布而新增文档路由。发布后 MUST 经真实 HTTPS 校验 `/docs/` 首页及其引用的静态资源，并将脱敏结果与 digest 留入 release evidence。
+系统 SHALL 仅在 `test-cn` 内部 deployment tag 发布分支，从同一检出提交独立构建 `docs-site/`，使文档构建节点与 `compile-frontend-test-cn` 并行，并将文档镜像推送至 test-cn 环境仓库。部署前 MUST 锁定文档镜像 digest，缺失、格式错误或跨环境 digest MUST 阻断部署。文档 Deployment/Service MUST 与 runtime 分离；现有 test-cn TLS host 的 Ingress MUST 将 `/docs` Prefix 路由至文档服务，并保留 `/` 到 runtime 的路由。pre/prod 不得因 test-cn 发布而新增文档路由。发布后 MUST 经真实 HTTPS 校验 `/docs/` 首页及其引用的静态资源，并将脱敏结果与 digest 留入 release evidence。
 
 #### Scenario: test-cn 文档与前端并行构建
-- **WHEN** 受保护 `deploy/test-cn/*` tag 通过发布门禁
+- **WHEN** `deploy/test-cn/*` tag 通过内部发布门禁
 - **THEN** 文档和主前端构建节点均在 `prepare-release-metadata` 后可运行，文档镜像按 test-cn 仓库推送，部署阶段仅使用 `docs@sha256:<digest>`
 
 #### Scenario: 文档构建失败或 digest 错配
@@ -27,7 +27,7 @@
 
 ### Requirement: 发布流水线必须维护环境 registry 并从 deployment tag 解析目标环境
 
-系统 SHALL 维护部署环境 registry，并在每次 Woodpecker/K8s 发布时从受保护 deployment tag 解析 `target_env_id`。Canonical tag 格式 MUST 为 `deploy/<env_id>/v<major>.<minor>.<patch>[-rc.<n>|-hotfix.<n>]`，其中 `env_id` MUST 精确匹配环境 registry 中的稳定 `env_id`，且完整 tag MUST 匹配 `^deploy/(?P<env_id>[a-z][a-z0-9-]{1,40})/(?P<version>v[0-9]+\.[0-9]+\.[0-9]+(-(rc|hotfix)\.[0-9]+)?)$`。每个环境条目 MUST 包含稳定 `env_id`、`env_class`、可选 `prod_group`、允许 tag pattern、Woodpecker 契约、Woodpecker secrets 清单、registry、K8s cluster/namespace、Ingress/TLS、SecretStore/RBAC、NetworkPolicy、数据面 binding、approval policy、release/migration lock、rollback policy 和 evidence store/prefix。系统 MUST 支持多个 `env_class=prod` 的生产环境，并逐环境打 tag、审批、部署、smoke 和留证。Pipeline MUST NOT 使用默认生产环境、手工覆盖目标环境、歧义 `prod` 别名或跨环境 Secret/namespace/evidence。
+系统 SHALL 维护部署环境 registry，并在每次 Woodpecker/K8s 发布时从 deployment tag 解析 `target_env_id`。`test-cn` 内部发布不要求外部标签保护或审批元数据，但 MUST 验证 tag event、canonical tag 格式、目标环境注册、ref 匹配及检出提交 SHA 格式；不得生成虚假的 tag object SHA、创建者或审批证据。预发和生产环境仍必须使用受保护 deployment tag；生产环境仍满足审批策略。Canonical tag 格式 MUST 为 `deploy/<env_id>/v<major>.<minor>.<patch>[-rc.<n>|-hotfix.<n>]`，其中 `env_id` MUST 精确匹配环境 registry 中的稳定 `env_id`，且完整 tag MUST 匹配 `^deploy/(?P<env_id>[a-z][a-z0-9-]{1,40})/(?P<version>v[0-9]+\.[0-9]+\.[0-9]+(-(rc|hotfix)\.[0-9]+)?)$`。每个环境条目 MUST 包含稳定 `env_id`、`env_class`、可选 `prod_group`、允许 tag pattern、Woodpecker 契约、Woodpecker secrets 清单、registry、K8s cluster/namespace、Ingress/TLS、SecretStore/RBAC、NetworkPolicy、数据面 binding、approval policy、release/migration lock、rollback policy 和 evidence store/prefix。系统 MUST 支持多个 `env_class=prod` 的生产环境，并逐环境打 tag、审批、部署、smoke 和留证。Pipeline MUST NOT 使用默认生产环境、手工覆盖目标环境、歧义 `prod` 别名或跨环境 Secret/namespace/evidence。
 
 #### Scenario: 多个生产环境登记
 - **WHEN** 存在 `prod-cn-east`、`prod-overseas-a` 或其他多个生产环境
@@ -36,7 +36,7 @@
 
 #### Scenario: 从 tag 解析目标环境
 - **WHEN** pipeline 由 tag `deploy/prod-cn-east/v1.4.0` 触发
-- **THEN** 系统解析出 `target_env_id=prod-cn-east` 和 `version=v1.4.0`，并要求该环境存在于 registry、tag 受保护、审批策略满足后才读取该环境 Secret 或部署
+- **THEN** 系统解析出 `target_env_id=prod-cn-east` 和 `version=v1.4.0`，并要求该环境存在于 registry、tag 受保护、审批策略满足后才读取该环境 Secret 或部署；`test-cn` 只要求内部发布门禁和该环境 Secret 检查
 
 #### Scenario: 未指定、格式错误或歧义目标环境
 - **WHEN** pipeline run 没有 deployment tag、tag 不匹配 canonical 格式、tag 中环境不存在、或使用歧义值如 `deploy/prod/v1.4.0` 且 registry 中存在多个生产环境
@@ -47,14 +47,14 @@
 - **THEN** pipeline 拒绝继续执行，不允许把一个环境的生产凭证或发布状态用于另一个环境
 
 #### Scenario: tag 被移动或复用
-- **WHEN** deployment tag 已经产生过 release evidence，随后 tag object SHA、commit SHA、version 或解析出的 `target_env_id` 与历史 evidence 不一致
+- **WHEN** 预发/生产 deployment tag 已经产生过 release evidence，随后 tag object SHA、commit SHA、version 或解析出的 `target_env_id` 与历史 evidence 不一致
 - **THEN** pipeline MUST fail closed，不允许用移动或复用的 tag 覆盖既有环境发布记录
 
 
 
 ### Requirement: Secret resolution 必须使用 Woodpecker 官方支持模式
 
-系统 SHALL 使用 Woodpecker 官方支持的机制解析环境相关 secrets。推荐模式是 Secret Extension：pipeline 使用稳定逻辑 secret 名，Secret Extension 根据受保护 deployment tag、pipeline 元数据和环境 registry 返回对应 `target_env_id` 的 secret 值。可选模式是 Configuration Extension 在配置解析前生成含静态 `from_secret` 名称的 pipeline config。native-only 兜底 MAY 使用同一 pipeline 文件中按环境静态声明的 `from_secret` 名称和 `when.ref` 过滤。系统 MUST NOT 依赖 step shell 中动态计算出的 `ENV_KEY` 去改变 `from_secret` 的 secret 名称，除非该 Woodpecker 版本和配置经过目标环境实测并记录证据。
+系统 SHALL 使用 Woodpecker 官方支持的机制解析环境相关 secrets。推荐模式是 Secret Extension：pipeline 使用稳定逻辑 secret 名，Secret Extension 根据符合目标环境门禁的 deployment tag、pipeline 元数据和环境 registry 返回对应 `target_env_id` 的 secret 值。可选模式是 Configuration Extension 在配置解析前生成含静态 `from_secret` 名称的 pipeline config。native-only 兜底 MAY 使用同一 pipeline 文件中按环境静态声明的 `from_secret` 名称和 `when.ref` 过滤。系统 MUST NOT 依赖 step shell 中动态计算出的 `ENV_KEY` 去改变 `from_secret` 的 secret 名称，除非该 Woodpecker 版本和配置经过目标环境实测并记录证据。
 
 #### Scenario: Secret Extension 提供环境 secret
 - **WHEN** deployment tag 解析出 `target_env_id=prod-cn-east`
@@ -71,7 +71,7 @@
 
 ### Requirement: Woodpecker secrets 必须按环境显式声明且最小权限
 
-系统 SHALL 为每个 `target_env_id` 声明 Woodpecker secrets/ref 清单和 secret resolution 模式，并在 pipeline 读取生产数据、推送镜像、访问 K8s 或执行迁移前完成 secret preflight。清单 MUST 至少覆盖 registry push、K8s deploy、SecretStore/ExternalSecret、DB migration、runtime secret refs、smoke credentials、evidence store 和 tag/approval verification；启用镜像签名、SBOM/漏洞扫描、通知或变更单系统时，还 MUST 声明对应条件性 secrets。所有 secret MUST 按环境隔离、最小权限、可轮换、可审计；evidence 只能记录 secret resolution 模式、secret name/ref、用途、权限摘要、短 hash 和校验结果，不得记录明文。
+系统 SHALL 为每个 `target_env_id` 声明 Woodpecker secrets/ref 清单和 secret resolution 模式，并在 pipeline 读取生产数据、推送镜像、访问 K8s 或执行迁移前完成 secret preflight。清单 MUST 至少覆盖 registry push、K8s deploy、SecretStore/ExternalSecret、DB migration、runtime secret refs、smoke credentials、evidence store；预发/生产环境还 MUST 覆盖 tag/approval verification。启用镜像签名、SBOM/漏洞扫描、通知或变更单系统时，还 MUST 声明对应条件性 secrets。所有 secret MUST 按环境隔离、最小权限、可轮换、可审计；evidence 只能记录 secret resolution 模式、secret name/ref、用途、权限摘要、短 hash 和校验结果，不得记录明文。
 
 #### Scenario: 必需 secret 清单完整
 - **WHEN** 环境 `prod-cn-east` 被登记为发布目标
@@ -93,7 +93,7 @@
 
 ### Requirement: 发布流水线必须先登记目标部署契约
 
-系统 SHALL 在新增或运行 Woodpecker pipeline、K8s manifests 或等价发布流程前，为 deployment tag 可解析出的每个 `target_env_id` 登记目标部署契约。契约 MUST 包含 Woodpecker server/agent 版本、agent backend、受保护 ref、审批/Secret 边界、Woodpecker secrets 清单、registry、K8s namespace、Ingress/TLS、SecretStore/RBAC、NetworkPolicy、发布锁、回退策略和 evidence 存放位置。部署和流水线拓扑 MUST 来自该环境契约，不得从“单租户/多租户”状态或通用 prod 假设推导。
+系统 SHALL 在新增或运行 Woodpecker pipeline、K8s manifests 或等价发布流程前，为 deployment tag 可解析出的每个 `target_env_id` 登记目标部署契约。契约 MUST 包含 Woodpecker server/agent 版本、agent backend、环境对应的 tag/ref 门禁、审批/Secret 边界、Woodpecker secrets 清单、registry、K8s namespace、Ingress/TLS、SecretStore/RBAC、NetworkPolicy、发布锁、回退策略和 evidence 存放位置。部署和流水线拓扑 MUST 来自该环境契约，不得从“单租户/多租户”状态或通用 prod 假设推导。
 
 #### Scenario: 目标部署契约未登记
 - **WHEN** A3/G1 准备新增 K8s 部署源或 Woodpecker pipeline
@@ -105,14 +105,14 @@
 
 ### Requirement: Woodpecker 必须完成构建、推送、digest 锁定和部署门禁
 
-系统 SHALL 提供 Woodpecker pipeline 或等价自动交付流程，从受保护 deployment tag 对应的受信提交构建一次、按 tag 解析出的 `target_env_id` 的 registry 推送镜像、解析 immutable digest，并将 digest 写入该环境发布清单。PR、非 deployment tag、未保护 tag、未批准 tag、过期批准、环境不匹配、缺失/歧义 `target_env_id`、tag moved/reused、缺失必需 secret、超权 secret、旧构建覆盖、新 tag 指向旧 digest、跨环境 Secret 越权 MUST 被拒绝。
+系统 SHALL 提供 Woodpecker pipeline 或等价自动交付流程，从 deployment tag 对应的检出提交构建一次、按 tag 解析出的 `target_env_id` 的 registry 推送镜像、解析 immutable digest，并将 digest 写入该环境发布清单。PR、非 deployment tag、环境不匹配、缺失/歧义 `target_env_id`、缺失必需 secret、超权 secret、旧构建覆盖、新 tag 指向旧 digest、跨环境 Secret 越权 MUST 被拒绝。未保护、未授权、未批准、过期批准或 tag moved/reused 的拒绝要求适用于预发/生产环境；`test-cn` 内部发布不执行这些外部校验，也不得以静态元数据冒充已执行。
 
 #### Scenario: 受信提交生成可部署 digest
-- **WHEN** G1 pipeline 在受保护 deployment tag 上运行
-- **THEN** pipeline 从 tag 解析 `target_env_id` 和 version，完成 build/push/digest 阶段，所有阶段记录原始 tag、tag object SHA、`target_env_id`、exit code、digest、source SHA、upstream SHA、build run id 和脱敏摘要
+- **WHEN** G1 pipeline 在符合相应环境门禁的 deployment tag 上运行
+- **THEN** pipeline 从 tag 解析 `target_env_id` 和 version，完成 build/push/digest 阶段，所有阶段记录原始 tag、`target_env_id`、exit code、digest、source SHA、upstream SHA、build run id 和脱敏摘要；仅在确实取得 tag object SHA 时记录该字段
 
 #### Scenario: 未授权构建或制品异常
-- **WHEN** pipeline 来自 PR、非 deployment tag、未保护 tag、未批准 tag、过期批准、错误环境、歧义 `target_env_id`、tag moved/reused、registry 推送失败或 digest 与受信源码不匹配
+- **WHEN** pipeline 来自 PR、非 deployment tag、错误环境、歧义 `target_env_id`、registry 推送失败或 digest 与检出源码不匹配，或预发/生产环境的 tag 未保护、未批准、过期批准或被移动/复用
 - **THEN** pipeline 停止在部署前，记录脱敏失败证据，不更新任何目标 K8s 发布清单
 
 ### Requirement: 迁移和部署必须由发布步骤受控执行
@@ -170,7 +170,7 @@
 
 ### Requirement: Release evidence 必须可追溯且脱敏
 
-系统 SHALL 为每个 deployment tag / `target_env_id` 的每个 G1 候选和发布保存 release evidence，至少包含原始 tag、tag object SHA、tag creator、deployment contract 摘要、`env_id`、`env_class`、`prod_group`、Woodpecker secret preflight 脱敏摘要、源码 SHA、upstream 兼容审查、镜像 digest、schema version、迁移结果、部署状态、smoke run ID、审批/操作者、Secret ref、错误/回退记录、未验证项和后续风险。Evidence MUST 脱敏，禁止保存 JWT、DeepTutor `dt_token`、client secret、模型 key、完整 profile、用户隐私或原始业务正文。
+系统 SHALL 为每个 deployment tag / `target_env_id` 的每个 G1 候选和发布保存 release evidence，至少包含原始 tag、deployment contract 摘要、`env_id`、`env_class`、`prod_group`、Woodpecker secret preflight 脱敏摘要、源码 SHA、upstream 兼容审查、镜像 digest、schema version、迁移结果、部署状态、smoke run ID、审批/操作者（如适用）、Secret ref、错误/回退记录、未验证项和后续风险。预发/生产环境还 MUST 保存经验证的 tag object SHA、tag creator 和审批信息；`test-cn` 内部发布仅记录真实取得的源提交 SHA，不伪造缺失的 tag/审批字段。Evidence MUST 脱敏，禁止保存 JWT、DeepTutor `dt_token`、client secret、模型 key、完整 profile、用户隐私或原始业务正文。
 
 #### Scenario: 生成 release evidence
 - **WHEN** pipeline 完成或失败
