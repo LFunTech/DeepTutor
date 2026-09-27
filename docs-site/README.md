@@ -1,6 +1,6 @@
 # 智能体基座 Agent 开发者文档站
 
-本目录是面向第三方 Agent 开发者的独立 Docusaurus 站点，仅记录 **15 个第三方 HTTP 接口及 11 个 WebSocket 命令**。其他企业路由不进入发布内容。站点不提供凭证，也不代表已经发布到公网。
+本目录是面向第三方 Agent 开发者的独立 Docusaurus 站点。正式调用契约仍仅包括 **15 个第三方 HTTP 接口及 11 个 WebSocket 命令**；另有按扩展类型组织的 Capacity 开发规范，不代表新增企业安装、发现或执行接口。其他企业路由不进入发布内容。站点不提供凭证，也不代表已经发布到公网。
 
 ## 本地预览
 
@@ -41,3 +41,5 @@ npm --prefix docs-site run build
 ```
 
 `src/data/enterprise-routes.json` 是**第三方公开页面**的数据源；每项必须有独立详细页面。`check_enterprise_routes.py` 同时校验公开目录与真实挂载路由及非公开排除清单，防止新增路由被误发布或遗漏分类。WS JSON 示例前的 `<!-- ws-command -->` 标记由 `check_ws_examples.py` 按 `ClientCommand` 校验。脚本无法替代人工核对 Origin、资源归属、错误语义和部署策略。站点不包含真实域名、测试身份、Secret 或公网部署配置；这些由部署方提供。
+
+`docs/agent-developer/capacities/` 为开发交付物的参考规范，每类独立页面必须明确当前企业入口适用状态。维护时从当前协议/格式核对，不把尚未开放的管理操作写成第三方 API；本目录不包含发布流程。

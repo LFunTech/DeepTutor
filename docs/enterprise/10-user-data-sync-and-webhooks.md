@@ -132,7 +132,7 @@ POST /api/v1/eduplus2/webhooks
 
 `.secrets/.test-secrets` 仅是本地测试输入，不会自动同步至测试 K8s。`test-cn` 受保护 tag 发布步骤从 Woodpecker 仓库 Secret `dt_test_cn_eduplus2_webhook_secret` 注入密钥，仅同步目标命名空间运行时 Secret 的 `DT_EDUPLUS2_WEBHOOK_SECRET` 字段后才继续部署；后端通过已有 `envFrom` 和 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`/同名变量读取。应核对 Woodpecker、K8s 与 EduPlus2 对应 Webhook 使用同一密钥；不能靠本地文件存在便认定公网 URL 可验签。
 
-正式接收另需由**本系统**发布契约配置 `DT_EDUPLUS2_WEBHOOK_APP_ID`（目标数字应用 ID）、`DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF`（独立稳定密钥，不与 Webhook Secret 共用）、`DT_EDUPLUS2_OIDC_ISSUER` 和 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true`。轮换时可选 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF` 和 Unix 秒截止 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL`。Webhook 生命周期接收不需要 `DT_EDUPLUS2_LIFECYCLE_PROOF_TTL_SECONDS` 或 online resolve；其余 OAuth 用途可能仍需独立 provider 配置。目标环境合约、迁移、资源与全入口门禁未验收前，接收开关必须保持关闭；不能把新增密钥硬编码到 Git 或仅因签名正确就开通业务。
+正式接收另需由**本系统**发布契约配置 `DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF`（独立稳定密钥，不与 Webhook Secret 共用）、`DT_EDUPLUS2_OIDC_ISSUER` 和 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true`。目标应用 ID 从已验签 Webhook body 的 `app.id` 取得并按学校—应用持久化，不再配置静态应用 ID；TMS 将已验签 JWT 的 `azp` 与该投影对应的 active client 绑定，不能仅凭 body 或 URL 选择应用。轮换时可选 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF` 和 Unix 秒截止 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL`。Webhook 生命周期接收不需要 `DT_EDUPLUS2_LIFECYCLE_PROOF_TTL_SECONDS` 或 online resolve；其余 OAuth 用途可能仍需独立 provider 配置。目标环境合约、迁移、资源与全入口门禁未验收前，接收开关必须保持关闭；不能把新增密钥硬编码到 Git 或仅因签名正确就开通业务。
 
 本节当前已实现的 Webhook 只处理八类应用订阅 `subscription.*` 通知；应用安装、client 配置、用户/组织/权限变化若要同步，仍需各自独立合同和提案，不能假定此入口已覆盖。它不是 TMS/OMS 每次登录或第三方 `POST /api/v1/auth/eduplus2/exchange` 的主链路。普通第三方调用仍必须实时验签 EduPlus2 user JWT，并查 active client/app 注册状态；即使暂未接入 Webhook，也不能放松 token 校验或使用未审计的手工配置绕过注册流程。
 

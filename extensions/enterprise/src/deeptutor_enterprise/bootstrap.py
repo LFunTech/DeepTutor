@@ -189,7 +189,6 @@ class Enterprise:
         self.eduplus2_webhook_secret = ""
         self.eduplus2_webhook_previous_secret = ""
         self.eduplus2_webhook_previous_until = 0
-        self.eduplus2_webhook_app_id = 0
         self.eduplus2_webhook_inbox_digest_key = ""
         self.eduplus2_lifecycle_receiver_enabled = False
         self.eduplus2_lifecycle_proof_ttl_seconds = 30
@@ -214,33 +213,36 @@ class Enterprise:
             return
         if tenant["external_eligibility"] != "allowed" or not tenant["external_tid"]:
             raise PermissionError("school lifecycle unavailable")
-        if self.eduplus2_webhook_app_id <= 0:
-            raise PermissionError("school lifecycle unavailable")
-        state = await (
+        states = await (
             await c.execute(
-                "SELECT 1 FROM oms.school_bindings b "
+                "SELECT p.eligibility,p.binding_version,p.onboarding_event_id,"
+                "p.onboarding_completed_at,k.frozen,k.version AS control_version,b.version "
+                "FROM oms.school_bindings b "
                 "JOIN eduplus2.webhook_school_state p "
                 "ON p.external_tenant_id=b.eduplus_tenant_id "
+                "AND p.school_id=b.tenant_id "
+                "LEFT JOIN eduplus2.webhook_school_controls k "
+                "ON (k.tenant_id,k.school_id,k.external_app_id)="
+                "(p.tenant_id,p.school_id,p.external_app_id) "
                 "WHERE b.tenant_id=%s AND b.status='verified' "
                 "AND b.eduplus_tenant_id::text=%s "
-                "AND p.tenant_id=%s AND p.external_app_id=%s "
-                "AND p.school_id=b.tenant_id AND p.eligibility='allowed' "
-                "AND p.binding_version=b.version "
-                "AND p.onboarding_event_id IS NOT NULL "
-                "AND p.onboarding_completed_at IS NOT NULL "
-                "AND EXISTS (SELECT 1 FROM eduplus2.webhook_school_controls k "
-                "WHERE (k.tenant_id,k.school_id,k.external_app_id)="
-                "(p.tenant_id,p.school_id,p.external_app_id) AND NOT k.frozen) "
-                "LIMIT 1",
+                "AND p.tenant_id=%s LIMIT 2",
                 (
                     self.deployment.tenant_id,
                     tenant["external_tid"],
                     self.deployment.tenant_id,
-                    self.eduplus2_webhook_app_id,
                 ),
             )
-        ).fetchone()
-        if not state:
+        ).fetchall()
+        # 此固定租户旧会话没有目标应用身份，多个应用时不能任选一个放行。
+        if len(states) != 1 or not (
+            states[0]["eligibility"] == "allowed"
+            and states[0]["binding_version"] == states[0]["version"]
+            and states[0]["onboarding_event_id"] is not None
+            and states[0]["onboarding_completed_at"] is not None
+            and states[0]["control_version"] is not None
+            and not states[0]["frozen"]
+        ):
             raise PermissionError("school lifecycle unavailable")
 
     @staticmethod
@@ -315,9 +317,6 @@ class Enterprise:
         previous_until = os.environ.get("DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL", "").strip()
         if previous_until.isascii() and previous_until.isdecimal():
             self.eduplus2_webhook_previous_until = int(previous_until)
-        webhook_app_id = os.environ.get("DT_EDUPLUS2_WEBHOOK_APP_ID", "").strip()
-        if webhook_app_id.isascii() and webhook_app_id.isdecimal():
-            self.eduplus2_webhook_app_id = int(webhook_app_id)
         inbox_digest_ref = os.environ.get("DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF", "").strip()
         if not inbox_digest_ref and os.environ.get("DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY"):
             inbox_digest_ref = "env:DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY"
@@ -407,7 +406,6 @@ class Enterprise:
             )
         if self.eduplus2_lifecycle_receiver_enabled and (
             not self.eduplus2_webhook_secret
-            or self.eduplus2_webhook_app_id <= 0
             or len(self.eduplus2_webhook_inbox_digest_key) < 32
             or not self.eduplus2_issuer
             or hmac.compare_digest(

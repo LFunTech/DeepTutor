@@ -176,7 +176,11 @@ async def require_management_permission(
                 "FROM oms.school_bindings b "
                 "JOIN enterprise.tenants t ON t.id=b.tenant_id "
                 "WHERE b.tenant_id=%s AND b.status='verified' "
-                + ("" if lifecycle_governance else "AND t.external_eligibility='allowed' ")
+                + (
+                    ""
+                    if lifecycle_governance
+                    else "AND (t.external_tid IS NOT NULL OR t.external_eligibility='allowed') "
+                )
                 + binding_lock,
                 (binding_school_id,),
             )

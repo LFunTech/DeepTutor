@@ -2,17 +2,40 @@
 
 from __future__ import annotations
 
+import ast
+import asyncio
+from contextlib import asynccontextmanager
 import json
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
 from check_enterprise_routes import main as check_enterprise_routes, mounted_routes
+from deeptutor.api.routers.reading_extensions import ACTION_TIMEOUT_S
+from deeptutor.core.capability_protocol import CapabilityManifest
+from deeptutor.core.context import UnifiedContext
+from deeptutor.core.stream import StreamEventType
+from deeptutor.core.tool_protocol import ToolDefinition, ToolParameter, ToolResult
 from deeptutor_enterprise.api.application import create_application
+from deeptutor.reading.extensions import ReadingContext, ReadingExtensionManifest, ReadingExtensionResult
+from deeptutor.services.cli_apps.models import APP_ID_RE, ENTRY_POINT_RE
+from deeptutor.services.cli_apps.runner import DEFAULT_TIMEOUT_S, MAX_OUTPUT_CHARS, MAX_TIMEOUT_S
+from deeptutor.services.mcp.config import MCPServerConfig
+from deeptutor.services.mcp.user_config import MAX_SERVERS_PER_OWNER
+from deeptutor.services.skill.service import (
+    _IMPORT_MAX_FILE_BYTES,
+    _IMPORT_MAX_FILES,
+    _IMPORT_MAX_TOTAL_BYTES,
+    _MAX_READ_CHARS,
+)
 from deeptutor.services.session.turns.environment import validate_text_request
+from deeptutor.utils.document_validator import DocumentValidator
+from deeptutor.visualizers.protocol import MAX_MANIFEST_SCHEMA_CHARS, MAX_PAYLOAD_CHARS, VisualizerManifest
+from deeptutor.visualizers.store import _MAX_ARCHIVE_BYTES, _MAX_ENTRIES, _MAX_ENTRY_BYTES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,6 +183,168 @@ class DocumentationContractTests(unittest.TestCase):
             self.assertIn(value, guide)
         self.assertIn("当前没有面向第三方 Agent 发布的选项发现接口", guide)
         self.assertIn("capability-selection.mdx", (DOCS / "api/ws/start_turn.mdx").read_text())
+
+    def test_capacity_development_guides_are_independent_and_not_api_claims(self):
+        slugs = (
+            "mcp", "tool", "skill", "knowledge-base", "turn-capability",
+            "loop-extension", "visualizer", "reading-extension", "cli-app",
+        )
+        directory = DOCS / "capacities"
+        self.assertEqual(
+            {page.stem for page in directory.glob("*.mdx")},
+            {"index", *slugs},
+        )
+        sidebar = (ROOT / "sidebars.ts").read_text()
+        self.assertIn("Capacity 开发规范", sidebar)
+        overview = (directory / "index.mdx").read_text()
+        self.assertIn("开发规范不等于企业入口已开放安装或调用", overview)
+        for slug in slugs:
+            page = (directory / f"{slug}.mdx").read_text()
+            self.assertIn(f"agent-developer/capacities/{slug}", sidebar)
+            self.assertIn(f"{slug}.mdx", overview)
+            for heading in (
+                "## 企业入口适用状态", "## 交付物与格式", "## 输入与输出",
+                "## 安全与资源边界", "## 失败处理", "## 可验证样例", "## 开发自测",
+            ):
+                self.assertIn(heading, page, slug)
+            self.assertNotIn("/api/space/", page, slug)
+            self.assertNotIn("/api/settings/", page, slug)
+            self.assertNotIn("/api/v1/oms/", page, slug)
+            self.assertNotIn("/api/v1/tms/", page, slug)
+        self.assertIn("当前企业入口仅支持", (directory / "turn-capability.mdx").read_text())
+        self.assertIn("当前不要提交非空", (directory / "mcp.mdx").read_text())
+        self.assertIn("## 开发规范与调用契约", (DOCS / "capability-selection.mdx").read_text())
+
+    def test_capacity_development_examples_match_current_formats(self):
+        directory = DOCS / "capacities"
+
+        def first_fence(slug: str, language: str) -> str:
+            body = (directory / f"{slug}.mdx").read_text()
+            match = re.search(rf"```{language}\n(.*?)\n```", body, re.DOTALL)
+            self.assertIsNotNone(match, slug)
+            return match.group(1)
+
+        visualizer = json.loads(first_fence("visualizer", "json"))
+        VisualizerManifest.model_validate(visualizer)
+        point_schema = visualizer["payload_schema"]["properties"]["points"]["items"]
+        self.assertEqual(set(point_schema["required"]), {"x", "y"})
+
+        reading = json.loads(first_fence("reading-extension", "json"))
+        ReadingExtensionManifest.model_validate(reading)
+        entry_point = tomllib.loads(first_fence("reading-extension", "toml"))
+        self.assertIn(reading["id"], entry_point["project"]["entry-points"]["deeptutor.reading_extensions"])
+
+        turn_entry_point = tomllib.loads(first_fence("turn-capability", "toml"))
+        self.assertEqual(
+            turn_entry_point["project"]["entry-points"]["deeptutor.extensions"]["echo_turn"],
+            "echo_turn:EchoTurn",
+        )
+        ast.parse(first_fence("tool", "python"))
+        ast.parse(first_fence("turn-capability", "python"))
+        ast.parse(first_fence("loop-extension", "python"))
+        ast.parse(first_fence("reading-extension", "python"))
+
+        tool_namespace: dict[str, object] = {}
+        exec(first_fence("tool", "python"), tool_namespace)
+        add_numbers = tool_namespace["AddNumbers"]()
+        self.assertEqual(asyncio.run(add_numbers.execute(a=2, b=3)).content, "5")
+        self.assertFalse(asyncio.run(add_numbers.execute(a="2", b=3)).success)
+
+        reading_namespace: dict[str, object] = {}
+        exec(first_fence("reading-extension", "python"), reading_namespace)
+        extension = reading_namespace["ExplainSelection"]()
+        context = ReadingContext(material_id="sample", locator=1, visible_text="函数有定义域", selection="定义域")
+        self.assertEqual(extension.run_action("explain", context).type, "card")
+        with self.assertRaises(ValueError):
+            extension.run_action("unknown", context)
+
+        turn_namespace: dict[str, object] = {}
+        exec(first_fence("turn-capability", "python"), turn_namespace)
+        emitted = []
+
+        class FakeStream:
+            async def emit(self, event):
+                emitted.append(event)
+
+            @asynccontextmanager
+            async def stage(self, name, *, source=""):
+                yield
+
+        turn_context = UnifiedContext(user_message="测试")
+        asyncio.run(turn_namespace["EchoTurn"]().run(turn_context, FakeStream()))
+        self.assertEqual(turn_context.capability_output.agent_output, "收到：测试")
+        self.assertEqual([event.type for event in emitted], [StreamEventType.RESULT])
+
+    def test_capacity_guides_track_implemented_limits_and_semantics(self):
+        directory = DOCS / "capacities"
+
+        def body(slug: str) -> str:
+            return (directory / f"{slug}.mdx").read_text()
+
+        mcp = body("mcp")
+        self.assertIn(str(MAX_SERVERS_PER_OWNER), mcp)
+        self.assertIn(str(MCPServerConfig.model_fields["tool_timeout"].default), mcp)
+        for value in ("streamableHttp", "sse", "stdio", "structuredContent", "isError", "不会自动"):
+            self.assertIn(value, mcp)
+
+        tool = body("tool")
+        for name in ToolDefinition.__dataclass_fields__:
+            self.assertIn(f"`{name}`", tool)
+        for name in ToolParameter.__dataclass_fields__:
+            self.assertIn(f"`{name}`", tool)
+        for name in ToolResult.__dataclass_fields__:
+            self.assertIn(f"`{name}`", tool)
+        self.assertIn("不会替 `execute` 自动验证参数", tool)
+
+        skill = body("skill")
+        for limit in (_IMPORT_MAX_FILE_BYTES, _IMPORT_MAX_TOTAL_BYTES, _IMPORT_MAX_FILES, _MAX_READ_CHARS):
+            self.assertIn(f"{limit:,}", skill)
+        for value in ("`always`", "`requires.bins`", "`requires.env`", "`requires.sandbox`", "`SKILL.md`"):
+            self.assertIn(value, skill)
+
+        kb = body("knowledge-base")
+        self.assertIn(str(DocumentValidator.MAX_FILE_SIZE // (1024 * 1024)), kb)
+        self.assertIn("没有定义可由第三方自行上传", kb)
+        self.assertIn("不等同", kb)
+
+        turn = body("turn-capability")
+        for name in CapabilityManifest.__dataclass_fields__:
+            self.assertIn(name, turn)
+        for event_type in StreamEventType:
+            self.assertIn(f"`{event_type.value}`", turn)
+        for name in ("user_message", "session_id", "conversation_history", "knowledge_bases", "attachments", "capability_output"):
+            self.assertIn(f"`{name}", turn)
+        self.assertIn("`run(context, stream)`", turn)
+        self.assertIn("不会仅因填写", turn)
+
+        loop = body("loop-extension")
+        for name in ("owned_tools", "is_active", "system_block", "augment_kwargs", "pre_loop_seed", "pre_loop", "on_user_pause", "on_user_resume", "owned_kbs"):
+            self.assertIn(f"`{name}", loop)
+        self.assertIn("排他", loop)
+
+        visualizer = body("visualizer")
+        for name in VisualizerManifest.model_fields:
+            self.assertIn(f"`{name}`", visualizer)
+        for limit in (MAX_PAYLOAD_CHARS, MAX_MANIFEST_SCHEMA_CHARS):
+            self.assertIn(f"{limit:,}", visualizer)
+        for limit in (_MAX_ARCHIVE_BYTES // (1024 * 1024), _MAX_ENTRY_BYTES // (1024 * 1024), _MAX_ENTRIES):
+            self.assertIn(str(limit), visualizer)
+        self.assertIn('只接受 `iframe`', visualizer)
+
+        reading = body("reading-extension")
+        for name in ReadingExtensionManifest.model_fields | ReadingContext.model_fields | ReadingExtensionResult.model_fields:
+            self.assertIn(f"`{name}`", reading)
+        self.assertIn(str(ACTION_TIMEOUT_S), reading)
+        for value in ("`toolbar`", "`selection`", "`visible_text`", "`browser_speech`", "`quiz`"):
+            self.assertIn(value, reading)
+
+        cli = body("cli-app")
+        self.assertIn(APP_ID_RE.pattern, cli)
+        self.assertIn(ENTRY_POINT_RE.pattern, cli)
+        for limit in (DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, MAX_OUTPUT_CHARS):
+            self.assertIn(f"{limit:,}" if limit >= 1000 else str(limit), cli)
+        for value in ("`args`", "`timeout_s`", "`exit_code`", "`timed_out`", "`ToolResult.success`", "仍为 `true`"):
+            self.assertIn(value, cli)
 
     def test_context_selection_is_per_turn_not_live_mutation(self):
         guide = (DOCS / "capability-selection.mdx").read_text()

@@ -8,7 +8,7 @@ EduPlus2 现有事件没有可比较的来源版本。实现采用**本系统同
 
 ## 入口与事务
 
-1. 接收原始 body 上限 128 KiB；按 `timestamp.event.raw-body` 对当前/轮换窗口上一 Webhook Secret 做常数时间 HMAC 比较，并检查 5 分钟时间窗、event/header 一致、事件白名单、目标应用 ID、必需正整数学校/订阅 ID。明确 mock 标记与 `mock_` event ID 只确认 URL，不写业务。
+1. 接收原始 body 上限 128 KiB；按 `timestamp.event.raw-body` 对当前/轮换窗口上一 Webhook Secret 做常数时间 HMAC 比较，并检查 5 分钟时间窗、event/header 一致、事件白名单和已签名 body 中的正整数学校/应用/订阅 ID。`app.id` 由验签后的 body 取得，不配置静态目标应用 ID，不接受未签名 header/URL 指定应用。明确 mock 标记与 `mock_` event ID 只确认 URL，不写业务。
 2. 真实事件仅提取学校/应用/订阅稳定 ID、订阅状态、必要 client ID、`created.actor` 最小身份事实及 event ID；独立稳定 inbox 密钥生成规范化摘要。不落原始 body、OAuth Secret、签名和 token。
 3. 同一学校—应用使用 PG 事务锁串行接收，在一个事务内插入 inbox、自动绑定、分配本地 generation 并完成投影；`created` 同时初始化以学校 UUID 分区的 PG 事实空间、目标应用 client 和数据库 onboarding 标记。整体提交后返回 204；任一步失败整体回滚并返回 5xx，由发送端重试。不存在已 2xx 但本地投影/PG 初始化未完成的窗口。未绑定学校的非 created 事件保留脱敏 inbox 并以 denied/`school_not_bound` 终结，不能 2xx 后留下永不处理的 pending，也不据此建校。
 
@@ -22,6 +22,8 @@ EduPlus2 现有事件没有可比较的来源版本。实现采用**本系统同
 ## Actor 与权限
 
 仅已验签 `subscription.created.actor.type=user` 且非空 `actor.user_id` 形成待核验候选；system/null 或其他事件不形成候选。TMS 引导 HTTP 入口仅接受 Bearer JWT，由 OIDC/JWKS 验签后将 `iss/sub/tid/azp` 与同学校、目标应用的 Webhook PG 投影及 active client 绑定；请求体、URL 或 JWT 角色不构造学校/动作权限。本人候选与当前学校资格、binding_version、一次性 bootstrap 状态、主体、`school_admin` assignment、候选终态和审计在**同一写事务**中核对/提交。AI 资源 pending 不妨碍 TMS 首管激活。真实 `actor.user_id` 与 JWT `sub` 的等价关系尚须脱敏 test 证据；不相等即保持拒绝。Webhook 2xx、actor 字段本身或普通成员身份均不授予 `tenant.*`。OMS `ops.*` 与 TMS `tenant.*` 仍由 DeepTutor Enterprise 应用层控制。
+
+TMS 的目标应用 ID 来自与 JWT `azp` 精确匹配的本校 active client 登记，再与同一学校—应用的已验签 Webhook 投影核对；另一应用的停用不能覆盖该目标应用的管理资格，学校级兼容字段不得取代应用级投影。OMS 生命周期诊断/冻结由受信操作者身份携带目标应用 ID，并复核本校投影及 `ops.reconciliation.manage`。固定租户旧会话不携带应用身份时，只允许唯一学校—应用投影且其资格有效；出现多个应用时失败关闭，不任意选择一个。发布时先部署不再读取静态 ID 的后端，成功 rollout 后才从 test-cn 运行时 Secret 删除旧键。
 
 ## 运营、迁移及验证
 

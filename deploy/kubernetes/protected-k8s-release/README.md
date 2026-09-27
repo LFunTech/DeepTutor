@@ -39,10 +39,11 @@ The following objects are intentionally **pre-provisioned by the target environm
 - `deeptutor-runtime` ServiceAccount and namespace-scoped runtime RBAC.
 - `deeptutor-migrator` ServiceAccount and namespace-scoped migration RBAC.
 - `deeptutor-runtime-secrets` from the target environment SecretStore / ExternalSecret binding.
-- For `test-cn` only, the tag preflight/deploy steps receive Woodpecker's
-  `dt_test_cn_eduplus2_webhook_secret`; deploy synchronizes only
-  `DT_EDUPLUS2_WEBHOOK_SECRET` in the pre-provisioned runtime Secret before
-  rollout. The sync is idempotent, namespace-locked, and never prints the value;
+- For `test-cn` only, tag preflight/deploy receive separate Woodpecker signing
+  and stable inbox-digest secrets. Deploy synchronizes both keys into the
+  pre-provisioned runtime Secret before rollout; after the new backend is ready,
+  it removes the retired static Webhook App ID key. The sync is idempotent,
+  namespace-locked, rejects silent digest-key rotation, and never prints values;
   other runtime Secret keys remain under the target environment's ownership.
 - `deeptutor-migrator-secrets` with migrator-only PostgreSQL credentials.
 - `deeptutor-deployment-config` ConfigMap projected from the redacted target deployment contract.

@@ -1583,6 +1583,7 @@ APIKEY=lightrag-key
 # DeepTutor EduPlus2 runtime env (canonical; generated from token-test.secrets)
 DT_EDUPLUS2_CLIENT_SECRET_REF=external-secret:test-cn/eduplus2-existing
 DT_EDUPLUS2_WEBHOOK_SECRET=synthetic-webhook-secret
+DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY=synthetic-independent-inbox-digest-key-0123456789
 """.strip()
         + "\n",
         encoding="utf8",
@@ -1631,6 +1632,9 @@ DT_EDUPLUS2_WEBHOOK_SECRET=synthetic-webhook-secret
         "external-secret:test-cn/eduplus2-existing"
     )
     assert values["DT_TEST_CN_EDUPLUS2_WEBHOOK_SECRET"] == "synthetic-webhook-secret"
+    assert values["DT_TEST_CN_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY"] == (
+        "synthetic-independent-inbox-digest-key-0123456789"
+    )
     assert values["DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET"] == "generated-test-token"
     assert values["DT_TEST_CN_SECRET_PREFLIGHT_METADATA_JSON"]
     from deeptutor_enterprise.protected_k8s_release import scan_secret_leakage

@@ -30,10 +30,6 @@ class LifecycleInvalid(ValueError):
     """真实事件不符合已知安全字段合同。"""
 
 
-class LifecycleWrongApp(PermissionError):
-    """事件目标不是当前配置的 EduPlus2 应用。"""
-
-
 class LifecycleConflict(ValueError):
     """相同事件 ID 携带不同业务事实。"""
 
@@ -73,13 +69,13 @@ def _safe_text(value: Any, *, max_length: int, required: bool = False) -> str:
 
 
 def parse_lifecycle_event(
-    payload: dict[str, Any], event_type: str, *, app_id: int, digest_key: str
+    payload: dict[str, Any], event_type: str, *, digest_key: str
 ) -> LifecycleEvent:
     """从真实事件提取业务白名单；绝不读取/保存 OAuth Secret。"""
 
     if event_type not in SUPPORTED_EVENTS:
         raise LifecycleInvalid("unsupported event")
-    if type(app_id) is not int or app_id <= 0 or len(digest_key) < 32:
+    if len(digest_key) < 32:
         raise RuntimeError("lifecycle receiver is not configured")
     event_id = _safe_text(payload.get("event_id"), max_length=128, required=True)
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", event_id) or event_id.startswith("mock_"):
@@ -96,8 +92,6 @@ def parse_lifecycle_event(
     school_code = _safe_text(tenant.get("code"), max_length=128)
     external_app_id = _positive_id(app.get("id"))
     subscription_id = _positive_id(subscription.get("id"))
-    if external_app_id != app_id:
-        raise LifecycleWrongApp("event target application differs")
     status = _safe_text(subscription.get("status"), max_length=64, required=True)
     app_client_id = _safe_text(app.get("client_id"), max_length=255)
     oauth = payload.get("oauth_client")
@@ -528,22 +522,34 @@ async def _reconcile_lifecycle_target_locked(
 async def reconcile_due_lifecycle_targets(enterprise, *, batch_size: int = 32) -> int:
     """扫描已绑定学校的待处理/到期证明；未知学校不在此处自动绑定。"""
 
-    app_id = int(getattr(enterprise, "eduplus2_webhook_app_id", 0) or 0)
-    if app_id <= 0:
-        raise RuntimeError("lifecycle application is not configured")
     if type(batch_size) is not int or not 1 <= batch_size <= 128:
         raise ValueError("invalid lifecycle batch size")
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@eduplus2-reconcile")
     async with enterprise.db.transaction(scope) as c:
-        await c.execute(
-            "INSERT INTO eduplus2.lifecycle_targets(tenant_id,external_tenant_id,"
-            "external_app_id,generation,eligibility) "
-            "SELECT %s,b.eduplus_tenant_id,%s,1,'unknown' "
-            "FROM oms.school_bindings b JOIN enterprise.tenants t ON t.id=b.tenant_id "
-            "WHERE b.status='verified' AND t.external_tid=b.eduplus_tenant_id::text "
-            "ON CONFLICT (tenant_id,external_tenant_id,external_app_id) DO NOTHING",
-            (enterprise.deployment.tenant_id, app_id),
-        )
+        registrations = await (
+            await c.execute(
+                "SELECT b.eduplus_tenant_id,r.external_app_id "
+                "FROM oms.school_bindings b JOIN enterprise.tenants t ON t.id=b.tenant_id "
+                "JOIN eduplus2.external_client_registrations r "
+                "ON r.internal_tenant_id=b.tenant_id "
+                "AND r.external_tenant_id=b.eduplus_tenant_id::text "
+                "WHERE b.status='verified' AND t.external_tid=b.eduplus_tenant_id::text "
+                "AND r.status='active'"
+            )
+        ).fetchall()
+        for registration in registrations:
+            raw_app_id = registration["external_app_id"]
+            if not raw_app_id.isascii() or not raw_app_id.isdecimal():
+                continue
+            app_id = int(raw_app_id)
+            if not 0 < app_id < 2**63:
+                continue
+            await c.execute(
+                "INSERT INTO eduplus2.lifecycle_targets(tenant_id,external_tenant_id,"
+                "external_app_id,generation,eligibility) VALUES(%s,%s,%s,1,'unknown') "
+                "ON CONFLICT (tenant_id,external_tenant_id,external_app_id) DO NOTHING",
+                (enterprise.deployment.tenant_id, registration["eduplus_tenant_id"], app_id),
+            )
         due = await (
             await c.execute(
                 "SELECT p.external_tenant_id,p.external_app_id "
@@ -552,14 +558,14 @@ async def reconcile_due_lifecycle_targets(enterprise, *, batch_size: int = 32) -
                 "AND b.status='verified' "
                 "JOIN enterprise.tenants t ON t.id=b.tenant_id "
                 "AND t.external_tid=p.external_tenant_id::text "
-                "WHERE p.tenant_id=%s AND p.external_app_id=%s AND ("
+                "WHERE p.tenant_id=%s AND ("
                 "(p.eligibility='allowed' "
                 "AND p.proof_expires_at<=now()+interval '5 seconds') OR "
                 "(p.eligibility<>'allowed' AND (p.retry_count=0 OR "
                 "p.updated_at<=now()-make_interval(secs=>"
                 "power(2,least(p.retry_count,6))::integer)))) "
                 "ORDER BY p.updated_at,p.external_tenant_id LIMIT %s",
-                (enterprise.deployment.tenant_id, app_id, batch_size),
+                (enterprise.deployment.tenant_id, batch_size),
             )
         ).fetchall()
     processed = 0

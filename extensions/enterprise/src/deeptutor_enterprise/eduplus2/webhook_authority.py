@@ -16,7 +16,6 @@ async def snapshot_webhook_authority_metrics(enterprise) -> dict[str, int]:
     """只返回聚合量；久未投递是诊断信号，不能证明外部状态已改变。"""
 
     owner = enterprise.deployment.tenant_id
-    app_id = int(getattr(enterprise, "eduplus2_webhook_app_id", 0) or 0)
     async with enterprise.db.transaction(TenantScope(str(owner), "@webhook-metrics")) as c:
         inbox = await (
             await c.execute(
@@ -27,8 +26,8 @@ async def snapshot_webhook_authority_metrics(enterprise) -> dict[str, int]:
                 "AS legacy_pending_events,"
                 "count(*) FILTER (WHERE last_error_code='school_not_bound') "
                 "AS unbound_events FROM eduplus2.lifecycle_inbox "
-                "WHERE tenant_id=%s AND external_app_id=%s",
-                (owner, app_id),
+                "WHERE tenant_id=%s",
+                (owner,),
             )
         ).fetchone()
         schools = await (
@@ -44,15 +43,15 @@ async def snapshot_webhook_authority_metrics(enterprise) -> dict[str, int]:
                 "LEFT JOIN eduplus2.webhook_school_controls k "
                 "ON (k.tenant_id,k.school_id,k.external_app_id)="
                 "(p.tenant_id,p.school_id,p.external_app_id) "
-                "WHERE p.tenant_id=%s AND p.external_app_id=%s",
-                (owner, app_id),
+                "WHERE p.tenant_id=%s",
+                (owner,),
             )
         ).fetchone()
         actors = await (
             await c.execute(
                 "SELECT count(*) AS pending_actors FROM eduplus2.lifecycle_actor_candidates "
-                "WHERE tenant_id=%s AND external_app_id=%s AND status='pending_verification'",
-                (owner, app_id),
+                "WHERE tenant_id=%s AND status='pending_verification'",
+                (owner,),
             )
         ).fetchone()
     return {key: int(value) for row in (inbox, schools, actors) for key, value in row.items()}

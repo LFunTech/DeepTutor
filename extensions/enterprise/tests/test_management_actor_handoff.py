@@ -36,7 +36,6 @@ class ActiveResolver:
 async def _seed_candidate(enterprise):
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
     enterprise.eduplus2_resolver = None
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@handoff-test")
     async with enterprise.db.transaction(scope) as c:
@@ -60,7 +59,6 @@ async def _seed_candidate(enterprise):
             "actor": {"type": "user", "user_id": "synthetic-keycloak-sub"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     assert (
@@ -98,6 +96,7 @@ async def test_pending_actor_handoff_requires_trusted_same_school_identity(app):
         replace(identity, subject="another-subject"),
         replace(identity, school_id=uuid.uuid4()),
         replace(identity, school_binding_version=2),
+        replace(identity, webhook_app_id=52),
     ):
         assert await find_pending_actor_candidates(enterprise, mismatch) == ()
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@handoff-test")
@@ -241,7 +240,6 @@ async def test_pending_actor_handoff_denies_late_event_after_school_bootstrap(ap
             "actor": {"type": "user", "user_id": identity.subject},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     assert (

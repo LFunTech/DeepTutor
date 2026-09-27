@@ -7,6 +7,18 @@ const sidebars: SidebarsConfig = {
     {type: 'doc', id: 'agent-developer/auth-and-security', label: '认证与安全'},
     {type: 'doc', id: 'agent-developer/call-flows', label: '调用链路'},
     {type: 'doc', id: 'agent-developer/capability-selection', label: '对话能力选择'},
+    {type: 'category', label: 'Capacity 开发规范', items: [
+      'agent-developer/capacities/index',
+      'agent-developer/capacities/mcp',
+      'agent-developer/capacities/tool',
+      'agent-developer/capacities/skill',
+      'agent-developer/capacities/knowledge-base',
+      'agent-developer/capacities/turn-capability',
+      'agent-developer/capacities/loop-extension',
+      'agent-developer/capacities/visualizer',
+      'agent-developer/capacities/reading-extension',
+      'agent-developer/capacities/cli-app',
+    ]},
     {type: 'doc', id: 'agent-developer/websocket-protocol', label: 'WebSocket 入口与事件'},
     {type: 'doc', id: 'agent-developer/http-api', label: 'HTTP API 目录'},
     {type: 'category', label: '身份交换', items: [

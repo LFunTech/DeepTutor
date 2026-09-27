@@ -1,0 +1,88 @@
+---
+title: Tool 规范
+description: 当前 DeepTutor BaseTool、参数 schema 与执行结果的完整开发契约
+slug: /capacities/tool/
+---
+
+# Tool 规范
+
+Tool 适合边界清晰、一次调用即可完成的操作，例如按受权课程代码查询摘要。它不同于 [MCP Server](mcp.mdx)：Tool 是单个函数契约，MCP 是对外提供工具的标准服务协议；也不同于接管整个 turn 的 [Turn Capability](turn-capability.mdx)。
+
+## 企业入口适用状态
+
+当前企业第三方 API **没有通用自定义 Tool 安装或注册接口**。`start_turn.tools` 不是上传或选择任意第三方 Tool 的入口；正式支持范围见 [`start_turn`](../api/ws/start_turn.mdx)。以下是当前 DeepTutor 自部署的代码扩展协议，不能直接据此在企业 turn 调用。
+
+## 交付物与格式
+
+当前 Tool 是实现 `BaseTool` 的 Python 对象，必须提供 `get_definition() -> ToolDefinition` 和 `async execute(**kwargs) -> ToolResult`。`get_prompt_hints(language)` 可选，用于说明适用场景；`deferred = True` 可让工具模式按需展示。**当前没有通用的任意 Tool 包自动加载协议**：实现类本身不等于已注册，须由受控集成方显式装配；名称碰撞可能覆盖已有 Tool，因此使用独特且稳定的名称。
+
+## 当前实现的字段契约
+
+| 对象 | 字段与实际语义 |
+| --- | --- |
+| `ToolDefinition` | `name: str`、`description: str`；可用 `parameters: list[ToolParameter]`，或用 `raw_parameters: dict` 提供完整对象型 JSON Schema。后者存在时优先，前者不会合并进去。 |
+| `ToolParameter` | `name`、`type`（通常为 `string`/`integer`/`number`/`boolean`/`array`/`object`）、`description`、`required`（默认 `true`）、`enum`、`items`。数组必须给出正确元素模式；未给 `items` 时当前代码会退回字符串元素模式，可能不符合实际参数。 |
+| 参数补充字段 | `default` 仅是 Python 元数据，当前函数调用 schema **不会自动输出默认值**；`sensitive` 只隐藏可见调用跟踪中的值，模型和 Tool 仍可接收，**不是保密或权限机制**。 |
+| `ToolResult` | `content` 为模型可读文本，`success` 默认 `true`；`sources` 为引用行，`metadata` 为结构化附加信息。`success: false` 仍会让模型读到 `content`，不等于整个 turn 自动失败。 |
+| 高级结果控制 | `terminate_turn`、`pause_for_user` 是结束/暂停当前轮次的专用字段；仅在真实需要且接入方确认事件契约时使用，不应把普通业务失败编码为这两种状态。 |
+
+`get_prompt_hints(language="en")` 默认只把工具说明作为 `short_description`；如覆盖，可返回 `ToolPromptHints`：`short_description`、`when_to_use`、`input_format`、`guideline`、`note`、`phase` 以及 `aliases`。其中每个 `ToolAlias` 可声明 `name`、`description`、`input_format`、`when_to_use`、`phase`。这些都是模型提示信息，不会注册一个新函数，也不会自动实现别名分发或赋权。`deferred = True` 只表示完整 schema 通过按需加载进入模型上下文，不表示工具不可执行。
+
+声明 schema **不会替 `execute` 自动验证参数或授权**。函数必须再次检查类型、范围、资源归属及副作用条件；未知工具名会被拒绝，未知参数如何处理由 Tool 自己决定。
+
+## 输入与输出
+
+在函数入口重新验证参数范围与资源授权，不信任模型按 schema 填写的值。返回尽量短而确定，注明数据来源、时间或缺失情况；对无结果和错误使用不同语义。需要引用时将可核查的引用放在 `sources`，但不要把它当作权限证明。可能有副作用的操作需说明幂等要求。不要把任意网页或文档中的指令当成 Tool 调用参数的权威来源。
+
+## 安全与资源边界
+
+默认只读、最小权限和限定作用域；写入工具需要业务授权及必要的人机确认。限制请求数量、执行时间和结果大小。输出不得含密钥、其他用户资料或不必要的个人信息。敏感输入在日志与可见跟踪中应脱敏，但“隐藏显示”不能替代真正的保密与授权。
+
+## 失败处理
+
+参数不合法、无权限、上游不可用、超时均应返回不同的失败信息，不返回假数据作为兜底。若发生部分写入，应明确可重试条件和幂等键；工具不可用时，Agent 应提示用户或换用合法路径，不能编造结果。
+
+## 可验证样例
+
+下面的代码仅处理传入数字、**不接触受保护资源**，用于验证上述接口和 `ToolResult` 语义。资源型 Tool 还须做本页所述授权检查；此代码不是企业安装指令。
+
+```python
+from math import isfinite
+
+from deeptutor.core.tool_protocol import BaseTool, ToolDefinition, ToolParameter, ToolResult
+
+
+class AddNumbers(BaseTool):
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="add_numbers",
+            description="计算两个数字之和",
+            parameters=[
+                ToolParameter(name="a", type="number"),
+                ToolParameter(name="b", type="number"),
+            ],
+        )
+
+    async def execute(self, **kwargs) -> ToolResult:
+        a, b = kwargs.get("a"), kwargs.get("b")
+        if (
+            type(a) not in (int, float)
+            or type(b) not in (int, float)
+            or abs(a) > 1_000_000
+            or abs(b) > 1_000_000
+            or not isfinite(a)
+            or not isfinite(b)
+        ):
+            return ToolResult(content="参数必须是数字", success=False)
+        return ToolResult(content=str(a + b))
+```
+
+在受支持的自部署环境中，`get_definition()` 给模型可理解的参数契约，`execute()` 返回明确的成功或失败结果；此代码本身不会使企业第三方入口新增一个可调用 Tool。
+
+## 开发自测
+
+- schema、函数签名和错误路径一致；空值、超长值、未知字段被处理。
+- 测试 `raw_parameters` 与 `parameters` 优先级、数组 `items`、`required`、`sensitive` 的真实行为；不把 `default` 当自动填参。
+- 不同身份与资源组合通过正反例授权测试。
+- 重复调用、超时和上游失败不会产生假成功或重复副作用。
+- 未获得部署方支持承诺前，不在第三方客户端展示为“已可安装/调用”。

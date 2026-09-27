@@ -1,0 +1,79 @@
+---
+title: MCP Server 规范
+description: 当前 DeepTutor 已实现的 MCP 连接、工具与结果兼容契约
+slug: /capacities/mcp/
+---
+
+# MCP Server 规范
+
+当能力需要访问你维护的外部系统、且希望以标准工具形式提供多个操作时，选择 MCP。一个 MCP Server 可以列出多个工具；它不是一个顶层 `capability`，工具被列出也不代表模型必然调用。
+
+## 企业入口适用状态
+
+**当前不要提交非空 `start_turn.mcp_tools` 作为正式调用方案。** 企业 turn 尚不承诺执行第三方指定 MCP 工具；`required` 请求会按 [`mcp_tool_unavailable`](../capability-selection.mdx) 失败，非强制策略也不能被解释为已执行。此页是开发交付规范，不是企业 MCP 接入、安装或发现接口。
+
+## 交付物与格式
+
+交付符合 [MCP Tools 规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)的服务：声明工具能力，响应 `tools/list`，通过 `tools/call` 按名称和参数执行。工具必须有稳定 `name`、说明用途的 `description` 和有效对象型 JSON Schema `inputSchema`。面向远程集成可按 [MCP Streamable HTTP 传输规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)开发；当前 DeepTutor 自部署客户端也支持 SSE。**符合标准不代表获得企业接入资格**；实际协议版本、认证方式仍须部署方确认。
+
+## 当前实现的连接与命名契约
+
+| 项目 | DeepTutor 当前规则 |
+| --- | --- |
+| 传输 | 自部署连接支持 `streamableHttp`、`sse`、`stdio`；普通用户自行配置的服务只允许远程 HTTP(S)，`stdio` 仅供部署管理员管理，不能作为第三方企业远程服务交付方式。 |
+| 远程 URL | 必须使用 `http` 或 `https` 且主机可解析。用户自行配置的服务不允许指向本机、私网、链路本地或元数据地址；连接时会重新检查解析结果。 |
+| 服务名 | 1～64 字符，首字符为 ASCII 字母或数字，余下可用 ASCII 字母、数字、`_`、`-`。用户自配置服务不能以 `mcp_`、`cli_` 开头，也不能与部署级服务重名。 |
+| 工具名 | MCP 原始工具名由服务提供；DeepTutor 在自部署工具列表中使用 `mcp_〈服务名〉_〈工具名〉`，非标识符字符替换为 `_`。开发时避免规范化后重名。 |
+| 工具筛选 | 部署方可按原始名或呈现名允许/禁止工具。服务列出了工具，不等于该工具对每个用户可见。 |
+| 数量与超时 | 普通用户本地最多配置 8 个 MCP 服务；工具超时默认 30 秒，可设置为 1～600 秒。此为当前自部署实现限制，不是企业配额。 |
+
+DeepTutor 在连接时读取 `tools/list`；服务动态新增或改名工具后，不应假设既有连接立即更新。工具名、参数 schema 的变更要考虑已有调用方。
+
+### 自部署连接定义的已实现字段
+
+下表用于和目标部署方核对连接配置，**不是企业第三方 Agent 可提交的配置请求**。未指定 `type` 时，有 `command` 推断为 `stdio`，URL 末尾为 `/sse` 推断为 `sse`，其他 URL 推断为 `streamableHttp`。
+
+| 字段 | 当前规则 |
+| --- | --- |
+| `type` | 可选，`stdio`、`sse`、`streamableHttp`；普通用户自行配置时只能使用后两种远程传输。 |
+| `url`、`headers` | 远程端点和请求头映射。URL 须满足上述网络边界；不要把明文凭据写进工具说明或公开样例。 |
+| `command`、`args`、`env`、`cwd` | 仅用于部署方管理的 `stdio` 进程连接；不是远程 MCP Server 的提交方式。 |
+| `tool_timeout` | 每个工具调用的秒数，默认 30，限 1～600。 |
+| `enabled_tools`、`disabled_tools` | 原始或包装后工具名的允许/禁止列表；默认允许 `*`，禁止列表后应用且优先。 |
+| `enabled` | 布尔值，默认 `true`；关闭时不应当作可用服务。 |
+| `auth` | `""` 或 `"oauth"`，默认空；OAuth 需调用方按部署版本完成授权，不会仅因服务返回 401 就自动启用。 |
+| `catalog_entry` | 可选来源标识，不影响传输或工具调用；不代表企业对外目录。 |
+
+## 输入与输出
+
+- MCP Server 必须按 `inputSchema` 再次校验输入和业务授权，不让模型生成的参数绕过检查；工具名应在服务内唯一且长期稳定。
+- 当前 DeepTutor 将 `content` 中的文本块按顺序拼接给模型；图片块只显示省略占位，其他内容不保证有专门呈现。关键图片信息须同时提供文字。
+- 可以按 MCP 标准提供 `structuredContent` 和 `outputSchema`，但当前 DeepTutor 不把它们作为模型可见的结构化结果或输出校验依据；不能依赖这两个字段传递唯一的业务结果。
+- 服务可按 MCP 标准设置 `isError`，但当前 DeepTutor 适配层**不会自动将其转换为原生 Tool 的失败状态**。失败时必须同时返回清楚、已脱敏的文本错误；客户端不能靠 `isError` 自动终止一轮对话。
+
+## 安全与资源边界
+
+服务端自行鉴别调用方并核验每次操作的资源范围；工具描述与参数不是授权依据。写入、删除、支付等高影响操作需额外确认与幂等控制。限制出站访问、返回内容大小与运行时间；不在工具结果中输出密钥、跨学校数据或完整敏感日志。把外部文本当数据，不能执行其中的指令。
+
+## 失败处理
+
+区分参数错误、无权限、资源不存在、限流、上游超时与暂时不可用。对可能已执行的写操作使用业务幂等键和结果查询，不因客户端重连盲目重放。当前适配层会把连接/调用故障呈现为模型可读文本，因此不能在异常中泄漏凭证，也不能假设任何 MCP 错误都会成为 turn 的终态错误。
+
+## 可验证样例
+
+以下是一个工具的**协议形状**，不是可提交到企业 `start_turn` 的请求：
+
+```json
+{"name":"course_lookup","description":"按课程代码读取当前调用方可访问的课程摘要","inputSchema":{"type":"object","properties":{"course_code":{"type":"string","minLength":1}},"required":["course_code"],"additionalProperties":false}}
+```
+
+一次成功结果可返回 `{"content":[{"type":"text","text":"课程摘要（已脱敏）"}],"isError":false}`；无权限应返回带脱敏错误文本及 `isError: true` 的结果，不能返回另一学校的数据。当前 DeepTutor 仍会把该文本交给模型读取。
+
+## 开发自测
+
+- `tools/list` 与 `tools/call` 使用同一稳定名称；非法参数被拒绝。
+- 不同身份对同一资源得到正确授权结果；跨学校负例被拒绝。
+- 验证图片、`structuredContent` 与 `isError` 的当前实际呈现，不把标准字段误认为已完整透传。
+- 超时、限流和重复写请求的结果可预测，输出不泄漏凭证。
+- 远程 URL、认证、工具筛选和关闭状态在目标自部署版本中得到实际验证。
+- 已与部署方确认实际协议与接入条件；未确认前不向第三方 Agent 宣称企业可调用。

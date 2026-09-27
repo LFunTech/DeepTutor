@@ -268,6 +268,8 @@ steps:
         from_secret: dt_test_cn_eduplus2_client_secret_ref
       EDUPLUS2_WEBHOOK_SECRET:
         from_secret: dt_test_cn_eduplus2_webhook_secret
+      EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY:
+        from_secret: dt_test_cn_eduplus2_webhook_inbox_digest_key
       SMOKE_TOKEN_ISSUER_SECRET:
         from_secret: dt_test_cn_smoke_token_issuer_secret
       EVIDENCE_STORE_WRITE_TOKEN:
@@ -305,6 +307,8 @@ steps:
         from_secret: dt_test_cn_evidence_store_write_token
       DT_TEST_CN_EDUPLUS2_WEBHOOK_SECRET:
         from_secret: dt_test_cn_eduplus2_webhook_secret
+      DT_TEST_CN_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY:
+        from_secret: dt_test_cn_eduplus2_webhook_inbox_digest_key
     commands:
       - set -euo pipefail
       - . ./.deeptutor-release.env
@@ -313,6 +317,7 @@ steps:
       - export KUBECONFIG_DATA="$${KUBECONFIG}"
       - python scripts/protected-k8s-release/sync-test-webhook-secret.py
       - deploy/kubernetes/protected-k8s-release/deploy.sh
+      - DEEPTUTOR_WEBHOOK_ROLLOUT_COMPLETE=yes python scripts/protected-k8s-release/sync-test-webhook-secret.py --retire-legacy-app-id
       - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
       - python scripts/protected-k8s-release/check-docs-site.py --origin "https://$${DEEPTUTOR_INGRESS_HOST}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/docs-smoke.json"
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"

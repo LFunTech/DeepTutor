@@ -281,7 +281,6 @@ async def test_eduplus2_real_webhook_persists_safe_school_projection_before_ack(
 
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     ts = str(int(time.time()))
@@ -419,7 +418,6 @@ async def test_eduplus2_real_webhook_stays_closed_without_receiver_rollout_gate(
 
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     ts = str(int(time.time()))
     body = json.dumps(
@@ -457,7 +455,6 @@ async def test_eduplus2_real_webhook_does_not_ack_failed_inbox_transaction(app, 
 
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
 

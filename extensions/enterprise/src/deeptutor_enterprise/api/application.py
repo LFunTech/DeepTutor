@@ -536,7 +536,6 @@ def create_application(enterprise):
         from ..eduplus2.lifecycle import (
             LifecycleConflict,
             LifecycleInvalid,
-            LifecycleWrongApp,
             parse_lifecycle_event,
         )
         from ..eduplus2.webhook_authority import ingest_authoritative_webhook
@@ -545,12 +544,9 @@ def create_application(enterprise):
             event = parse_lifecycle_event(
                 payload,
                 event_type,
-                app_id=getattr(enterprise, "eduplus2_webhook_app_id", 0),
                 digest_key=getattr(enterprise, "eduplus2_webhook_inbox_digest_key", ""),
             )
             await ingest_authoritative_webhook(enterprise, event, delivery_timestamp=int(timestamp))
-        except LifecycleWrongApp:
-            return JSONResponse({"detail": "Forbidden"}, status_code=403)
         except LifecycleConflict:
             enterprise.webhook_metrics["delivery_conflicts"] += 1
             logging.getLogger(__name__).warning(

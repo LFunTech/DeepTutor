@@ -1,0 +1,81 @@
+---
+title: 可视化扩展
+description: 当前 DeepTutor 已实现的可视化清单、数据和渲染契约
+slug: /capacities/visualizer/
+---
+
+# 可视化扩展开发规范
+
+可视化扩展定义一种结构化产物和它的浏览器渲染器，不是通用 Tool，也不是企业对话请求中可直接选择的顶层 `capability`。本文描述当前自部署版本实际接受的**声明式资源包**；第三方包不能注册 Python 代码或原生前端组件。
+
+## 企业入口适用状态
+
+当前企业第三方入口不提供可视化扩展安装、发现或选择接口，也不开放通过 `start_turn.capability` 选择自定义可视化。遵循本页格式不代表企业环境会加载资源包。
+
+## 交付物与格式
+
+交付 ZIP 包，包根直接包含 `visualizer.json`，或仅有**一个**顶层目录且其下包含该文件；资源包还须包含所声明的 HTML 入口及引用的静态资源。当前第三方导入类型只能使用 `render_target: "iframe"`；`native` 与 `artifact` 属于清单模型允许的取值，但不是第三方资源包可交付的渲染目标。
+
+### `visualizer.json` 字段
+
+未列出的字段会被拒绝。长度按字符串字符数计算；`id` 经去空格、小写化后校验。
+
+| 字段 | 当前规则 |
+| --- | --- |
+| `id` | 必填，匹配 `^[a-z][a-z0-9_.-]{1,63}$`，总长 2～64；应保持稳定，不与宿主保留类型重名。 |
+| `version` | 可选，默认 `1.0.0`，长度 1～32；当前只校验长度，不强制语义化版本格式。 |
+| `display_name`、`description` | 必填，分别为 1～80、1～1000 字符。 |
+| `author` | 可选，默认 `DeepTutor`，1～120 字符；建议填写实际作者。 |
+| `subjects`、`intents` | 可选字符串数组，各最多 32 项；用于描述适用学科/意图。 |
+| `render_target` | 清单可取 `native`、`iframe`、`artifact`，默认 `native`；**第三方导入只接受 `iframe`**。 |
+| `renderer_entry` | `iframe` 必填，最多 240 字符；必须是包内存在的安全相对路径，后缀为 `.html`，不得为绝对路径或包含 `..`。 |
+| `native_renderer` | 可选，最多 80 字符；仅宿主原生类型需要，不能让第三方包获得原生渲染权限。 |
+| `payload_format` | 必填，1～160 字符；应使用稳定的格式标识，与生成数据的 `format` 一致。 |
+| `payload_kind` | `text` 或 `json`，默认 `text`。 |
+| `payload_schema` | 可选 JSON Schema 对象，序列化后最多 32,000 字符；必须是有效 schema，`$ref`/`$dynamicRef` 只能使用本地 `#` 引用。`json` 产物会按该 schema 校验；空对象表示不做额外结构校验。 |
+| `language_tag` | 可选，默认 `text`，1～40 字符；用于描述产物语言。 |
+| `prompt` | 必填，1～12,000 字符；清晰说明何时使用及应生成什么数据，不应含密钥或私人资料。 |
+| `agentic` | 可选布尔值，默认 `true`。 |
+| `core`、`default_installed` | 宿主拥有的安装状态字段；第三方导入时不能用它们让包成为不可移除或对其他用户默认启用的类型。 |
+| `priority` | 可选整数，默认 `100`；不构成强制选择承诺。 |
+
+### ZIP 与资源限制
+
+| 项目 | 当前限制 |
+| --- | --- |
+| ZIP 压缩包 / 展开后总量 | 各不超过 25 MiB。 |
+| 文件数量、单文件大小 | 最多 200 个文件；每个文件不超过 10 MiB；`visualizer.json` 不超过 128 KiB。 |
+| 压缩比 | 单文件展开大小与压缩大小之比不得超过 100。 |
+| 允许后缀 | `.json`、`.html`、`.js`、`.mjs`、`.css`、`.svg`、`.png`、`.jpg`、`.jpeg`、`.webp`、`.woff2`、`.wasm`。 |
+| 路径 | 不得使用绝对路径、`..` 或逃出包根的资源引用；不要依赖隐藏文件或额外后缀文件。 |
+
+## 输入与输出
+
+产物原始文本去掉首尾空白后不得为空，最多 **200,000 字符**。`payload_kind: "json"` 时必须能解析为 JSON，且若提供 `payload_schema` 必须通过校验；`text` 类型保持文本。渲染器接收版本化数据，不得把模型生成的文本直接当作不受限制的网页脚本执行。
+
+当前可视化产物封套包含 `schema_version: "deeptutor.visualization/v1"`、`render_type`、`renderer`（`id`、`version`、`target`、`entry_url` 等）、`payload`（`format`、`data`）、`presentation`（`title`、`description`、`alt_text`、`aspect_ratio`）、`interaction.events` 和可选 `fallback`。HTML 入口收到 `type: "deeptutor:visualization:render"` 的消息后按 `payload` 绘制；需要自适应高度时可回传 `deeptutor:visualization:resize`，需要把交互文字交给会话时可回传 `deeptutor:visualization:prompt`。不支持自创消息类型代替该契约。
+
+## 安全与资源边界
+
+第三方 HTML 在隔离 iframe 中执行，不应依赖浏览器登录凭据、外部网络或宿主页面权限。资源必须随包提供；对消息内容和 JSON 数据做类型/长度检查，不在包、prompt、产物或错误提示中嵌入密钥及学生个人信息。交互文字属于不可信输入，不能作为授权指令。应为图表提供 `alt_text` 或同等文本替代。
+
+## 失败处理
+
+缺少入口、无效清单、超限资源、无效 JSON 或 schema 不匹配均应视为失败，不应显示空白图像却报告成功。渲染器遇到未知 `schema_version`、`payload.format` 或数据结构时，应显示可理解的文本降级内容；升级格式时保留旧版本处理或显式提示不兼容。
+
+## 可验证样例
+
+下面的 `visualizer.json` 可按当前清单模型校验；它还需要同包的 `index.html` 才构成完整交付物。
+
+```json
+{"id":"function_chart","version":"1.0.0","display_name":"函数图像","description":"展示二维函数采样点","render_target":"iframe","renderer_entry":"index.html","payload_format":"sample-points/v1","payload_kind":"json","payload_schema":{"type":"object","properties":{"points":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}}},"required":["points"],"additionalProperties":false},"prompt":"生成符合 sample-points/v1 的采样点数据，不加入个人信息。"}
+```
+
+用合成数据 `{"points":[{"x":0,"y":1}]}` 和缺少 `y` 的负例分别验证通过/拒绝；验证 HTML 对 `render` 消息的处理、文本替代及未知版本的降级。此示例不是企业上传请求。
+
+## 开发自测
+
+- 清单每个字段、第三方 `iframe` 限定、入口路径和 ZIP 限额均通过目标版本校验。
+- 空产物、过长产物、无效 JSON、schema 错误、远程 `$ref` 与异常消息均安全失败。
+- HTML 仅处理声明格式，必要时回传 `resize`/`prompt`，并提供非交互文本替代。
+- 不把该类型列为已开放的企业 `capability` 或第三方安装接口。

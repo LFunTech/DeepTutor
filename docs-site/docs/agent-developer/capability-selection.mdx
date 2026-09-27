@@ -6,6 +6,10 @@ slug: /capability-selection/
 
 # 对话能力选择
 
+## 开发规范与调用契约
+
+如果你要**编写** MCP、Tool、Skill、知识库或其他扩展，请先看 [Capacity 开发规范](capacities/index.mdx)。本页只说明当前企业第三方 Agent 在**调用对话**时能请求哪些受权资源；开发交付物的格式不意味着它已经可通过企业入口安装或执行。
+
 `capability` 是顶层对话能力。当前企业第三方入口仅支持 `"capability":"chat"`，**不能选择其他顶层 `capability`**。知识库和 Skills 是本次对话请求的上下文，分别放在 `start_turn.knowledge_bases` 和 `start_turn.skills`，不要把它们的 ID 填进 `capability`。
 
 **当前没有面向第三方 Agent 发布的选项发现接口。** 若需选择知识库或 Skill，请向部署方取得**当前用户有权使用的真实 ID**及其更新方式。部署方未提供时，省略对应字段或传空数组；不要猜测 ID 或从其他用户的响应中复制。ID 的有效性与权限仍以本次 `start_turn` 的服务端校验为准。

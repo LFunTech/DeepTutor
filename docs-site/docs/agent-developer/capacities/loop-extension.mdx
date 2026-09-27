@@ -1,0 +1,87 @@
+---
+title: 对话循环扩展规范
+description: 当前 DeepTutor chat 循环扩展的必需接口与可选钩子
+slug: /capacities/loop-extension/
+---
+
+# 对话循环扩展规范
+
+对话循环扩展为已有 `chat` 增加有条件的行为，例如课程练习流程、额外提示或专属工具。它与 [Turn Capability](turn-capability.mdx) 不同：通常不独占整个轮次，也不是 [`start_turn.capability`](../api/ws/start_turn.mdx) 的另一取值。
+
+## 企业入口适用状态
+
+当前企业第三方 API 没有注册、安装或逐轮启用自定义循环扩展的接口。`"capability":"chat"` 只表示使用已发布的聊天入口，**不保证**任何第三方循环扩展会参与。以下规则供支持该扩展点的自部署环境或受部署方委托的开发使用。
+
+## 交付物与格式
+
+交付具有稳定 `name`、`owned_tools`、生效条件及提示片段的扩展实现。当前自部署 Python 扩展协议可通过 `deeptutor.extensions` entry point 指向实现下列方法的无参可构造类；这是目标版本的开发约定，**不是稳定的企业第三方 SDK**。生效判断应仅依赖本轮受权上下文；专属工具分别遵守 [Tool 规范](tool.mdx)。可选的前置准备或暂停后恢复行为，需要明确状态与边界。不要把扩展设计成隐式替换用户原有工具集；如需独占资料处理，应单独说明并经部署方确认。
+
+## 当前实现的接口契约
+
+| 必需成员 | 已实现语义 |
+| --- | --- |
+| `name: str` | 稳定扩展名；外部扩展名与已存在能力冲突时不会替换已有能力。 |
+| `owned_tools: tuple[str, ...]` | 声明激活时要增补的 Tool 名称；**并不自动注册 Tool，也不授予调用权限**。普通循环扩展保留聊天原有工具选择，再增补这些 Tool。 |
+| `is_active(context) -> bool` | 按本轮已核验上下文判断是否参与；不能靠用户自报学校或未授权资源激活。 |
+| `system_block(context, *, language, prompts) -> PromptBlock | None` | 返回有界的命名提示片段；`PromptBlock` 含 `name` 和 `content`。无需附加时返回 `None`。 |
+| `augment_kwargs(tool_name, kwargs, context) -> dict` | 为本扩展的 Tool 参数补充服务端可信值；不得把模型输入当授权。无需补充时原样返回。 |
+| `pre_loop_seed(context) -> str` | 为本轮最初输入增加文本；不应插入密钥或大量原始资料。无需补充时返回空字符串。 |
+
+| 可选成员 | 当前用途与边界 |
+| --- | --- |
+| `async pre_loop(context, stream, *, usage=None)` | 在第一轮模型调用前做一次有界准备，可返回 `PromptBlock`；若自身调用模型，应记录其用量。 |
+| `on_user_pause(context, ask_user)`、`on_user_resume(context, ask_user, *, reply_text, answers)` | 在等待用户输入的两侧维护同一任务的状态；须防断线、重复恢复与跨用户串用。 |
+| `rebinding_tools: tuple[str, ...]` | 声明会切换目标的工具名；与同轮其他调用配合时须保持目标一致。 |
+| `finish_instruction(context, final_text)` | 需要追加一轮完成检查时返回短指令；必须可收敛，不能无限延长对话。 |
+| `tool_round_output_policy(...)`、`final_text_override(...)` | 对工具轮的可见最终文本作受控处理；不能用于隐藏真实失败或伪造已执行结果。 |
+
+另有 `KnowledgeCapability` 类别：其工具面是**排他**的，只保留本类别自有工具及必要的用户交互工具；`owned_kbs(context)` 可声明该扩展自己处理的知识库引用。不要对普通循环扩展设置一个任意标志就假定具备此排他语义。
+
+## 输入与输出
+
+输入是当前用户任务、已选择的资源与受权 `UnifiedContext`；其可用字段和敏感性见 [Turn Capability 的上下文契约](turn-capability.mdx)。输出可能是本轮提示片段、工具参数补充或最终答复约束；其内容必须可解释、可限长。若需要本轮局部状态，可使用 `context.extension(namespace)`，不要把状态保存在跨用户共享的类属性中。扩展激活与实际使用是两回事；不能仅因满足生效条件就宣称专属工具已经执行。
+
+## 安全与资源边界
+
+不要从提示词注入隐藏的身份、密钥或跨学校资源。工具参数补充只能使用服务端核验过的范围；模型生成的工具调用仍需参数与授权校验。对暂停/恢复状态设置作用域和有效期，避免另一用户或另一轮继承。
+
+## 失败处理
+
+扩展不适用时明确不生效，不应影响普通聊天；必需依赖缺失时按配置失败或提示用户，不能伪装成正常完成。前置准备、工具或恢复步骤异常时保留清晰错误边界，并防止重复写入。
+
+## 可验证样例
+
+下面是不访问资源、不新增 Tool 的完整**必需接口**实现；它不能通过企业 API 提交：
+
+```python
+from deeptutor.capabilities.protocol import PromptBlock
+
+
+class PracticeHint:
+    name = "practice_hint"
+    owned_tools: tuple[str, ...] = ()
+
+    def is_active(self, context) -> bool:
+        return "练习" in context.user_message
+
+    def system_block(self, context, *, language, prompts) -> PromptBlock | None:
+        return PromptBlock(name=self.name, content="先询问学生的思路，再给反馈。")
+
+    def augment_kwargs(self, tool_name, kwargs, context) -> dict:
+        return kwargs
+
+    def pre_loop_seed(self, context) -> str:
+        return ""
+```
+
+如需处理学校资料，`is_active` 还必须依赖本轮已核验的课程/知识库授权，不能仅凭关键词。开发测试要分别验证“请求练习时生效”和“普通闲聊时不生效”。
+
+自部署包可声明 `[project.entry-points."deeptutor.extensions"]` 下的 `practice_hint = "practice_hint:PracticeHint"`；入口名、类的 `name` 和已声明的专属工具应在本地测试中核对。这个声明不是企业安装步骤。
+
+## 开发自测
+
+- 生效条件有正反例；未激活时聊天表现不受影响。
+- 专属工具参数、授权与失败语义独立测试。
+- 分别测试必需方法及实际使用的可选钩子；验证普通扩展与排他知识能力的工具面不同。
+- 暂停、恢复和重复请求不会串轮或重复副作用。
+- 没有把扩展名称当作企业 `capability` 取值或公开选项。

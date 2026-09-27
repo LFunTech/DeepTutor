@@ -24,11 +24,10 @@ async def trusted_tms_identity_from_token(enterprise, token: str) -> ManagementI
     """
 
     verifier = getattr(enterprise, "eduplus2_verifier", None)
-    app_id = int(getattr(enterprise, "eduplus2_webhook_app_id", 0) or 0)
     issuer = str(getattr(enterprise, "eduplus2_issuer", "") or "").strip()
     if not verifier or not getattr(enterprise, "eduplus2_lifecycle_receiver_enabled", False):
         raise RuntimeError("TMS identity verifier is unavailable")
-    if app_id <= 0 or not issuer:
+    if not issuer:
         raise RuntimeError("TMS school application is unavailable")
     if not isinstance(token, str) or not token or len(token) > 16_384:
         raise TmsAuthenticationDenied("TMS bearer token is missing")
@@ -56,36 +55,46 @@ async def trusted_tms_identity_from_token(enterprise, token: str) -> ManagementI
             await c.execute(
                 "SELECT b.tenant_id,b.version FROM oms.school_bindings b "
                 "JOIN enterprise.tenants t ON t.id=b.tenant_id "
-                "JOIN eduplus2.webhook_school_state p "
-                "ON p.tenant_id=%s AND p.school_id=b.tenant_id "
-                "AND p.external_tenant_id=b.eduplus_tenant_id "
-                "AND p.external_app_id=%s AND p.binding_version=b.version "
-                "JOIN eduplus2.webhook_school_controls k "
-                "ON (k.tenant_id,k.school_id,k.external_app_id)="
-                "(p.tenant_id,p.school_id,p.external_app_id) AND NOT k.frozen "
                 "WHERE b.eduplus_tenant_id=%s AND b.status='verified' "
-                "AND t.external_tid=%s AND t.external_eligibility='allowed' "
-                "AND t.recovery_state='normal' AND p.eligibility='allowed' "
-                "AND p.onboarding_event_id IS NOT NULL "
-                "AND p.onboarding_completed_at IS NOT NULL",
-                (owner, app_id, int(external_school), external_school),
+                "AND t.external_tid=%s "
+                "AND t.recovery_state='normal'",
+                (int(external_school), external_school),
             )
         ).fetchone()
         if not binding:
             raise TmsSchoolDenied("TMS school binding is not available")
         school_id = binding["tenant_id"]
         await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
-        registration = await (
+        registrations = await (
             await c.execute(
-                "SELECT 1 FROM eduplus2.external_client_registrations "
-                "WHERE tenant_id=%s AND internal_tenant_id=%s AND client_id=%s "
-                "AND external_tenant_id=%s AND external_app_id=%s "
-                "AND status='active' LIMIT 1",
-                (school_id, school_id, client_id, external_school, str(app_id)),
+                "SELECT p.external_app_id FROM eduplus2.external_client_registrations r "
+                "JOIN eduplus2.webhook_school_state p "
+                "ON p.tenant_id=%s AND p.school_id=r.internal_tenant_id "
+                "AND p.external_tenant_id=%s "
+                "AND p.external_app_id::text=r.external_app_id "
+                "AND p.binding_version=%s "
+                "JOIN eduplus2.webhook_school_controls k "
+                "ON (k.tenant_id,k.school_id,k.external_app_id)="
+                "(p.tenant_id,p.school_id,p.external_app_id) AND NOT k.frozen "
+                "WHERE r.tenant_id=%s AND r.internal_tenant_id=%s "
+                "AND r.client_id=%s AND r.external_tenant_id=%s "
+                "AND r.status='active' AND p.eligibility='allowed' "
+                "AND p.onboarding_event_id IS NOT NULL "
+                "AND p.onboarding_completed_at IS NOT NULL LIMIT 2",
+                (
+                    owner,
+                    int(external_school),
+                    binding["version"],
+                    school_id,
+                    school_id,
+                    client_id,
+                    external_school,
+                ),
             )
-        ).fetchone()
-        if not registration:
+        ).fetchall()
+        if len(registrations) != 1:
             raise TmsSchoolDenied("TMS application client is not registered")
+        app_id = registrations[0]["external_app_id"]
         await c.execute("SELECT set_config('app.management_app','tms',true)")
         principal = await (
             await c.execute(

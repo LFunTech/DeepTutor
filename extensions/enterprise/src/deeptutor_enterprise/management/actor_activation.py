@@ -30,16 +30,15 @@ async def activate_first_school_administrator(
         or not _identity_is_current(identity, write=True)
         or not getattr(enterprise, "eduplus2_lifecycle_receiver_enabled", False)
         or identity.issuer != getattr(enterprise, "eduplus2_issuer", None)
-        or identity.webhook_app_id != getattr(enterprise, "eduplus2_webhook_app_id", None)
+        or type(identity.webhook_app_id) is not int
+        or identity.webhook_app_id <= 0
         or type(event_id) is not str
         or not 1 <= len(event_id) <= 128
         or type(request_id) is not str
         or not 1 <= len(request_id.strip()) <= 128
     ):
         raise ManagementAuthorizationDenied("trusted school activation identity is unavailable")
-    app_id = int(getattr(enterprise, "eduplus2_webhook_app_id", 0) or 0)
-    if app_id <= 0:
-        raise ManagementAuthorizationDenied("school activation application is unavailable")
+    app_id = identity.webhook_app_id
     owner = enterprise.deployment.tenant_id
     command_id = uuid5(NAMESPACE_URL, f"deeptutor:tms:first-admin:{owner}:{event_id}")
     async with enterprise.db.transaction(TenantScope(str(owner), "@school-activation")) as c:
@@ -49,7 +48,7 @@ async def activate_first_school_administrator(
                 "FROM oms.school_bindings b JOIN enterprise.tenants t ON t.id=b.tenant_id "
                 "WHERE b.tenant_id=%s AND b.status='verified' "
                 "AND t.external_tid=b.eduplus_tenant_id::text "
-                "AND t.external_eligibility='allowed' AND t.recovery_state='normal' "
+                "AND t.recovery_state='normal' "
                 "FOR UPDATE OF b,t",
                 (identity.school_id,),
             )

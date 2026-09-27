@@ -1,0 +1,98 @@
+---
+title: 阅读扩展
+description: 当前 DeepTutor 阅读动作的清单、上下文与结果契约
+slug: /capacities/reading-extension/
+---
+
+# 阅读扩展开发规范
+
+阅读扩展在阅读材料时提供工具栏动作，例如解释选区、生成小测或朗读。它是**阅读场景的 Python 扩展**，不是通用对话 Tool，也不是顶层 `capability`。
+
+## 企业入口适用状态
+
+当前企业第三方 API 没有阅读扩展安装、动作发现或执行接口。以下是支持该扩展点的自部署版本契约，不能据此编造企业 WS 命令。
+
+## 交付物与格式
+
+交付一个无参可构造的 Python 类或实例，具有 `manifest: ReadingExtensionManifest` 和 `run_action(action: str, context: ReadingContext)`。Python 包在 `[project.entry-points."deeptutor.reading_extensions"]` 声明入口，**入口名必须与 `manifest.id` 完全一致**；无效 manifest、名称不一致或缺少可调用方法的扩展不会进入可用列表。
+
+### `ReadingExtensionManifest`
+
+| 字段 | 当前规则 |
+| --- | --- |
+| `id` | 必填，匹配 `^[a-z][a-z0-9_-]{0,63}$`，总长 1～64，并与 Python entry point 名称相同。 |
+| `version` | 必填，1～32 字符；当前不强制语义化版本格式。 |
+| `name` | 必填，1～80 字符，用于向读者显示动作来源。 |
+| `protocol_version` | 只接受字符串 `"1"`；默认即 `"1"`。 |
+| `actions` | 必填，1～12 个 `ReadingAction`；动作 ID 应稳定且不重复。 |
+| `result_types` | 必填，至少一种；仅可声明 `card`、`quiz`、`feedback`、`browser_speech`。返回结果还必须属于这里声明的类型。 |
+
+每个 `ReadingAction` 的 `id` 遵循同一小写字母开头的模式；`label` 长 1～80 字符；`trigger` 当前只接受 `toolbar`（默认值）；`requires` 可列出 `selection`、`visible_text`。除这些取值外，没有自定义浏览器触发器或任意结果组件契约。
+
+## 输入与输出
+
+动作方法接收**已选定动作名**和经当前阅读材料核验的 `ReadingContext`。执行时先确认材料可访问且动作已在 manifest 中声明；所选文字只有出现在当前阅读单元正文中才进入上下文，否则会被置空。声明 `requires: ["selection"]` 时，空选区直接拒绝；`visible_text` 由当前单元提供。
+
+| `ReadingContext` 字段 | 当前限制 |
+| --- | --- |
+| `material_id` | 当前已授权材料的标识；不是额外权限令牌。 |
+| `locator` | 当前单元位置，整数且不小于 1。 |
+| `source_anchor` | 可选，最多 4096 字符；仅当前单元与保存位置一致时提供。 |
+| `locale` | 可选，默认 `en`，最多 32 字符。 |
+| `selection` | 当前单元中核验过的选区，最多 10,000 字符。 |
+| `visible_text` | 当前单元正文，最多 60,000 字符。 |
+
+`run_action` 可返回 `ReadingExtensionResult` 或可由该模型校验的字典；当前动作入口兼容同步返回和 awaitable 返回。结果字段：`type` 必须是已声明的结果类型；`title` 最多 160 字符、`message` 最多 4000 字符，二者默认空；`payload` 为 JSON 对象，序列化后最多 **64,000 字符**。`browser_speech` 的 `payload.text` 必须是非空字符串，最多 60,000 字符；`quiz` 的 `payload.questions` 必须是 1～20 个对象，每题 `prompt` 为字符串、`choices` 为 2～8 个字符串。其余结果类型当前只要求通用 payload 约束，开发者应自行保持字段稳定、可读。
+
+## 安全与资源边界
+
+扩展只能使用本次提供的材料片段，不应扫描其他教材、会话或用户资料。将选区和正文视为数据，不执行其中的指令。当前一个扩展同时最多执行一个动作，单次动作限时 **30 秒**；请让处理在限时内结束，避免阻塞后续请求。不要向第三方服务发送完整材料或学生信息，除非另有明确授权。
+
+## 失败处理
+
+当前动作入口对无权访问返回 403、未知扩展/动作返回 404、无效位置或所需选区缺失返回 400、阅读单元超过上下文限制返回 422。扩展繁忙、超时、抛异常、返回无效结构或未声明结果类型时返回暂时不可用的 503；超时的扩展在可用列表刷新前不会再接收动作。不要以空 `card` 掩盖真实失败，也不要假设这些自部署阅读错误码是企业第三方 API 的一部分。
+
+## 可验证样例
+
+一个单动作 manifest 的 JSON 形状如下：
+
+```json
+{"id":"explain_selection","version":"1.0.0","name":"解释选区","protocol_version":"1","actions":[{"id":"explain","label":"解释选中文本","trigger":"toolbar","requires":["selection"]}],"result_types":["card"]}
+```
+
+对应实现需要真正处理声明的动作、空选区和错误，而不是只声明入口：
+
+```python
+from deeptutor.reading.extensions import ReadingExtensionManifest, ReadingExtensionResult
+
+
+class ExplainSelection:
+    manifest = ReadingExtensionManifest.model_validate({
+        "id": "explain_selection", "version": "1.0.0", "name": "解释选区",
+        "actions": [{"id": "explain", "label": "解释选中文本", "requires": ["selection"]}],
+        "result_types": ["card"],
+    })
+
+    def run_action(self, action, context):
+        if action != "explain" or not context.selection:
+            raise ValueError("需要当前单元的有效选区")
+        return ReadingExtensionResult(
+            type="card", title="选区说明",
+            message=f"请结合当前材料解释：{context.selection[:200]}",
+        )
+```
+
+该类只是契约验证用的受限文本返回，不是教学解释服务；实际扩展应基于当前授权材料给出有依据的解释。包入口声明为：
+
+```toml
+[project.entry-points."deeptutor.reading_extensions"]
+explain_selection = "reading_extension:ExplainSelection"
+```
+
+## 开发自测
+
+- 核对入口名与 `manifest.id`、动作唯一性、声明结果类型及全部长度限制。
+- 无效材料、错误位置、伪造选区、缺选区和超长正文不会触发扩展执行。
+- 分别验证同步/异步返回、错误结果、30 秒超时、并发调用和超时后不可用。
+- 输出不包含未授权材料、他人的学习记录或可执行网页脚本。
+- 不把本自部署协议写成企业第三方 Agent 已开放的阅读动作接口。

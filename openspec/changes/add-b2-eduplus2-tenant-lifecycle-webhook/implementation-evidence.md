@@ -1,5 +1,18 @@
 # EduPlus2 生命周期 Webhook 实施证据
 
+## 2026-09-27 静态目标应用 ID 退役（本地已实现，未发布）
+
+- HTTP 收件箱先验证 HMAC，再从受签名保护的 body 解析正整数 `app.id` 并持久写入学校—应用 inbox/投影；不再读取静态应用 ID 环境参数或 Enterprise 属性。非法 `app.id` 仍拒绝。TMS 的目标应用由已验签 JWT `azp` 精确匹配学校 active client，再核对对应 Webhook 投影与人工冻结；另一应用停用不覆盖本应用的 TMS 资格。actor 候选/激活和 OMS 冻结均使用受信身份携带的应用 ID，而非全局配置。固定租户旧会话无应用身份，若出现多个学校—应用投影则失败关闭。
+- test-cn 受控发布先同步签名与稳定摘要密钥、滚动部署新版后端，成功 rollout 后再移除运行时 Secret 的旧应用 ID 键；旧 `rc.51` 仍依赖该键，**发布前不能提前删除**。当前 K8s 键仍存在，新版代码/流水线尚未提交或发布。测试覆盖发布前保留、发布后删除、其余 Secret 字段不变与无密钥输出。
+- 隔离企业测试全集 `501 passed, 3 skipped`，含错误 JWT client 403、错误学校 403、同校另一应用停用后目标应用仍可激活、跨应用 actor 候选拒绝、固定旧会话多应用失败关闭；Ruff、Python compileall、Woodpecker YAML 解析、`git diff --check` 与 `openspec validate add-b2-eduplus2-tenant-lifecycle-webhook --strict` 通过。无 core 路径改动、无 PG/OpenFGA/Keycloak 迁移。仓库根目录全量 pytest 尚在收集阶段被既有非顶层 `pytest_plugins` 配置和缺少 `slack_sdk`/`telegram` 依赖阻断；单独 core HTTP/WS 测试也有缺 async 插件与既有身份上下文失败，不能声称全仓回归通过。此证据不代替 3.1 的真实非 mock 投递或发布验收。
+
+## 2026-09-27 `rc.51` test-cn 配置复核（未完成真实投递）
+
+- DeepTutor commit `522f3ff4` 的 tag `deploy/test-cn/v1.4.0-rc.51` 对应 Woodpecker #62 **success**；test-cn 后端新镜像就绪。用户发起真实订阅后仍收到 HTTP 503 `Lifecycle receiver unavailable`。只读核对 Deployment 从 `deeptutor-runtime-secrets` 注入环境变量，但该 Secret 当时缺少正式接收器开关、目标 App ID 和独立 inbox 摘要密钥，因此请求在解析业务事件前被默认关闭门禁拒绝；不能把 503 归因于学校/订阅字段。
+- 在 DeepTutor-owned `test` 集群 `deeptutor-test-cn` 命名空间，受控仅新增 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true`、现版代码要求的 `DT_EDUPLUS2_WEBHOOK_APP_ID=51` 和程序生成的独立稳定 `DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY`；其余 Secret 字段回读一致。摘要密钥与验签 Secret 不同，保留于本机忽略且权限 `0600` 的测试密钥文件，未输出值。后端受控重启后 1/1 Ready。一个**已签名但结构故意不完整、不会入库**的非 mock 探针从公网 URL 得到 422，证明请求已越过旧 503 配置门禁；这不证明真实事件链路成功。
+- 目标 PG 只读聚合核对：`lifecycle_inbox=0`、`webhook_school_state=0`、已完成 PG onboarding 的学校数为 0。尚未执行新的真实重试，也未手工补学校/订阅行。用户后续决定取消静态目标 App ID、从已验签报文的 `app.id` 获取；本次 `51` 只是为**当前已发布版本**排除配置 503，待代码/提案修订与新发布后移除，不能作为新契约的验证证据。
+- 同一随机摘要密钥已由程序写入 Woodpecker 仓库 Secret `dt_test_cn_eduplus2_webhook_inbox_digest_key`，限制为 tag 与 test-ci-tools 镜像；未输出值。工作区另补 CI secret preflight、部署时同步及**已有摘要键不一致则拒绝静默轮换**的代码与合成测试；尚未提交/发布该 CI 修订，当前 #62 不会读取新 Woodpecker Secret。
+
 > **2026-09-27 权威变更**：下文的 online resolve/证明 TTL/人工学校绑定切片是此前版本的历史实施证据，不能用于新“已验签 Webhook 直接接校并驱动生命周期”任务验收。当前工作区已新增接收事务内自动建校/投影代码与隔离合成测试，仍未发布到 test-cn；该环境正式接收器继续关闭。旧版本地测试通过只证明旧逻辑没有回归，不证明新版学校可用。
 
 ## 2026-09-27 Webhook-only 本地代码实施（未发布）

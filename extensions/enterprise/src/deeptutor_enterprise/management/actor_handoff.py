@@ -33,9 +33,9 @@ async def find_pending_actor_candidates(
         or not getattr(enterprise, "eduplus2_lifecycle_receiver_enabled", False)
     ):
         return ()
-    app_id = int(getattr(enterprise, "eduplus2_webhook_app_id", 0) or 0)
+    app_id = identity.webhook_app_id
     current_issuer = str(getattr(enterprise, "eduplus2_issuer", "") or "").strip()
-    if app_id <= 0 or not current_issuer or identity.issuer != current_issuer:
+    if type(app_id) is not int or app_id <= 0 or not current_issuer or identity.issuer != current_issuer:
         return ()
     owner_id = enterprise.deployment.tenant_id
     scope = TenantScope(str(owner_id), "@eduplus2-actor-handoff")
@@ -56,7 +56,6 @@ async def find_pending_actor_candidates(
                 "AND a.actor_subject=%s AND a.status='pending_verification' "
                 "AND a.binding_version=%s AND b.version=a.binding_version "
                 "AND b.status='verified' "
-                "AND t.external_eligibility='allowed' "
                 "AND NOT t.bootstrap_completed "
                 "AND t.recovery_state='normal' "
                 "AND p.school_id=a.school_id AND p.eligibility='allowed' "

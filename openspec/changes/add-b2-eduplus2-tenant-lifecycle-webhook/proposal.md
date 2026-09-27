@@ -1,6 +1,6 @@
 # EduPlus2 Webhook 驱动的学校接入与生命周期
 
-> **2026-09-27 修订稿，实施中**：用户明确要求：真实 Webhook 经 HMAC、时效、目标应用、结构及幂等校验后，其学校与订阅业务数据就是 DeepTutor 的权威来源。学校接入、暂停、恢复、到期不再调用 online resolve 二次核验，也不依赖周期性在线证明 TTL。此前批准的“通知 + online resolve”方案已被本决策取代；原实施勾选项需按新验收重评。本提案仅修改 DeepTutor，不修改 EduPlus2、Keycloak 或 OpenFGA；不自动授权发布、真实学校写入、提交或归档。
+> **2026-09-27 修订稿，实施中**：用户明确要求：真实 Webhook 经 HMAC、时效、已签名应用 ID 结构及幂等校验后，其学校与订阅业务数据就是 DeepTutor 的权威来源。学校接入、暂停、恢复、到期不再调用 online resolve 二次核验，也不依赖周期性在线证明 TTL。此前批准的“通知 + online resolve”方案已被本决策取代；原实施勾选项需按新验收重评。本提案仅修改 DeepTutor，不修改 EduPlus2、Keycloak 或 OpenFGA；不自动授权发布、真实学校写入、提交或归档。
 
 ## Why
 
@@ -8,7 +8,7 @@
 
 ## What Changes
 
-- 保留三段式 HMAC、时间窗、128 KiB 上限、事件/header 一致、目标应用 ID、必需字段和 event ID/规范化事实冲突检查。mock 只用于 demo，不写业务。真实事件最小脱敏事实提交 PG inbox 后才返回 2xx；不保存原始 body、OAuth Secret、bearer token 或签名。
+- 保留三段式 HMAC、时间窗、128 KiB 上限、事件/header 一致、已签名 body 中正整数 `app.id`、必需字段和 event ID/规范化事实冲突检查；退役静态目标应用 ID 配置，不能用未签名 header/URL 指定应用。mock 只用于 demo，不写业务。真实事件最小脱敏事实提交 PG inbox 后才返回 2xx；不保存原始 body、OAuth Secret、bearer token 或签名。
 - 以事件中的稳定 `tenant.id` 与目标 `app.id` 建立唯一内部学校映射；`school_code` 仅为展示/定位信息。已验签 `subscription.created` 在同一事务初始化 PG 学校锚点、绑定、目标应用 client、投影和数据库初始化标记；失败整体回滚，由发送端重试。标记**不等于** AI 资源 `provisioning_status=ready` 或 `local_enabled=true`，也不授予 `tenant.*`/`ops.*`。
 - 八类 `subscription.*` 在接收事务内按学校—应用串行投影，使用本地 generation/唯一事件 ID 防并发覆写、重复与同 ID 冲突。只有 inbox、映射和投影一并提交才返回 2xx；失败整体回滚，由发送端按 5xx 重试。资格直接来自已投影的事件状态，再与本地 enabled/ready/隔离及独立权限/额度取交集；不使用 online resolve 作为接校、开停、漏送对账或放行条件。
 - `subscription.created.actor.type=user` 和 `actor.user_id` 仅作为首位 TMS 管理员候选。本人持已验签 OIDC JWT，经 `tid`、目标应用 `azp` 与 Webhook 数据库绑定后，可由 DeepTutor Enterprise 在一次事务中消费候选、激活本校管理员并写审计；Webhook 回调本身绝不直接赋权。若实际 `actor.user_id` 与 JWT `sub` 不相同则保持拒绝，须以真实脱敏联调证据确认映射。事件 `subscription.id` 保存为来源事实，不另查当前订阅 ID。

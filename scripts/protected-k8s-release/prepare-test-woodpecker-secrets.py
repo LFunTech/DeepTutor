@@ -97,6 +97,7 @@ def _preflight_metadata() -> str:
         "LIGHTRAG_API_SECRET_REF": "runtime_secret_ref:test-cn/lightrag-api",
         "EDUPLUS2_CLIENT_SECRET_REF": "runtime_secret_ref:test-cn/eduplus2-client",
         "EDUPLUS2_WEBHOOK_SECRET": "runtime_secret_sync:test-cn/deeptutor-runtime-secrets/webhook-key",
+        "EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "runtime_secret_sync:test-cn/deeptutor-runtime-secrets/stable-inbox-digest-key",
         "SMOKE_TOKEN_ISSUER_SECRET": "smoke_credentials:test-cn/token-issuer",
         "EVIDENCE_STORE_WRITE_TOKEN": "evidence_store:test-cn/release-evidence/*",
         "VCS_TAG_VERIFY_TOKEN": "tag_approval_verify:test-cn/read-only",
@@ -130,6 +131,9 @@ def prepare(args: argparse.Namespace) -> None:
     webhook_secret = flat.get("DT_EDUPLUS2_WEBHOOK_SECRET", "")
     if not webhook_secret:
         raise SystemExit("DT_EDUPLUS2_WEBHOOK_SECRET is required for test-cn release")
+    digest_key = flat.get("DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY", "")
+    if len(digest_key) < 32 or digest_key == webhook_secret:
+        raise SystemExit("independent stable Webhook inbox digest key is required")
     generated = _generated_token(args)
     lines = [
         "# DeepTutor protected-k8s-release Woodpecker repo secrets for test-cn.",
@@ -172,6 +176,13 @@ def prepare(args: argparse.Namespace) -> None:
         webhook_secret,
         source=".secrets/.test-secrets: DT_EDUPLUS2_WEBHOOK_SECRET (test-cn only)",
         note="Import as a Woodpecker repo secret restricted to tag events and the test-cn deploy image.",
+    )
+    _write_entry(
+        lines,
+        "DT_TEST_CN_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY",
+        digest_key,
+        source=".secrets/.test-secrets: stable DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY",
+        note="Never regenerate or silently rotate after inbox facts have been persisted.",
     )
     _write_entry(lines, "DT_TEST_CN_SMOKE_TOKEN_ISSUER_SECRET", generated, source="generated:random-url-safe-token")
     _write_entry(

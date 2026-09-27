@@ -79,7 +79,6 @@ async def _deliver(
 async def test_signed_created_directly_creates_school_without_online_resolve(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
     enterprise.eduplus2_resolver = None
@@ -143,6 +142,7 @@ async def test_signed_created_directly_creates_school_without_online_resolve(app
         school_id=binding["tenant_id"],
         policy_version=1,
         school_binding_version=1,
+        webhook_app_id=51,
         external_active=True,
         external_checked_at=now,
         external_verified_until=now + timedelta(minutes=1),
@@ -212,7 +212,6 @@ async def test_webhook_authority_startup_does_not_require_online_resolver(monkey
     for key, value in {
         "DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED": "true",
         "DT_EDUPLUS2_WEBHOOK_SECRET": "synthetic-signing-secret",
-        "DT_EDUPLUS2_WEBHOOK_APP_ID": "51",
         "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "d" * 48,
         "DT_EDUPLUS2_OIDC_ISSUER": "https://synthetic-issuer.example",
     }.items():
@@ -227,7 +226,6 @@ async def test_tms_bootstrap_http_uses_verified_token_and_signed_school_binding(
 
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
     enterprise.eduplus2_lifecycle_receiver_enabled = True
@@ -241,7 +239,18 @@ async def test_tms_bootstrap_http_uses_verified_token_and_signed_school_binding(
             event_id=event_id,
             event_type="subscription.created",
             status="active",
+            app_id=52,
             actor={"type": "user", "user_id": "synthetic-tms-sub"},
+        )
+    ).status_code == 204
+    assert (
+        await _deliver(
+            app,
+            event_id="synthetic-other-app-" + uuid.uuid4().hex,
+            event_type="subscription.created",
+            status="suspended",
+            app_id=51,
+            client_id="synthetic-other-app-client",
         )
     ).status_code == 204
     issued_at = int(time.time())
@@ -318,7 +327,6 @@ async def test_tms_bootstrap_http_uses_verified_token_and_signed_school_binding(
 async def test_authorized_oms_freeze_survives_webhook_reactivation(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
     enterprise.eduplus2_lifecycle_receiver_enabled = True
@@ -489,7 +497,6 @@ async def test_webhook_metrics_are_aggregate_and_reflect_onboarding_and_freeze(a
 
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
     enterprise.eduplus2_lifecycle_receiver_enabled = True
@@ -514,7 +521,6 @@ async def test_webhook_metrics_are_aggregate_and_reflect_onboarding_and_freeze(a
 async def test_created_actor_can_activate_first_tms_admin_before_ai_runtime_ready(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
     enterprise.eduplus2_lifecycle_receiver_enabled = True
@@ -691,7 +697,6 @@ async def test_created_actor_can_activate_first_tms_admin_before_ai_runtime_read
 async def test_signed_client_cannot_bind_to_two_schools(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     first = await _deliver(
@@ -724,7 +729,6 @@ async def test_signed_client_cannot_bind_to_two_schools(app):
 async def test_conflicting_projected_school_rolls_back_new_event(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     first = await _deliver(
@@ -762,7 +766,6 @@ async def test_conflicting_projected_school_rolls_back_new_event(app):
 async def test_webhook_digest_key_cannot_equal_signing_secret(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "s" * 48
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "s" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     response = await _deliver(
@@ -778,7 +781,6 @@ async def test_webhook_digest_key_cannot_equal_signing_secret(app):
 async def test_distinct_events_use_durable_receipt_order_and_unknown_status_denies(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     prefix = "synthetic-order-" + uuid.uuid4().hex
@@ -819,7 +821,6 @@ async def test_distinct_events_use_durable_receipt_order_and_unknown_status_deni
 async def test_two_schools_and_code_rotation_keep_stable_bindings(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     prefix = "synthetic-schools-" + uuid.uuid4().hex
@@ -899,10 +900,9 @@ async def test_two_schools_and_code_rotation_keep_stable_bindings(app):
     assert retained_code == {"school_code": "new-display-code"}
 
 
-async def test_non_school_or_wrong_application_cannot_create_school(app):
+async def test_non_school_is_rejected_and_signed_app_id_needs_no_static_config(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     prefix = "synthetic-invalid-" + uuid.uuid4().hex
@@ -913,7 +913,7 @@ async def test_non_school_or_wrong_application_cannot_create_school(app):
         status="active",
         tenant_type="group",
     )
-    wrong_app = await _deliver(
+    signed_app = await _deliver(
         app,
         event_id=prefix + "app",
         event_type="subscription.created",
@@ -921,7 +921,7 @@ async def test_non_school_or_wrong_application_cannot_create_school(app):
         app_id=52,
     )
     assert wrong_school.status_code == 422
-    assert wrong_app.status_code == 403
+    assert signed_app.status_code == 204
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-authority-test")
     async with enterprise.db.transaction(scope) as c:
         rows = await (
@@ -929,13 +929,20 @@ async def test_non_school_or_wrong_application_cannot_create_school(app):
                 "SELECT count(*) AS n FROM oms.school_bindings WHERE eduplus_tenant_id=10001"
             )
         ).fetchone()
-    assert rows["n"] == 0
+        state = await (
+            await c.execute(
+                "SELECT external_app_id FROM eduplus2.webhook_school_state "
+                "WHERE tenant_id=%s AND external_tenant_id=10001",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+    assert rows["n"] == 1
+    assert state["external_app_id"] == 52
 
 
 async def test_webhook_projection_force_rls_is_owner_scoped(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     response = await _deliver(
@@ -964,7 +971,6 @@ async def test_webhook_projection_force_rls_is_owner_scoped(app):
 async def test_projection_failure_returns_retryable_503_and_rolls_back_school(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     dsn = enterprise.postgres.resolve_runtime().reveal()
@@ -1018,7 +1024,6 @@ async def test_projection_failure_returns_retryable_503_and_rolls_back_school(ap
 async def test_unknown_school_non_created_event_is_inbox_only(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     event_id = "synthetic-unknown-school-" + uuid.uuid4().hex
@@ -1053,7 +1058,6 @@ async def test_unknown_school_non_created_event_is_inbox_only(app):
 async def test_existing_unbound_external_school_cannot_be_duplicated(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-authority-test")
@@ -1103,7 +1107,6 @@ async def test_every_subscription_event_projects_documented_status(
 ):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     prefix = "synthetic-eight-" + uuid.uuid4().hex
@@ -1136,7 +1139,6 @@ async def test_every_subscription_event_projects_documented_status(
 async def test_reactivation_never_overwrites_local_school_isolation(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
     enterprise.eduplus2_lifecycle_receiver_enabled = True
@@ -1190,6 +1192,7 @@ async def test_reactivation_never_overwrites_local_school_isolation(app):
         school_id=school["tenant_id"],
         policy_version=1,
         school_binding_version=1,
+        webhook_app_id=51,
         external_active=True,
         external_checked_at=now,
         external_verified_until=now + timedelta(minutes=1),
@@ -1201,7 +1204,6 @@ async def test_reactivation_never_overwrites_local_school_isolation(app):
 async def test_signed_webhook_drives_existing_school_login_and_session_gate(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
-    enterprise.eduplus2_webhook_app_id = 51
     enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     enterprise.eduplus2_resolver = None

@@ -16,23 +16,22 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest.mark.parametrize(
-    ("event_type", "app_id", "expected"),
+    ("event_type", "signed_app_id"),
     [
-        ("subscription.unknown", 51, lifecycle.LifecycleInvalid),
-        ("subscription.created", 52, lifecycle.LifecycleWrongApp),
+        ("subscription.unknown", 51),
+        ("subscription.created", 0),
     ],
 )
-async def test_real_event_whitelist_and_application_boundary(event_type, app_id, expected):
-    with pytest.raises(expected):
+async def test_real_event_whitelist_and_signed_app_id_validation(event_type, signed_app_id):
+    with pytest.raises(lifecycle.LifecycleInvalid):
         lifecycle.parse_lifecycle_event(
             {
                 "event_id": "synthetic-invalid-event",
                 "tenant": {"id": 10001},
-                "app": {"id": 51},
+                "app": {"id": signed_app_id},
                 "subscription": {"id": 20001, "status": "active"},
             },
             event_type,
-            app_id=app_id,
             digest_key="d" * 48,
         )
 
@@ -48,7 +47,6 @@ async def test_missing_or_non_user_actor_cannot_form_bootstrap_subject(actor):
             "actor": actor,
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     assert event.actor_subject == ""
@@ -64,7 +62,6 @@ async def test_lifecycle_inbox_owner_cannot_bypass_scope_without_tenant_guc(app)
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -117,7 +114,6 @@ async def test_webhook_projection_allows_verified_bound_school_without_resolver(
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     from deeptutor_enterprise.eduplus2.webhook_authority import ingest_authoritative_webhook
@@ -142,11 +138,24 @@ async def test_webhook_projection_allows_verified_bound_school_without_resolver(
     assert projection == {"eligibility": "allowed", "generation": 1, "binding_version": 1}
     assert tenant["external_eligibility"] == "allowed"
     enterprise.eduplus2_lifecycle_receiver_enabled = True
-    enterprise.eduplus2_webhook_app_id = 51
     token = await enterprise.identity.login("admin", "long-password-1", client="synthetic-client")
     assert (await enterprise.identity.authenticate(token)).tenant_id == str(
         enterprise.deployment.tenant_id
     )
+    second_app = lifecycle.parse_lifecycle_event(
+        {
+            "event": "subscription.created",
+            "event_id": "synthetic-reconcile-event-2",
+            "tenant": {"id": 10001},
+            "app": {"id": 52, "client_id": "synthetic-other-client"},
+            "subscription": {"id": 20002, "status": "active"},
+        },
+        "subscription.created",
+        digest_key="d" * 48,
+    )
+    assert await ingest_authoritative_webhook(enterprise, second_app, delivery_timestamp=2) == "allowed"
+    with pytest.raises(PermissionError, match="school lifecycle unavailable"):
+        await enterprise.identity.authenticate(token)
 
 
 async def test_new_notification_invalidates_existing_school_allowance_before_ack(app):
@@ -173,7 +182,6 @@ async def test_new_notification_invalidates_existing_school_allowance_before_ack
             "subscription": {"id": 20001, "status": "suspended"},
         },
         "subscription.suspended",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -204,7 +212,6 @@ async def test_new_notification_invalidates_client_resolve_cache_before_ack(app)
             "subscription": {"id": 20001, "status": "suspended"},
         },
         "subscription.suspended",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -223,7 +230,6 @@ async def test_expired_online_proof_blocks_existing_session_and_new_login(app):
     enterprise = app.state.enterprise
     token = await enterprise.identity.login("admin", "long-password-1", client="synthetic-client")
     enterprise.eduplus2_lifecycle_receiver_enabled = True
-    enterprise.eduplus2_webhook_app_id = 51
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
@@ -254,7 +260,6 @@ async def test_expired_online_proof_blocks_existing_session_and_new_login(app):
 async def test_binding_reverification_cannot_reuse_previous_webhook_projection(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_resolver = None
-    enterprise.eduplus2_webhook_app_id = 51
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
@@ -276,7 +281,6 @@ async def test_binding_reverification_cannot_reuse_previous_webhook_projection(a
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     from deeptutor_enterprise.eduplus2.webhook_authority import ingest_authoritative_webhook
@@ -304,7 +308,6 @@ async def test_binding_reverification_cannot_reuse_previous_webhook_projection(a
 async def test_disabling_receiver_cannot_reenable_expired_external_school(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_lifecycle_receiver_enabled = False
-    enterprise.eduplus2_webhook_app_id = 51
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
@@ -404,7 +407,6 @@ async def test_online_outage_keeps_school_denied_and_persists_retry(app):
             "subscription": {"id": 20001, "status": "expired"},
         },
         "subscription.expired",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -439,7 +441,6 @@ async def test_online_outage_keeps_school_denied_and_persists_retry(app):
 async def test_reconcile_batch_processes_pending_bound_school(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_resolver = ActiveResolver()
-    enterprise.eduplus2_webhook_app_id = 51
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
@@ -462,7 +463,6 @@ async def test_reconcile_batch_processes_pending_bound_school(app):
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -503,7 +503,6 @@ async def test_receiver_restart_retains_atomic_webhook_projection_without_resolv
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     from deeptutor_enterprise.eduplus2.webhook_authority import ingest_authoritative_webhook
@@ -514,7 +513,6 @@ async def test_receiver_restart_retains_atomic_webhook_projection_without_resolv
 
     restarted = Enterprise(enterprise.deployment)
     restarted.eduplus2_lifecycle_receiver_enabled = True
-    restarted.eduplus2_webhook_app_id = 51
     restarted.eduplus2_resolver = None
     try:
         await restarted.start()
@@ -541,7 +539,6 @@ async def test_receiver_restart_retains_atomic_webhook_projection_without_resolv
 async def test_periodic_scan_recovers_missed_webhook_for_verified_registration(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_resolver = ActiveResolver()
-    enterprise.eduplus2_webhook_app_id = 51
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@lifecycle-test")
     async with enterprise.db.transaction(scope) as c:
         await c.execute(
@@ -602,7 +599,6 @@ async def test_created_actor_handoff_remains_pending_without_current_subscriptio
             "actor": {"type": "user", "user_id": "synthetic-keycloak-sub"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -669,7 +665,6 @@ async def test_late_created_actor_and_system_events_never_activate_admin(monkeyp
                 "actor": actor,
             },
             "subscription.created",
-            app_id=51,
             digest_key="d" * 48,
         )
         events.append(event)
@@ -734,7 +729,6 @@ async def test_lifecycle_reconcile_metrics_aggregate_without_school_identifiers(
         "retry": 0,
         "pending_actor_candidates": 0,
     }
-    enterprise.eduplus2_webhook_app_id = 51
     event = lifecycle.parse_lifecycle_event(
         {
             "event_id": "synthetic-metrics-event",
@@ -743,7 +737,6 @@ async def test_lifecycle_reconcile_metrics_aggregate_without_school_identifiers(
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -781,7 +774,7 @@ async def test_lifecycle_worker_refreshes_internal_metrics(monkeypatch, app):
 
 @pytest.mark.parametrize(
     "missing",
-    ["signing_secret", "app_id", "digest_key", "issuer"],
+    ["signing_secret", "digest_key", "issuer"],
 )
 async def test_enabled_lifecycle_receiver_rejects_missing_runtime_contract(
     monkeypatch, app, missing
@@ -791,13 +784,11 @@ async def test_enabled_lifecycle_receiver_rejects_missing_runtime_contract(
     values = {
         "DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED": "true",
         "DT_EDUPLUS2_WEBHOOK_SECRET": "synthetic-signing-secret",
-        "DT_EDUPLUS2_WEBHOOK_APP_ID": "51",
         "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "d" * 48,
         "DT_EDUPLUS2_OIDC_ISSUER": "https://synthetic-issuer.example",
     }
     missing_key = {
         "signing_secret": "DT_EDUPLUS2_WEBHOOK_SECRET",
-        "app_id": "DT_EDUPLUS2_WEBHOOK_APP_ID",
         "digest_key": "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY",
         "issuer": "DT_EDUPLUS2_OIDC_ISSUER",
     }.get(missing)
@@ -814,7 +805,6 @@ async def test_enabled_lifecycle_receiver_rejects_digest_key_reuse(monkeypatch, 
     for key, value in {
         "DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED": "true",
         "DT_EDUPLUS2_WEBHOOK_SECRET": "synthetic-shared-secret" * 3,
-        "DT_EDUPLUS2_WEBHOOK_APP_ID": "51",
         "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "synthetic-shared-secret" * 3,
         "DT_EDUPLUS2_OIDC_ISSUER": "https://synthetic-issuer.example",
     }.items():
@@ -829,21 +819,19 @@ async def test_enabled_lifecycle_receiver_accepts_complete_independent_contract(
     for key, value in {
         "DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED": "true",
         "DT_EDUPLUS2_WEBHOOK_SECRET": "synthetic-signing-secret",
-        "DT_EDUPLUS2_WEBHOOK_APP_ID": "51",
         "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY": "d" * 48,
         "DT_EDUPLUS2_OIDC_ISSUER": "https://synthetic-issuer.example",
     }.items():
         monkeypatch.setenv(key, value)
     enterprise._configure_eduplus2_from_env()
     assert enterprise.eduplus2_lifecycle_receiver_enabled
-    assert enterprise.eduplus2_webhook_app_id == 51
+    assert not hasattr(enterprise, "eduplus2_webhook_app_id")
 
 
 async def test_lifecycle_receiver_requires_bound_school_and_explicit_secrets(monkeypatch, app):
     enterprise = app.state.enterprise
     monkeypatch.setenv("SYNTHETIC_LIFECYCLE_DIGEST_KEY", "d" * 48)
     monkeypatch.setenv("SYNTHETIC_PREVIOUS_WEBHOOK_KEY", "old-synthetic-secret")
-    monkeypatch.setenv("DT_EDUPLUS2_WEBHOOK_APP_ID", "51")
     monkeypatch.setenv(
         "DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF", "env:SYNTHETIC_LIFECYCLE_DIGEST_KEY"
     )
@@ -852,7 +840,7 @@ async def test_lifecycle_receiver_requires_bound_school_and_explicit_secrets(mon
     )
     monkeypatch.setenv("DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL", "1234567890")
     enterprise._configure_eduplus2_from_env()
-    assert enterprise.eduplus2_webhook_app_id == 51
+    assert not hasattr(enterprise, "eduplus2_webhook_app_id")
     assert enterprise.eduplus2_webhook_inbox_digest_key == "d" * 48
     assert enterprise.eduplus2_webhook_previous_secret == "old-synthetic-secret"
     assert enterprise.eduplus2_webhook_previous_until == 1234567890
@@ -865,7 +853,6 @@ async def test_lifecycle_receiver_requires_bound_school_and_explicit_secrets(mon
                 "subscription": {"id": 20001, "status": "active"},
             },
             "subscription.created",
-            app_id=51,
             digest_key="",
         )
 
@@ -894,7 +881,6 @@ async def test_inbox_integrity_key_must_not_reuse_webhook_signing_secret(app):
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     with pytest.raises(RuntimeError):
@@ -935,7 +921,6 @@ async def test_reconcile_serializes_same_school_across_workers(app):
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -994,7 +979,6 @@ async def test_new_event_fences_inflight_online_result(app):
                 "subscription": {"id": 20001, "status": status},
             },
             event_type,
-            app_id=51,
             digest_key="d" * 48,
         )
 
@@ -1069,7 +1053,6 @@ async def test_seventeen_historical_clients_do_not_permanently_block_current_pro
                 "subscription": {"id": 20001, "status": "active"},
             },
             "subscription.renewed",
-            app_id=51,
             digest_key="d" * 48,
         )
         await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -1110,7 +1093,6 @@ async def test_webhook_client_conflicting_with_verified_school_binding_is_reject
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.created",
-        app_id=51,
         digest_key="d" * 48,
     )
     with pytest.raises(lifecycle.LifecycleConflict):
@@ -1150,7 +1132,6 @@ async def test_old_suspension_notification_uses_current_active_resolve(app):
             "subscription": {"id": 20001, "status": "suspended"},
         },
         "subscription.suspended",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -1213,7 +1194,6 @@ async def test_unavailable_old_client_does_not_override_new_current_client(app):
                 "subscription": {"id": 20001, "status": "active"},
             },
             "subscription.renewed",
-            app_id=51,
             digest_key="d" * 48,
         )
         await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -1270,7 +1250,6 @@ async def test_online_negative_and_contradictory_target_fail_closed(app, mode, e
             "subscription": {"id": 20001, "status": "active"},
         },
         "subscription.renewed",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
@@ -1337,7 +1316,6 @@ async def test_two_verified_schools_notifications_remain_separate(app):
             "subscription": {"id": 20002, "status": "suspended"},
         },
         "subscription.suspended",
-        app_id=51,
         digest_key="d" * 48,
     )
     await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)

@@ -46,7 +46,8 @@ async def inspect_school_lifecycle(
         not isinstance(actor, ManagementIdentity)
         or actor.application != "oms"
         or not isinstance(school_id, UUID)
-        or actor.webhook_app_id != getattr(enterprise, "eduplus2_webhook_app_id", None)
+        or type(actor.webhook_app_id) is not int
+        or actor.webhook_app_id <= 0
         or type(request_id) is not str
         or not 1 <= len(request_id.strip()) <= 128
     ):
@@ -126,7 +127,8 @@ async def set_school_lifecycle_freeze(
         or not 1 <= len(reason.strip()) <= 1000
         or not isinstance(request_id, str)
         or not 1 <= len(request_id.strip()) <= 128
-        or actor.webhook_app_id != getattr(enterprise, "eduplus2_webhook_app_id", None)
+        or type(actor.webhook_app_id) is not int
+        or actor.webhook_app_id <= 0
     ):
         raise ManagementAuthorizationDenied("school freeze command is invalid")
     owner = enterprise.deployment.tenant_id

@@ -1,0 +1,106 @@
+---
+title: 自定义 Agent／Turn Capability 规范
+description: 当前 DeepTutor 顶层能力的 manifest、执行与事件契约
+slug: /capacities/turn-capability/
+---
+
+# 自定义 Agent／Turn Capability 规范
+
+当你的 Agent 需要自主决定一轮对话的阶段、工具和最终结果，而不是只提供单个函数或指导文本时，才考虑 Turn Capability。它对应请求中的顶层 `capability`；多阶段不是必需条件，但必须负责完整 turn 的成功、失败与输出。
+
+## 企业入口适用状态
+
+**当前企业入口仅支持 `chat`。** 第三方不能通过公开 API 注册或选择自定义顶层能力；在 [`start_turn`](../api/ws/start_turn.mdx) 填自定义名称会被拒绝。下面是自部署/与部署方协作开发的协议规范，不构成企业安装或调用承诺。
+
+## 交付物与格式
+
+当前自部署扩展交付一个 Python `TurnCapability` 子类：类属性 `manifest: CapabilityManifest`，以及 `async run(context: UnifiedContext, stream: StreamBusProtocol) -> None`。类应能无参构造，并可在 Python 包的 `deeptutor.extensions` entry point 中声明。这个代码扩展点**不是稳定的企业第三方 SDK 或上传格式**，仅适用目标自部署版本。
+
+## 当前实现的 manifest 与执行契约
+
+| 成员 | 已实现语义 |
+| --- | --- |
+| `manifest.name`、`description` | 顶层能力的稳定名称和说明；注册时名称不能为空。避免与已存在能力重名，外部同名扩展不会替代已加载能力。 |
+| `stages: list[str]` | 能力声明的阶段名列表；执行时按实际阶段发出对应事件，不能只在列表中声明而不处理失败与取消。 |
+| `tools_used: list[str]` | 说明预期工具，**不会自动授予或注册这些工具**。调用时仍须受部署环境授权。 |
+| `cli_aliases: list[str]` | CLI 入口的别名元数据，不是 WebSocket `capability` 的别名，也不是权限。 |
+| `request_schema: dict`、`config_defaults: dict` | 描述请求结构/默认值的 manifest 元数据。对外部 entry point，当前自部署代码**不会仅因填写这两个字段就接受非空自定义 `config`**；实际请求配置由注册时的校验模型决定，默认不接受未知配置。 |
+| `run(context, stream)` | 读取本轮问题、会话、语言及已授权资源；通过 `stream.emit(...)` 发事件，或用 `stream.stage(name, source=...)` 标记阶段。函数负责产生可见内容/结果，不能只返回 Python 字符串。 |
+| 最终产物 | 需要发出实际 `result`/内容事件；若其他消费者还要读取完成摘要，应设置 `context.capability_output.agent_output` 与有界的 `event_metadata`。完成/失败终态由运行入口处理，不要自行伪造多个 `done`。 |
+
+当前 `StreamEventType` 的取值为 `stage_start`、`stage_end`、`thinking`、`observation`、`content`、`tool_call`、`tool_result`、`progress`、`sources`、`result`、`error`、`session`、`session_meta`、`done`、`wait_for_input`。扩展应仅发出与真实进展相符且由它负责的事件；特别是不要把“已请求工具”写成“已调用”，也不要自行伪造运行入口负责的终态事件。
+
+### `UnifiedContext` 与事件的可用字段
+
+这是 Python 扩展收到的**当前轮次对象**，不是企业 WebSocket 请求体。没有值的字段可能为空；扩展应先检查，而不是据存在某个字段推断权限。
+
+| 字段 | 开发时的用法与边界 |
+| --- | --- |
+| `user_message`、`session_id`、`conversation_history` | 当前输入、会话标识和历史消息；历史消息为消息对象列表，不应跨会话缓存。 |
+| `language` | 当前语言，通常为 `en` 或 `zh`；用于本轮提示和回答。 |
+| `knowledge_bases`、`attachments` | 本轮已选择的知识库引用和附件对象；**选择不等于已检索或已授权任意读取**。附件带类型、名称和可用内容，不能把路径/URL 当权限。 |
+| `enabled_tools`、`allowed_builtin_tools` | 工具选择/限制信息；`None` 与空列表含义不同，名称出现不代表调用已获授权或已执行。 |
+| `active_capability`、`config_overrides` | 本轮选择与经过入口验证的配置；外部扩展不能靠 manifest 自行开放未知配置键。 |
+| `memory_context`、`persona_context`、`sidebar_context`、`skills_manifest`、`source_manifest` | 当前轮次可用的上下文文本/摘要；可能包含敏感资料，不得转发到日志或外部服务。 |
+| `capability_output.agent_output`、`capability_output.event_metadata` | 扩展可填写的完成摘要与有界元数据；与事件所展示的结果保持一致。 |
+| `extension(namespace)` | 取得本轮扩展专属状态字典，适合循环扩展保存局部状态；不是跨轮持久化。 |
+
+`StreamEvent` 的 `type` 必须取当前 `StreamEventType` 枚举；开发者通常填写 `source`、`stage`、`content`、`metadata`，事件还携带时间、会话、轮次及序号字段。阶段事件宜用 `stream.stage(...)` 成对产生，最终内容使用真实的 `result`/`content` 事件；不要自行伪造 `done`、成本或序号。执行环境附带的运行回调/服务状态不属于可移植扩展输入契约。
+
+## 输入与输出
+
+输入包括用户问题、当前会话、被授权的资源选择以及部署方允许的配置；不要自行从客户端字段推断更高权限。执行过程可发进度事件，但它们不能替代最终结果；成功、取消、超时、错误都应有明确终态。引用应对应实际使用的资料；资源用量与费用由运行环境记录，不要在结果中伪造。
+
+## 安全与资源边界
+
+能力只能使用部署方明确授予的工具、模型与资源，不因 manifest 写了某工具就获得访问权。按当前用户/学校范围复核每个外部调用；对长任务设置时间和成本上限，响应取消。阶段中产生的临时内容不应跨用户复用，日志与事件不得含密钥或私人资料。
+
+## 失败处理
+
+如果必需工具或资源不可用，尽早返回明确错误；不能安静地换成未授权资源。对部分完成阶段标明状态，取消后停止后续副作用；对可重试写操作提供幂等设计。不能把一段看似完整的自然语言当作失败兜底结果。
+
+## 可验证样例
+
+下面的自部署代码只处理传入文本，不访问受保护资源，用于核对完整的 manifest、阶段、结果与完成摘要契约：
+
+```python
+from deeptutor.core.capability_protocol import CapabilityManifest, TurnCapability
+from deeptutor.core.stream import StreamEvent, StreamEventType
+
+
+class EchoTurn(TurnCapability):
+    manifest = CapabilityManifest(
+        name="echo_turn",
+        description="回显请求，用于检验顶层能力协议",
+        stages=["responding"],
+        tools_used=[],
+    )
+
+    async def run(self, context, stream) -> None:
+        question = context.user_message.strip()
+        if not question:
+            raise ValueError("问题不能为空")
+        answer = f"收到：{question}"
+        async with stream.stage("responding", source=self.name):
+            await stream.emit(StreamEvent(
+                type=StreamEventType.RESULT,
+                source=self.name,
+                stage="responding",
+                content=answer,
+            ))
+        context.capability_output.agent_output = answer
+```
+
+自部署 Python 包的入口声明形状如下；入口指向实现 `TurnCapability` 的无参可构造类，类的 `manifest.name` 宜与入口名一致。仅声明入口不会使企业第三方 API 开放该能力。
+
+```toml
+[project.entry-points."deeptutor.extensions"]
+echo_turn = "echo_turn:EchoTurn"
+```
+
+## 开发自测
+
+- 完整覆盖成功、阶段失败、取消、超时与重复请求。
+- 事件先后、最终输出、引用与使用摘要相互一致。
+- 缺工具、越权课程及恶意资料不能触发不受权行为。
+- 企业客户端仍只发送 `"capability":"chat"`，不把本页当作已开放能力清单。
