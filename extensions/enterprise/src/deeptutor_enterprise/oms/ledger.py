@@ -68,7 +68,43 @@ class RevokeResult:
     released_units: Decimal
 
 
-def _validate_revoke(scope: TenantScope, request: RevokeRequest) -> None:
+@dataclass(frozen=True, slots=True)
+class ExpireRequest:
+    grant_id: UUID
+    expected_version: int
+    actor_subject: str
+    request_id: str
+    idempotency_key: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExpireResult:
+    grant_id: UUID
+    version: int
+    released_units: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class AdjustRequest:
+    grant_id: UUID
+    expected_version: int
+    new_quantity: Decimal
+    actor_subject: str
+    request_id: str
+    idempotency_key: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class AdjustResult:
+    grant_id: UUID
+    version: int
+    previous_quantity: Decimal
+    quantity: Decimal
+
+
+def _validate_revoke(scope: TenantScope, request: RevokeRequest | ExpireRequest) -> None:
     if not isinstance(scope, TenantScope) or scope.user_id != request.actor_subject:
         raise GrantRejected("trusted actor scope is required")
     if not isinstance(request.grant_id, UUID) or type(request.expected_version) is not int:
@@ -81,7 +117,7 @@ def _validate_revoke(scope: TenantScope, request: RevokeRequest) -> None:
             raise GrantRejected(f"{name} is invalid")
 
 
-def _revoke_fingerprint(scope: TenantScope, request: RevokeRequest) -> str:
+def _revoke_fingerprint(scope: TenantScope, request: RevokeRequest | ExpireRequest) -> str:
     data = {
         "tenant_id": scope.tenant_id,
         "grant_id": str(request.grant_id),
@@ -159,18 +195,40 @@ class OmsGrantLedger:
     def __init__(self, db) -> None:
         self.db = db
 
-    async def revoke(self, scope: TenantScope, request: RevokeRequest) -> RevokeResult:
-        """只释放未使用承诺；在途预留及历史结算由原 attempt 继续核对。"""
+    async def adjust(self, scope: TenantScope, request: AdjustRequest) -> AdjustResult:
+        """按版本调整当前额度，只在供给池中转移未使用承诺。"""
 
         _validate_revoke(scope, request)
+        quantity = request.new_quantity
+        if (
+            not isinstance(quantity, Decimal)
+            or not quantity.is_finite()
+            or quantity <= 0
+            or quantity.as_tuple().exponent < -6
+        ):
+            raise GrantRejected("adjusted grant quantity is invalid")
         tenant_id = UUID(scope.tenant_id)
-        fingerprint = _revoke_fingerprint(scope, request)
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "tenant_id": scope.tenant_id,
+                    "grant_id": str(request.grant_id),
+                    "expected_version": request.expected_version,
+                    "new_quantity": str(quantity.normalize()),
+                    "reason": request.reason,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        rejected: InsufficientSupply | None = None
+        result: AdjustResult | None = None
         async with self.db.transaction(scope) as c:
             claimed = await (
                 await c.execute(
                     "INSERT INTO oms.grant_commands"
                     "(actor_subject,action,idempotency_key,target_tenant_id,payload_hash,grant_id) "
-                    "VALUES(%s,'quota.revoke',%s,%s,%s,%s) "
+                    "VALUES(%s,'quota.adjust',%s,%s,%s,%s) "
                     "ON CONFLICT DO NOTHING RETURNING grant_id",
                     (
                         request.actor_subject,
@@ -186,8 +244,320 @@ class OmsGrantLedger:
                     await c.execute(
                         "SELECT target_tenant_id,payload_hash,grant_id,result,result_summary "
                         "FROM oms.grant_commands WHERE actor_subject=%s "
-                        "AND action='quota.revoke' AND idempotency_key=%s FOR UPDATE",
+                        "AND action='quota.adjust' AND idempotency_key=%s FOR UPDATE",
                         (request.actor_subject, request.idempotency_key),
+                    )
+                ).fetchone()
+                if (
+                    prior is None
+                    or prior["target_tenant_id"] != tenant_id
+                    or prior["payload_hash"] != fingerprint
+                    or prior["grant_id"] != request.grant_id
+                ):
+                    raise GrantRejected("adjust idempotency key conflicts with prior payload")
+                if prior["result"] == "denied":
+                    raise InsufficientSupply("compatible finite supply is insufficient")
+                if prior["result"] != "success":
+                    raise GrantRejected("adjust idempotency result is incomplete")
+                summary = prior["result_summary"]
+                return AdjustResult(
+                    request.grant_id,
+                    int(summary["version"]),
+                    Decimal(summary["previous_quantity"]),
+                    Decimal(summary["quantity"]),
+                )
+
+            identity = await (
+                await c.execute(
+                    "SELECT service_id FROM oms.quota_grants WHERE tenant_id=%s AND id=%s",
+                    (tenant_id, request.grant_id),
+                )
+            ).fetchone()
+            if identity is None:
+                raise GrantRejected("grant is unavailable")
+            entitlement = await (
+                await c.execute(
+                    "SELECT status,starts_at,expires_at "
+                    "FROM oms.tenant_service_entitlements "
+                    "WHERE tenant_id=%s AND service_id=%s FOR UPDATE",
+                    (tenant_id, identity["service_id"]),
+                )
+            ).fetchone()
+            if entitlement is None:
+                raise GrantRejected("grant entitlement is unavailable")
+            pools = await (
+                await c.execute(
+                    "SELECT DISTINCT sl.service_id,sl.provider_id,sl.provider_account_id,"
+                    "sl.pool_id,sl.unit_code FROM oms.grant_commitments gc "
+                    "JOIN oms.supply_lots sl ON sl.id=gc.lot_id "
+                    "WHERE gc.tenant_id=%s AND gc.grant_id=%s",
+                    (tenant_id, request.grant_id),
+                )
+            ).fetchall()
+            if len(pools) != 1:
+                raise GrantRejected("grant pool needs reconciliation")
+            pool = pools[0]
+            await c.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (
+                    "oms-pool:"
+                    f"{pool['service_id']}:{pool['provider_id']}:"
+                    f"{pool['provider_account_id']}:{pool['pool_id']}:{pool['unit_code']}",
+                ),
+            )
+            grant = await (
+                await c.execute(
+                    "SELECT status,version,quantity,adjustment_released,service_id,starts_at,expires_at "
+                    "FROM oms.quota_grants WHERE tenant_id=%s AND id=%s FOR UPDATE",
+                    (tenant_id, request.grant_id),
+                )
+            ).fetchone()
+            if (
+                grant is None
+                or grant["status"] != "active"
+                or grant["version"] != request.expected_version
+            ):
+                raise GrantRejected("grant version is stale or inactive")
+            now = (await (await c.execute("SELECT now() AS current_time")).fetchone())[
+                "current_time"
+            ]
+            if grant["expires_at"] <= now:
+                raise GrantRejected("expired grant cannot be adjusted")
+            previous_quantity = grant["quantity"] - grant["adjustment_released"]
+            delta = quantity - previous_quantity
+            if delta == 0:
+                raise GrantRejected("adjustment must change quantity")
+            rows = await (
+                await c.execute(
+                    "SELECT gc.lot_id,gc.committed_total,gc.unspent,gc.reserved,gc.settled,"
+                    "gc.released,sl.expires_at "
+                    "FROM oms.grant_commitments gc "
+                    "JOIN oms.supply_lots sl ON sl.id=gc.lot_id "
+                    "WHERE gc.tenant_id=%s AND gc.grant_id=%s "
+                    "ORDER BY sl.id FOR UPDATE OF gc,sl",
+                    (tenant_id, request.grant_id),
+                )
+            ).fetchall()
+            if sum(row["committed_total"] for row in rows) != grant["quantity"]:
+                raise GrantRejected("grant commitments need reconciliation")
+            if delta < 0:
+                remaining = -delta
+                for row in sorted(
+                    rows, key=lambda row: (row["expires_at"], row["lot_id"]), reverse=True
+                ):
+                    take = min(remaining, row["unspent"])
+                    if take <= 0:
+                        continue
+                    updated = await (
+                        await c.execute(
+                            "UPDATE oms.grant_commitments "
+                            "SET unspent=unspent-%s,released=released+%s "
+                            "WHERE tenant_id=%s AND grant_id=%s AND lot_id=%s "
+                            "AND unspent>=%s RETURNING lot_id",
+                            (take, take, tenant_id, request.grant_id, row["lot_id"], take),
+                        )
+                    ).fetchone()
+                    if updated is None:
+                        raise GrantRejected("grant commitment changed during adjustment")
+                    updated = await (
+                        await c.execute(
+                            "UPDATE oms.supply_lots SET committed_unspent=committed_unspent-%s "
+                            "WHERE id=%s AND committed_unspent>=%s RETURNING id",
+                            (take, row["lot_id"], take),
+                        )
+                    ).fetchone()
+                    if updated is None:
+                        raise GrantRejected("supply commitment changed during adjustment")
+                    remaining -= take
+                    if remaining == 0:
+                        break
+                if remaining:
+                    raise GrantRejected("adjustment exceeds unspent commitment")
+            else:
+                if (
+                    entitlement["status"] != "active"
+                    or entitlement["starts_at"] > now
+                    or entitlement["expires_at"] < grant["expires_at"]
+                ):
+                    raise GrantRejected("tenant service entitlement is unavailable")
+                lots = await (
+                    await c.execute(
+                        "SELECT id,hard_ceiling,settled_lifetime,committed_unspent,reserved_inflight "
+                        "FROM oms.supply_lots WHERE service_id=%s AND provider_id=%s "
+                        "AND provider_account_id=%s AND pool_id=%s AND unit_code=%s "
+                        "AND status='active' AND hard_ceiling IS NOT NULL "
+                        "AND supply_basis='native_units' AND verified_at IS NOT NULL "
+                        "AND starts_at<=now() AND expires_at>now() AND expires_at>=%s "
+                        "ORDER BY expires_at,id FOR UPDATE",
+                        (
+                            pool["service_id"],
+                            pool["provider_id"],
+                            pool["provider_account_id"],
+                            pool["pool_id"],
+                            pool["unit_code"],
+                            grant["expires_at"],
+                        ),
+                    )
+                ).fetchall()
+                remaining = delta
+                allocations: list[tuple[UUID, Decimal]] = []
+                for lot in lots:
+                    available = (
+                        lot["hard_ceiling"]
+                        - lot["settled_lifetime"]
+                        - lot["committed_unspent"]
+                        - lot["reserved_inflight"]
+                    )
+                    take = min(remaining, available)
+                    if take > 0:
+                        allocations.append((lot["id"], take))
+                        remaining -= take
+                    if remaining == 0:
+                        break
+                if remaining:
+                    rejected = InsufficientSupply("compatible finite supply is insufficient")
+                else:
+                    for lot_id, take in allocations:
+                        updated = await (
+                            await c.execute(
+                                "UPDATE oms.supply_lots SET committed_unspent=committed_unspent+%s "
+                                "WHERE id=%s AND status='active' AND hard_ceiling IS NOT NULL "
+                                "AND supply_basis='native_units' AND verified_at IS NOT NULL "
+                                "AND hard_ceiling-settled_lifetime-committed_unspent-reserved_inflight>=%s "
+                                "RETURNING id",
+                                (take, lot_id, take),
+                            )
+                        ).fetchone()
+                        if updated is None:
+                            raise GrantRejected("supply changed during adjustment")
+                        await c.execute(
+                            "INSERT INTO oms.grant_commitments"
+                            "(tenant_id,grant_id,lot_id,committed_total,unspent) "
+                            "VALUES(%s,%s,%s,%s,%s) "
+                            "ON CONFLICT (tenant_id,grant_id,lot_id) DO UPDATE "
+                            "SET committed_total=oms.grant_commitments.committed_total+EXCLUDED.committed_total,"
+                            "unspent=oms.grant_commitments.unspent+EXCLUDED.unspent",
+                            (tenant_id, request.grant_id, lot_id, take, take),
+                        )
+            if rejected is None:
+                updated = await (
+                    await c.execute(
+                        "UPDATE oms.quota_grants SET "
+                        "quantity=quantity+%s,adjustment_released=adjustment_released+%s,"
+                        "version=version+1 "
+                        "WHERE tenant_id=%s AND id=%s AND version=%s RETURNING version",
+                        (
+                            delta if delta > 0 else Decimal(0),
+                            -delta if delta < 0 else Decimal(0),
+                            tenant_id,
+                            request.grant_id,
+                            request.expected_version,
+                        ),
+                    )
+                ).fetchone()
+                if updated is None:
+                    raise GrantRejected("grant version changed during adjustment")
+                result = AdjustResult(
+                    request.grant_id, updated["version"], previous_quantity, quantity
+                )
+            await c.execute(
+                "INSERT INTO oms.audit_events"
+                "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"
+                "request_id,result,reason,safe_summary) "
+                "VALUES(%s,%s,'quota.adjust',%s,'quota_grant',%s,%s,%s,%s,%s)",
+                (
+                    uuid4(),
+                    request.actor_subject,
+                    tenant_id,
+                    str(request.grant_id),
+                    request.request_id,
+                    "denied" if rejected else "success",
+                    request.reason,
+                    Jsonb(
+                        {
+                            "previous_quantity": str(previous_quantity),
+                            "quantity": str(quantity),
+                            "delta": str(delta),
+                        }
+                    ),
+                ),
+            )
+            await c.execute(
+                "UPDATE oms.grant_commands SET result=%s,completed_at=now(),result_summary=%s "
+                "WHERE actor_subject=%s AND action='quota.adjust' AND idempotency_key=%s",
+                (
+                    "denied" if rejected else "success",
+                    Jsonb(
+                        {}
+                        if rejected
+                        else {
+                            "version": result.version,
+                            "previous_quantity": str(result.previous_quantity),
+                            "quantity": str(result.quantity),
+                        }
+                    ),
+                    request.actor_subject,
+                    request.idempotency_key,
+                ),
+            )
+        if rejected:
+            raise rejected
+        assert result is not None
+        return result
+
+    async def revoke(self, scope: TenantScope, request: RevokeRequest) -> RevokeResult:
+        """只释放未使用承诺；在途预留及历史结算由原 attempt 继续核对。"""
+
+        version, released = await self._close_grant(
+            scope, request, action="quota.revoke", terminal_status="revoked", require_due=False
+        )
+        return RevokeResult(request.grant_id, version, released)
+
+    async def expire(self, scope: TenantScope, request: ExpireRequest) -> ExpireResult:
+        """到期后释放未使用承诺，远端未知 attempt 的预留继续留账。"""
+
+        version, released = await self._close_grant(
+            scope, request, action="quota.expire", terminal_status="expired", require_due=True
+        )
+        return ExpireResult(request.grant_id, version, released)
+
+    async def _close_grant(
+        self,
+        scope: TenantScope,
+        request: RevokeRequest | ExpireRequest,
+        *,
+        action: str,
+        terminal_status: str,
+        require_due: bool,
+    ) -> tuple[int, Decimal]:
+
+        _validate_revoke(scope, request)
+        tenant_id = UUID(scope.tenant_id)
+        fingerprint = _revoke_fingerprint(scope, request)
+        async with self.db.transaction(scope) as c:
+            claimed = await (
+                await c.execute(
+                    "INSERT INTO oms.grant_commands"
+                    "(actor_subject,action,idempotency_key,target_tenant_id,payload_hash,grant_id) "
+                    "VALUES(%s,%s,%s,%s,%s,%s) "
+                    "ON CONFLICT DO NOTHING RETURNING grant_id",
+                    (
+                        request.actor_subject,
+                        action,
+                        request.idempotency_key,
+                        tenant_id,
+                        fingerprint,
+                        request.grant_id,
+                    ),
+                )
+            ).fetchone()
+            if claimed is None:
+                prior = await (
+                    await c.execute(
+                        "SELECT target_tenant_id,payload_hash,grant_id,result,result_summary "
+                        "FROM oms.grant_commands WHERE actor_subject=%s "
+                        "AND action=%s AND idempotency_key=%s FOR UPDATE",
+                        (request.actor_subject, action, request.idempotency_key),
                     )
                 ).fetchone()
                 if (
@@ -200,11 +570,7 @@ class OmsGrantLedger:
                 if prior["result"] != "success":
                     raise GrantRejected("revoke idempotency result is incomplete")
                 summary = prior["result_summary"]
-                return RevokeResult(
-                    request.grant_id,
-                    int(summary["version"]),
-                    Decimal(summary["released_units"]),
-                )
+                return int(summary["version"]), Decimal(summary["released_units"])
 
             identity = await (
                 await c.execute(
@@ -255,7 +621,7 @@ class OmsGrantLedger:
                 )
             grant = await (
                 await c.execute(
-                    "SELECT status,version,quantity,service_id FROM oms.quota_grants "
+                    "SELECT status,version,quantity,service_id,expires_at FROM oms.quota_grants "
                     "WHERE tenant_id=%s AND id=%s FOR UPDATE",
                     (tenant_id, request.grant_id),
                 )
@@ -266,6 +632,10 @@ class OmsGrantLedger:
                 or grant["version"] != request.expected_version
             ):
                 raise GrantRejected("grant is revoked or version is stale")
+            if require_due:
+                due = await (await c.execute("SELECT now() AS current_time")).fetchone()
+                if grant["expires_at"] > due["current_time"]:
+                    raise GrantRejected("grant is not expired")
             rows = await (
                 await c.execute(
                     "SELECT gc.lot_id,gc.committed_total,gc.unspent "
@@ -307,22 +677,22 @@ class OmsGrantLedger:
                 released += amount
             updated = await (
                 await c.execute(
-                    "UPDATE oms.quota_grants SET status='revoked',version=version+1 "
+                    "UPDATE oms.quota_grants SET status=%s,version=version+1 "
                     "WHERE tenant_id=%s AND id=%s AND version=%s RETURNING version",
-                    (tenant_id, request.grant_id, request.expected_version),
+                    (terminal_status, tenant_id, request.grant_id, request.expected_version),
                 )
             ).fetchone()
             if updated is None:
                 raise GrantRejected("grant version changed during revocation")
-            result = RevokeResult(request.grant_id, updated["version"], released)
             await c.execute(
                 "INSERT INTO oms.audit_events"
                 "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"
                 "request_id,result,reason,safe_summary) "
-                "VALUES(%s,%s,'quota.revoke',%s,'quota_grant',%s,%s,'success',%s,%s)",
+                "VALUES(%s,%s,%s,%s,'quota_grant',%s,%s,'success',%s,%s)",
                 (
                     uuid4(),
                     request.actor_subject,
+                    action,
                     tenant_id,
                     str(request.grant_id),
                     request.request_id,
@@ -332,15 +702,16 @@ class OmsGrantLedger:
             )
             await c.execute(
                 "UPDATE oms.grant_commands SET result='success',completed_at=now(),"
-                "result_summary=%s WHERE actor_subject=%s AND action='quota.revoke' "
+                "result_summary=%s WHERE actor_subject=%s AND action=%s "
                 "AND idempotency_key=%s",
                 (
-                    Jsonb({"version": result.version, "released_units": str(released)}),
+                    Jsonb({"version": updated["version"], "released_units": str(released)}),
                     request.actor_subject,
+                    action,
                     request.idempotency_key,
                 ),
             )
-            return result
+            return updated["version"], released
 
     async def grant(self, scope: TenantScope, request: GrantRequest) -> GrantResult:
         _validate(scope, request)
@@ -442,6 +813,7 @@ class OmsGrantLedger:
                     "FROM oms.supply_lots WHERE service_id=%s AND provider_id=%s "
                     "AND provider_account_id=%s AND pool_id=%s AND unit_code=%s "
                     "AND status='active' AND hard_ceiling IS NOT NULL "
+                    "AND supply_basis='native_units' AND verified_at IS NOT NULL "
                     "AND starts_at<=now() AND starts_at<=%s "
                     "AND expires_at>now() AND expires_at>=%s "
                     "ORDER BY expires_at,id FOR UPDATE",
@@ -498,6 +870,7 @@ class OmsGrantLedger:
                             "UPDATE oms.supply_lots "
                             "SET committed_unspent=committed_unspent+%s "
                             "WHERE id=%s AND status='active' AND hard_ceiling IS NOT NULL "
+                            "AND supply_basis='native_units' AND verified_at IS NOT NULL "
                             "AND hard_ceiling-settled_lifetime-committed_unspent-reserved_inflight>=%s "
                             "RETURNING id",
                             (quantity, lot_id, quantity),

@@ -9,7 +9,7 @@ beforeEach(() => { path = "/tms/prototype/demo-school/apps"; sessionStorage.clea
 describe("TMS 列表、详情和操作层级", () => {
   it("应用从列表打开详情抽屉，关闭后保留列表", () => {
     render(<TmsPrototype/>);
-    fireEvent.click(screen.getAllByRole("button", { name: /查看详情/ })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "应用资料" })[0]);
     expect(screen.getByRole("dialog", { name: /详情/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭抽屉" }));
     expect(screen.getByRole("heading", { name: "应用与接入" })).toBeInTheDocument();
@@ -33,6 +33,10 @@ describe("TMS 列表、详情和操作层级", () => {
     const row = screen.getByText("演示备课应用").closest("tr");
     expect(row).not.toBeNull();
     expect(within(row!).getByText("数学教研组")).toBeInTheDocument();
+    fireEvent.click(within(row!).getByRole("button", { name: "应用资料" }));
+    const detail = screen.getByRole("dialog", { name: /详情.*演示备课应用/ });
+    expect(within(detail).getByText("数学教研组")).toBeInTheDocument();
+    expect(screen.queryByText("没有访问权限")).not.toBeInTheDocument();
   });
   it("配额直达详情仍只读且显示在抽屉", () => {
     path = "/tms/prototype/demo-school/quotas/q-101";
@@ -42,7 +46,7 @@ describe("TMS 列表、详情和操作层级", () => {
     expect(screen.queryByRole("button", { name: /新增配额|调整额度|撤销额度/ })).not.toBeInTheDocument();
   });
   it("成员访问授权表单从详情抽屉打开独立模态框", () => {
-    path = "/tms/prototype/demo-school/members/m-01";
+    path = "/tms/prototype/demo-school/members/m-01/access";
     render(<TmsPrototype/>);
     expect(screen.getByRole("dialog", { name: /详情/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "授予应用访问（演示）" }));

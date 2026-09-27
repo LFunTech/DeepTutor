@@ -1,0 +1,40 @@
+---
+title: "regenerate · 重新生成最后一次回答"
+description: "WebSocket 命令 regenerate 的请求、响应与恢复"
+slug: /api/ws/regenerate/
+command: regenerate
+---
+
+# regenerate
+
+## 用途与时机
+
+用户要求对当前会话最后一次 turn 再生成时调用；它会启动并订阅新的 turn。
+
+## 前置条件
+
+有效会话 ID 和用户授权；用户明确要求再生成。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"regenerate"`。
+
+| 字段 | 必填／默认 | 说明 |
+| --- | --- | --- |
+| `session_id` | 必填 | 已授权会话 ID |
+| `overrides` | `{}` | 可选能力覆盖项，按部署允许范围传入 |
+
+<!-- ws-command -->
+```json
+{"type":"regenerate","protocol_version":"2.0","session_id":"session-001","overrides":{}}
+```
+
+## 响应与事件
+
+成功后自动接收新 turn 的流事件，首个事件给出新的 `turn_id`。此命令没有 `command_ack`。
+
+## 错误与恢复
+
+`regenerate_rejected` 时核对会话及当前状态。此命令没有客户端幂等 ID；断线后不要自动重发，应先查询会话和活动 turn。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

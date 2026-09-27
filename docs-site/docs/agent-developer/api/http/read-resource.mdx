@@ -1,0 +1,43 @@
+---
+title: "GET 读取资源文件"
+description: "按当前用户资源权限读取对象文件。"
+slug: /api/http/read-resource/
+method: GET
+path: "/files/resources/{resource_kind}/{resource_id}/{object_id}/{filename:path}"
+---
+
+# GET `/files/resources/{resource_kind}/{resource_id}/{object_id}/{filename:path}`
+
+## 用途与时机
+
+需要展示或下载已授权资源时使用。文件 URL 不是授权凭证。
+
+## 前置条件
+
+有效 `dt_token`，且当前用户有该资源的读取权。
+
+## 请求
+
+**GET `/files/resources/{resource_kind}/{resource_id}/{object_id}/{filename:path}`**
+
+| Path | 说明 |
+| --- | --- |
+| `resource_kind`、`resource_id`、`object_id` | 使用完成上传或已有资源信息中的值 |
+| `filename` | 文件名路径，需按 URL 路径编码 |
+
+无请求体。
+
+```bash
+curl --fail-with-body "$BASE_URL/files/resources/$RESOURCE_KIND/$RESOURCE_ID/$OBJECT_ID/$FILENAME" \
+  -H "Authorization: Bearer $DT_TOKEN" -o downloaded.bin
+```
+
+## 响应
+
+`200` 返回文件字节；`Content-Type` 根据文件名确定，`Content-Disposition` 提供下载文件名，并带私有、不缓存标头。不要把任意响应按可信 HTML 执行。
+
+## 错误与恢复
+
+`404` 对象不存在或不可见；`403` 权限不足。不要枚举 `resource_id`／`object_id`。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

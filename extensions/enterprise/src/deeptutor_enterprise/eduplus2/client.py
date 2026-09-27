@@ -249,6 +249,20 @@ def _pick(value: dict[str, Any], *names: str, default: str = "") -> str:
     return default
 
 
+def _positive_eduplus_identifier(value: Any) -> str:
+    """规范化已发布 resolve 合同的 signed-64 正整数 ID；不接受学校码。"""
+
+    if type(value) is int:
+        number = value
+    elif isinstance(value, str) and value and value.isascii() and value.isdecimal():
+        number = int(value)
+    else:
+        raise RuntimeError("EduPlus2 resolve identifier is invalid")
+    if not 0 < number < 2**63:
+        raise RuntimeError("EduPlus2 resolve identifier is invalid")
+    return str(number)
+
+
 def _as_str_list(value: Any) -> list[str]:
     if not isinstance(value, list | tuple | set):
         return []
@@ -283,7 +297,9 @@ def normalize_resolve_response(client_id: str, payload: dict[str, Any]) -> dict[
     data = payload.get("data", payload)
     if not isinstance(data, dict):
         raise RuntimeError("EduPlus2 resolve response is invalid")
-    verified = bool(data.get("verified", payload.get("verified", False)))
+    verified = data.get("verified", payload.get("verified", False))
+    if type(verified) is not bool:
+        raise RuntimeError("EduPlus2 resolve verification flag is invalid")
     reason = str(data.get("reason", payload.get("reason", "")) or "")
     if not verified:
         raise PermissionError(reason or "resolve_unverified")
@@ -291,16 +307,25 @@ def normalize_resolve_response(client_id: str, payload: dict[str, Any]) -> dict[
     tenant = data.get("tenant") if isinstance(data.get("tenant"), dict) else data
     app = data.get("app") if isinstance(data.get("app"), dict) else data
     policy = data.get("policy") if isinstance(data.get("policy"), dict) else {}
+    external_tenant_id = _positive_eduplus_identifier(
+        tenant.get("tenant_id", tenant.get("id", tenant.get("external_tenant_id")))
+    )
+    external_app_id = _positive_eduplus_identifier(
+        app.get("app_id", app.get("id", app.get("external_app_id")))
+    )
     resolved = {
         "client_id": _pick(client, "client_id", "id"),
-        "external_tenant_id": _pick(tenant, "id", "tenant_id", "external_tenant_id"),
+        "external_tenant_id": external_tenant_id,
+        "external_tenant_code": _pick(tenant, "tenant_code", "school_code", default=""),
         "external_tenant_name": _pick(tenant, "name", "tenant_name", "external_tenant_name"),
-        "external_app_id": _pick(app, "id", "app_id", "external_app_id"),
+        "external_app_id": external_app_id,
         "external_app_name": _pick(app, "name", "app_name", "external_app_name"),
         "status": _pick(client, "status", default=""),
-        "tenant_status": _pick(tenant, "status", default="active"),
-        "app_status": _pick(app, "status", default="active"),
-        "subscription_status": _pick(policy, "subscription_status", "status", default="active"),
+        "tenant_status": _pick(tenant, "status"),
+        "app_status": _pick(app, "status"),
+        # 已发布 resolve 契约把学校订阅状态放在 tenant 中；policy.allowed_usages
+        # 不是订阅状态。缺字段时不得猜成 active。
+        "subscription_status": _pick(tenant, "subscription_status"),
         "oauth": data.get("oauth") if isinstance(data.get("oauth"), dict) else {},
         "policy": policy,
         "version": _pick(data, "version", "etag", default=""),
@@ -308,7 +333,16 @@ def normalize_resolve_response(client_id: str, payload: dict[str, Any]) -> dict[
     }
     missing = [
         key
-        for key in ("client_id", "external_tenant_id", "external_app_id", "status")
+        for key in (
+            "client_id",
+            "external_tenant_id",
+            "external_app_id",
+            "status",
+            "tenant_status",
+            "app_status",
+            "subscription_status",
+            "version",
+        )
         if not resolved.get(key)
     ]
     if missing:

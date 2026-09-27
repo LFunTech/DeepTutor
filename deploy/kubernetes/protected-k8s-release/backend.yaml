@@ -103,23 +103,3 @@ spec:
     - name: backend-http
       port: 8001
       targetPort: backend-http
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: deeptutor-backend
-spec:
-  tls:
-    - hosts: ["${DEEPTUTOR_INGRESS_HOST}"]
-      secretName: "${DEEPTUTOR_TLS_SECRET_NAME}"
-  rules:
-    - host: "${DEEPTUTOR_INGRESS_HOST}"
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: deeptutor-backend
-                port:
-                  name: http

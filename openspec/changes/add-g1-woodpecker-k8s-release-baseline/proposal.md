@@ -18,6 +18,7 @@ Woodpecker 流水线与租户数量没有必然关系。它属于生产交付和
 - 复用 `add-m1-fixed-tenant-runtime-baseline` 的 readiness、smoke harness、resource binding 和 EduPlus2/API/WS 测试入口；不在本 proposal 重新定义 tenant runtime 规则。
 - 固化 Woodpecker secrets 契约：按 `target_env_id` 声明 registry push、K8s deploy、SecretStore、migration、runtime Secret ref、smoke credentials、evidence store、tag/approval 校验等 secret；Secret Extension 模式下 pipeline 使用稳定逻辑名（如 `REGISTRY_PUSH_TOKEN`），由 extension 根据 tag/env registry 返回对应环境的值；native/static 模式下才使用 `DT_<ENV_KEY>_*` 静态名称。只记录 secret 名称/ref、用途、权限、作用域和轮换要求，不记录明文。
 - 归档 release evidence：源码 SHA、upstream SHA、digest、schema、配置/Secret ref、smoke run ID、批准人、失败/rollback 结果、未验证项和 secret leakage scan 摘要。
+- 在 `test-cn` 发布同仓第三方 Agent 文档站：独立静态镜像与服务、与 `compile-frontend-test-cn` 并行的 Woodpecker 构建、digest 锁定、现有测试域名 `/docs/` 的 Ingress 路由和 HTTPS 首页/静态资源检查。预发及生产环境暂不新增文档路由。
 
 ## Scope
 

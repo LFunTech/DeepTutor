@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from importlib.metadata import PackageNotFoundError, version
+import logging
 import os
 
 from jose import JWTError, jwt
@@ -95,9 +96,21 @@ def _requires_singleton_executor_lease(coordination_settings) -> bool:
 class _ControlledBootstrapIdentity(IdentityService):
     """日常实例不持有 bootstrap 明文；显式调用时使用短期 core service。"""
 
-    def __init__(self, *args, bootstrap_resolver, **kwargs):
+    def __init__(self, *args, bootstrap_resolver, lifecycle_gate=None, **kwargs):
         super().__init__(*args, bootstrap_secret=None, **kwargs)
         self._bootstrap_resolver = bootstrap_resolver
+        self._lifecycle_gate = lifecycle_gate
+
+    async def _authenticate(self, c, token, *, lock=False):
+        identity = await super()._authenticate(c, token, lock=lock)
+        if self._lifecycle_gate is not None:
+            await self._lifecycle_gate(c)
+        return identity
+
+    async def _issue_session(self, c, row, **kwargs):
+        if self._lifecycle_gate is not None:
+            await self._lifecycle_gate(c)
+        return await super()._issue_session(c, row, **kwargs)
 
     async def bootstrap(self, username, password, *, secret):
         controlled = IdentityService(
@@ -150,10 +163,13 @@ class Enterprise:
             signing_key=identity_secrets.signing_key.reveal(),
             auth_epoch=identity_secrets.auth_epoch.reveal(),
             bootstrap_resolver=lambda: self.postgres.resolve_bootstrap().reveal(),
+            lifecycle_gate=self._require_current_lifecycle_proof,
             token_seconds=deployment.token_seconds,
         )
         self.container = None
         self._monitor = None
+        self._lifecycle_worker = None
+        self.lifecycle_reconcile_metrics = {"processed": 0, "failures": 0}
         self.eduplus2_resolver = None
         self.eduplus2_verifier = None
         self.eduplus2_profile_client = None
@@ -165,9 +181,55 @@ class Enterprise:
         self.eduplus2_audit_export_storage_ref = "db://eduplus2/audit-export"
         self.eduplus2_revocation_webhook_secret = ""
         self.eduplus2_webhook_secret = ""
+        self.eduplus2_webhook_previous_secret = ""
+        self.eduplus2_webhook_previous_until = 0
+        self.eduplus2_webhook_app_id = 0
+        self.eduplus2_webhook_inbox_digest_key = ""
+        self.eduplus2_lifecycle_receiver_enabled = False
+        self.eduplus2_lifecycle_proof_ttl_seconds = 30
         self.eduplus2_signing_key = ""
         self.eduplus2_issuer = ""
         self._configure_eduplus2_from_env()
+
+    async def _require_current_lifecycle_proof(self, c):
+        """企业入口在签发/复验会话时核对本产品当前在线证明。"""
+
+        tenant = await (
+            await c.execute(
+                "SELECT external_eligibility,external_tid FROM enterprise.tenants WHERE id=%s",
+                (self.deployment.tenant_id,),
+            )
+        ).fetchone()
+        if not tenant:
+            raise PermissionError("school lifecycle unavailable")
+        if not self.eduplus2_lifecycle_receiver_enabled and tenant["external_tid"] is None:
+            return
+        if tenant["external_eligibility"] == "not_required" and tenant["external_tid"] is None:
+            return
+        if tenant["external_eligibility"] != "allowed" or not tenant["external_tid"]:
+            raise PermissionError("school lifecycle unavailable")
+        if self.eduplus2_webhook_app_id <= 0:
+            raise PermissionError("school lifecycle unavailable")
+        proof = await (
+            await c.execute(
+                "SELECT 1 FROM oms.school_bindings b "
+                "JOIN eduplus2.lifecycle_targets p "
+                "ON p.external_tenant_id=b.eduplus_tenant_id "
+                "WHERE b.tenant_id=%s AND b.status='verified' "
+                "AND b.eduplus_tenant_id::text=%s "
+                "AND p.tenant_id=%s AND p.external_app_id=%s "
+                "AND p.eligibility='allowed' AND p.proof_expires_at>now() "
+                "LIMIT 1",
+                (
+                    self.deployment.tenant_id,
+                    tenant["external_tid"],
+                    self.deployment.tenant_id,
+                    self.eduplus2_webhook_app_id,
+                ),
+            )
+        ).fetchone()
+        if not proof:
+            raise PermissionError("school lifecycle unavailable")
 
     @staticmethod
     def _object_store_from_deployment(deployment):
@@ -234,6 +296,36 @@ class Enterprise:
             webhook_secret_ref = "env:DT_EDUPLUS2_WEBHOOK_SECRET"
         if webhook_secret_ref:
             self.eduplus2_webhook_secret = resolve_secret(webhook_secret_ref)
+        previous_webhook_ref = os.environ.get(
+            "DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF", ""
+        ).strip()
+        if previous_webhook_ref:
+            self.eduplus2_webhook_previous_secret = resolve_secret(previous_webhook_ref)
+        previous_until = os.environ.get("DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL", "").strip()
+        if previous_until.isascii() and previous_until.isdecimal():
+            self.eduplus2_webhook_previous_until = int(previous_until)
+        webhook_app_id = os.environ.get("DT_EDUPLUS2_WEBHOOK_APP_ID", "").strip()
+        if webhook_app_id.isascii() and webhook_app_id.isdecimal():
+            self.eduplus2_webhook_app_id = int(webhook_app_id)
+        inbox_digest_ref = os.environ.get("DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF", "").strip()
+        if not inbox_digest_ref and os.environ.get("DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY"):
+            inbox_digest_ref = "env:DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY"
+        if inbox_digest_ref:
+            self.eduplus2_webhook_inbox_digest_key = resolve_secret(inbox_digest_ref)
+        self.eduplus2_lifecycle_receiver_enabled = (
+            os.environ.get("DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED", "").strip().lower()
+            == "true"
+        )
+        try:
+            proof_ttl = int(
+                os.environ.get(
+                    "DT_EDUPLUS2_LIFECYCLE_PROOF_TTL_SECONDS",
+                    str(self.eduplus2_lifecycle_proof_ttl_seconds),
+                )
+            )
+        except ValueError:
+            proof_ttl = self.eduplus2_lifecycle_proof_ttl_seconds
+        self.eduplus2_lifecycle_proof_ttl_seconds = max(1, min(proof_ttl, 60))
         try:
             ttl = int(
                 os.environ.get(
@@ -351,8 +443,17 @@ class Enterprise:
             ) as c:
                 tenant = await (
                     await c.execute(
-                        "SELECT 1 FROM enterprise.tenants WHERE id=%s AND bootstrap_completed AND local_enabled AND provisioning_status='ready' AND recovery_state='normal' AND external_eligibility IN ('allowed','not_required') AND auth_epoch=%s",
-                        (str(self.deployment.tenant_id), self.identity.epoch),
+                        "SELECT 1 FROM enterprise.tenants WHERE id=%s AND bootstrap_completed "
+                        "AND auth_epoch=%s AND ("
+                        "%s OR external_tid IS NOT NULL OR "
+                        "(local_enabled AND provisioning_status='ready' "
+                        "AND recovery_state='normal' "
+                        "AND external_eligibility IN ('allowed','not_required')))",
+                        (
+                            str(self.deployment.tenant_id),
+                            self.identity.epoch,
+                            self.eduplus2_lifecycle_receiver_enabled,
+                        ),
                     )
                 ).fetchone()
                 if not tenant:
@@ -413,6 +514,8 @@ class Enterprise:
                 )
                 await self.container.start()
                 await self.recover()
+            if self.eduplus2_lifecycle_receiver_enabled:
+                self._lifecycle_worker = asyncio.create_task(self._lifecycle_reconcile_loop())
             if requires_singleton_lease:
                 self._monitor = asyncio.create_task(self._watch_executor())
         except BaseException:
@@ -423,6 +526,21 @@ class Enterprise:
     async def _runtime_coordination_guard(self):
         if self.container is not None and not await self.container.coordinator.health():
             raise RuntimeError("turn coordination backend is unavailable")
+
+    async def _lifecycle_reconcile_loop(self):
+        from .eduplus2.lifecycle import reconcile_due_lifecycle_targets
+
+        while True:
+            try:
+                self.lifecycle_reconcile_metrics["processed"] += (
+                    await reconcile_due_lifecycle_targets(self)
+                )
+            except Exception:
+                self.lifecycle_reconcile_metrics["failures"] += 1
+                logging.getLogger(__name__).warning(
+                    "EduPlus2 lifecycle reconciliation failed; durable targets remain pending"
+                )
+            await asyncio.sleep(5)
 
     async def _watch_executor(self):
         while True:
@@ -486,6 +604,11 @@ class Enterprise:
                 )
 
     async def close(self):
+        if self._lifecycle_worker:
+            self._lifecycle_worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._lifecycle_worker
+            self._lifecycle_worker = None
         if self._monitor:
             self._monitor.cancel()
             with suppress(asyncio.CancelledError):

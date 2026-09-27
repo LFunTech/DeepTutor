@@ -1,0 +1,37 @@
+---
+title: "ping · 检查连接存活"
+description: "WebSocket 命令 ping 的请求、响应与恢复"
+slug: /api/ws/ping/
+command: ping
+---
+
+# ping
+
+## 用途与时机
+
+空闲连接需要应用层心跳时使用；不代表用户身份续期。
+
+## 前置条件
+
+已完成 WS 握手。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"ping"`。
+
+仅需 `type:"ping"` 和所有命令共有的 `protocol_version:"2.0"`。
+
+<!-- ws-command -->
+```json
+{"type":"ping","protocol_version":"2.0"}
+```
+
+## 响应与事件
+
+返回 `{"type":"pong","protocol_version":"2.0"}`。
+
+## 错误与恢复
+
+收不到响应时按网络故障重建连接，保留原 turn 的游标；`ping` 不能替代 `auth_refresh`。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

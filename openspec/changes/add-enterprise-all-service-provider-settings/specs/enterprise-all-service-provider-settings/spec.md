@@ -16,14 +16,14 @@ DeepTutor 企业环境复用核心设置语义，由独立 OMS 安全管理全�
 - **THEN** 页面显示待生效，旧 active 继续有效或服务 fail closed，不虚报完成
 
 ### Requirement: 云端平台配置只经 OMS 授权写入且凭据最小化
-系统 SHALL 仅保存 Secret ref，云端平台设置写入只经独立 OMS API 的 EduPlus2 平台主体及 `ops.providers.manage`/`ops.credentials.manage` 具体动作授权；企业 app 不挂核心完整 settings/governance 管理 router，CLI/SDK/后台不能形成第二写入口。本地 DeepTutor Web 设置 SHALL 保持可用。OMS/TMS/用户 API、日志、审计与导出均不返回 Secret 明文。
+系统 SHALL 仅保存 Secret ref，云端平台设置写入只经独立 OMS API 的 EduPlus2 已验证身份和 DeepTutor 自有 OMS `ops.providers.manage`/`ops.credentials.manage` 当前动作及 `platform` 范围授权；写入前须通过已存在接口核验外部账号当前有效，接口不可用时失败关闭。企业 app 不挂核心完整 settings/governance 管理 router，CLI/SDK/后台不能形成第二写入口。本地 DeepTutor Web 设置 SHALL 保持可用。OMS/TMS/用户 API、日志、审计与导出均不返回 Secret 明文。
 #### Scenario: operator 尝试修改 key
 - **WHEN** 无写能力的 operator 或携带伪造 `ops.*` header 的 tenant_admin 调用旧 settings 或 OMS provider 写 API
 - **THEN** 系统拒绝并记录脱敏审计
 
 #### Scenario: 可计费配置测试
 - **WHEN** 获授权人员发起会触发供应商请求的配置测试
-- **THEN** 测试经过同一服务授权、供给、额度预留与 attempt 核对，不能免配额发出
+- **THEN** 测试必须显式选定经核验的目标学校，操作人同时具备该学校 `school` 范围，受控测试服务主体有服务 grant，并经过该学校服务授权、供给、额度预留与逐 attempt 核对；无目标学校或额度时拒绝可计费请求，不能以平台健康检查免配额发出
 
 ### Requirement: 租户配置不得扩大平台提供的服务集合
 系统 SHALL 分离平台目录、租户允许范围和个人选择，后两者只能收窄；跨租户不能读取对方配置或凭据。

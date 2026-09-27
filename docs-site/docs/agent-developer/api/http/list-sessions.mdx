@@ -1,0 +1,41 @@
+---
+title: "GET 列出会话"
+description: "列出当前用户可见的会话。"
+slug: /api/http/list-sessions/
+method: GET
+path: "/api/sessions"
+---
+
+# GET `/api/sessions`
+
+## 用途与时机
+
+展示当前用户的历史对话，或在用户授权下让 Agent 选择已有会话。此接口不创建 turn。
+
+## 前置条件
+
+有效 `dt_token`；列表仅限当前用户有权访问的会话。
+
+## 请求
+
+**GET `/api/sessions`**
+
+| Query | 默认 | 范围 |
+| --- | --- | --- |
+| `limit` | `50` | `1`～`200` |
+| `offset` | `0` | 非负整数 |
+
+```bash
+curl --fail-with-body "$BASE_URL/api/sessions?limit=50&offset=0" \
+  -H "Authorization: Bearer $DT_TOKEN"
+```
+
+## 响应
+
+`200` JSON：`{"sessions":[…]}`。每项含 `session_id`、`title`、`status`、`active_turn_id`、`message_count`、`last_message` 等会话展示字段；具体可见项按当前用户授权过滤。列表按最近更新时间降序；后续使用返回的 `session_id` 获取详情。
+
+## 错误与恢复
+
+`401` 更新凭证；`403` 停止访问。分页时逐页增加 `offset`，不要假设其他用户的会话可通过 ID 猜测取得。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

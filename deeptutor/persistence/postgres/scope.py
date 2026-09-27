@@ -13,3 +13,14 @@ class TenantScope:
         object.__setattr__(self, "tenant_id", str(UUID(self.tenant_id)))
         if not self.user_id or len(self.user_id) > 255 or "\x00" in self.user_id:
             raise ValueError("invalid user scope")
+
+
+@dataclass(frozen=True, slots=True)
+class GlobalScope:
+    """不携带租户身份的全局事务范围；不代表任何平台授权。"""
+
+    user_id: str
+
+    def __post_init__(self):
+        if not self.user_id or len(self.user_id) > 255 or "\x00" in self.user_id:
+            raise ValueError("invalid global user scope")

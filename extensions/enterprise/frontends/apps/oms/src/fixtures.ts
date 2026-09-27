@@ -4,9 +4,27 @@ import type { ServiceView } from "@deeptutor/api-contracts";
 export const tenants = [
   { id: "aurora", name: "星河实验学校", code: "EDU-2048", kind: "学校", status: "正常", source: "EduPlus2", services: 9, grants: 4, usage: "42.8 万" },
   { id: "harbor", name: "海港职业学院", code: "EDU-1673", kind: "高校", status: "正常", source: "EduPlus2", services: 6, grants: 3, usage: "18.4 万" },
-  { id: "north", name: "北辰研究院", code: "ENT-0932", kind: "企业", status: "同步延迟", source: "EduPlus2", services: 5, grants: 2, usage: "待核对" },
-  { id: "willow", name: "青禾教育集团", code: "EDU-0811", kind: "教育集团", status: "正常", source: "EduPlus2", services: 9, grants: 5, usage: "51.2 万" },
+  { id: "north", name: "北辰学校", code: "EDU-0932", kind: "学校", status: "同步延迟", source: "EduPlus2", services: 5, grants: 2, usage: "待核对" },
+  { id: "willow", name: "青禾示范学校", code: "EDU-0811", kind: "学校", status: "正常", source: "EduPlus2", services: 9, grants: 5, usage: "51.2 万" },
 ];
+
+// 演示用显式学校—服务资格，不从展示数量或已有额度推断授权。
+export const schoolServiceAccess: Record<string, string[]> = {
+  aurora: ["llm", "task", "embedding", "search", "tts", "stt", "imagegen", "videogen", "ocr"],
+  harbor: ["llm", "task", "embedding", "search", "tts", "stt"],
+  north: ["llm", "task", "embedding", "search", "tts"],
+  willow: ["llm", "task", "embedding", "search", "tts", "stt", "imagegen", "videogen", "ocr"],
+};
+
+// 只有这里声明的依赖才可在关联专题展示；自由文本 dependency 仅作说明。
+export const resourceServiceDependencies: Record<string, string[]> = {
+  "agents:deep-solve": ["llm", "task"],
+  "agents:deep-research": ["search", "llm"],
+  "agents:math-animator": ["llm"],
+  "tools:web-search": ["search"],
+  "knowledge:parser": ["ocr", "rag"],
+  "knowledge:retrieval": ["rag"],
+};
 
 export const services: ServiceView[] = [
   { id: "llm", name: "对话模型", category: "模型与服务", status: "available", unit: "Token", description: "对话、推理与工具调用" },
@@ -48,25 +66,25 @@ export const resourceGroups = {
 };
 
 export const supply = [
-  { id: "s-llm", name: "对话模型资源", service: "对话模型", provider: "演示供应商 A", unit: "Token", acquired: 3000000, committed: 1800000, used: 680000, available: 520000, status: "充足" },
-  { id: "s-ocr", name: "文档解析资源", service: "文档 OCR", provider: "演示解析引擎", unit: "页", acquired: 15000, committed: 11500, used: 2900, available: 600, status: "需补充" },
-  { id: "s-search", name: "联网搜索资源", service: "联网搜索", provider: "演示供应商 B", unit: "次", acquired: 50000, committed: 31000, used: 18000, available: 1000, status: "需补充" },
+  { id: "s-llm", serviceId: "llm", name: "对话模型资源", service: "对话模型", provider: "演示供应商 A", unit: "Token", acquired: 3000000, committed: 1800000, used: 680000, available: 520000, status: "充足" },
+  { id: "s-ocr", serviceId: "ocr", name: "文档解析资源", service: "文档 OCR", provider: "演示解析引擎", unit: "页", acquired: 15000, committed: 11500, used: 2900, available: 600, status: "需补充" },
+  { id: "s-search", serviceId: "search", name: "联网搜索资源", service: "联网搜索", provider: "演示供应商 B", unit: "次", acquired: 50000, committed: 31000, used: 18000, available: 1000, status: "需补充" },
 ];
 
-export type GrantRecord = { id: string; tenant: string; tenantId: string; service: string; serviceId: string; method: string; total: number; used: number | null; remaining: number | null; revoked?: number; unit: string; valid: string; status: string };
+export type GrantRecord = { id: string; tenant: string; tenantId: string; service: string; serviceId: string; supplyId: string; method: string; total: number; used: number | null; remaining: number | null; revoked?: number; unit: string; valid: string; status: string };
 export const grants: GrantRecord[] = [
-  { id: "q-101", tenant: "星河实验学校", tenantId: "aurora", service: "对话模型", serviceId: "llm", method: "赠送", total: 300000, used: 120000, remaining: 180000, unit: "Token", valid: "2026-12-31", status: "生效中" },
-  { id: "q-102", tenant: "星河实验学校", tenantId: "aurora", service: "对话模型", serviceId: "llm", method: "充值", total: 500000, used: 150000, remaining: 350000, unit: "Token", valid: "2027-06-30", status: "生效中" },
-  { id: "q-103", tenant: "星河实验学校", tenantId: "aurora", service: "文档 OCR", serviceId: "ocr", method: "赠送", total: 1000, used: 1000, remaining: 0, unit: "页", valid: "2026-12-31", status: "已用尽" },
-  { id: "q-104", tenant: "海港职业学院", tenantId: "harbor", service: "联网搜索", serviceId: "search", method: "充值", total: 5000, used: 840, remaining: 4160, unit: "次", valid: "2027-03-31", status: "生效中" },
-  { id: "q-105", tenant: "北辰研究院", tenantId: "north", service: "对话模型", serviceId: "llm", method: "赠送", total: 200000, used: null, remaining: null, unit: "Token", valid: "2026-11-30", status: "待核对" },
+  { id: "q-101", tenant: "星河实验学校", tenantId: "aurora", service: "对话模型", serviceId: "llm", supplyId: "s-llm", method: "赠送", total: 300000, used: 120000, remaining: 180000, unit: "Token", valid: "2026-12-31", status: "生效中" },
+  { id: "q-102", tenant: "星河实验学校", tenantId: "aurora", service: "对话模型", serviceId: "llm", supplyId: "s-llm", method: "充值", total: 500000, used: 150000, remaining: 350000, unit: "Token", valid: "2027-06-30", status: "生效中" },
+  { id: "q-103", tenant: "星河实验学校", tenantId: "aurora", service: "文档 OCR", serviceId: "ocr", supplyId: "s-ocr", method: "赠送", total: 1000, used: 1000, remaining: 0, unit: "页", valid: "2026-12-31", status: "已用尽" },
+  { id: "q-104", tenant: "海港职业学院", tenantId: "harbor", service: "联网搜索", serviceId: "search", supplyId: "s-search", method: "充值", total: 5000, used: 840, remaining: 4160, unit: "次", valid: "2027-03-31", status: "生效中" },
+  { id: "q-105", tenant: "北辰学校", tenantId: "north", service: "对话模型", serviceId: "llm", supplyId: "s-llm", method: "赠送", total: 200000, used: null, remaining: null, unit: "Token", valid: "2026-11-30", status: "待核对" },
 ];
 
 export const calls = [
-  { id: "use-7429", time: "09-26 14:32", tenant: "星河实验学校", user: "王同学", service: "对话模型", usage: "50 Token", status: "已核对", grant: "q-101 30 + q-102 20" },
-  { id: "use-7428", time: "09-26 13:07", tenant: "海港职业学院", user: "李老师", service: "联网搜索", usage: "1 次", status: "已核对", grant: "q-104" },
-  { id: "use-7427", time: "09-26 11:51", tenant: "北辰研究院", user: "陈研究员", service: "对话模型", usage: "待核对", status: "待核对", grant: "待确认" },
-  { id: "use-7426", time: "09-25 16:22", tenant: "星河实验学校", user: "周老师", service: "文档 OCR", usage: "12 页", status: "已核对", grant: "q-103" },
+  { id: "use-7429", tenantId: "aurora", serviceId: "llm", supplyId: 's-llm', grantIds: ["q-101", "q-102"], time: "09-26 14:32", tenant: "星河实验学校", user: "王同学", service: "对话模型", usage: "50 Token", status: "已核对", grant: "q-101 30 + q-102 20" },
+  { id: "use-7428", tenantId: "harbor", serviceId: "search", supplyId: 's-search', grantIds: ["q-104"], time: "09-26 13:07", tenant: "海港职业学院", user: "李老师", service: "联网搜索", usage: "1 次", status: "已核对", grant: "q-104" },
+  { id: "use-7427", tenantId: "north", serviceId: "llm", supplyId: null, grantIds: [] as string[], time: "09-26 11:51", tenant: "北辰学校", user: "陈老师", service: "对话模型", usage: "待核对", status: "待核对", grant: "待确认" },
+  { id: "use-7426", tenantId: "aurora", serviceId: "ocr", supplyId: 's-ocr', grantIds: ["q-103"], time: "09-25 16:22", tenant: "星河实验学校", user: "周老师", service: "文档 OCR", usage: "12 页", status: "已核对", grant: "q-103" },
 ];
 
 export const audits = [
@@ -84,7 +102,7 @@ export const providerAttributes: Record<string, { heading: string; fields: strin
   stt: { heading: "语音识别配置", fields: ["name", "model"], note: "language 是类型预留，当前编辑器没有维护控件。" },
   imagegen: { heading: "图片生成配置", fields: ["name", "model", "size", "quality", "style"], note: "尺寸、质量、风格可留空，沿用供应商默认。" },
   videogen: { heading: "视频生成配置", fields: ["name", "model", "aspect_ratio", "duration", "resolution"], note: "异步任务型服务，不能套用图片生成字段。" },
-  ocr: { heading: "文档 OCR / 解析配置", fields: ["available_engines", "readiness", "解析引擎条件项", "OCR / 表格选项（按引擎）"], note: "现有 DeepTutor 是解析引擎 OCR 能力，不代表独立 OCR Provider。" },
+  ocr: { heading: "文档 OCR / 解析配置", fields: ["available_engines", "readiness", "解析引擎条件项", "OCR / 表格选项（按引擎）"], note: "基座现有能力是解析引擎 OCR 能力，不代表独立 OCR Provider。" },
   rag: { heading: "文档解析与检索配置", fields: ["available_engines", "readiness", "解析引擎条件项"], note: "LightRAG 为受控检索服务；学校知识库内容不进入 OMS。" },
   "video-learning": { heading: "视频学习接入配置", fields: ["youtube / invidious", "api_base_url", "public_base_url", "transcript provider"], note: "不等同于视频生成模型。" },
 };

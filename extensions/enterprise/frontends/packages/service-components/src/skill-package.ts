@@ -120,7 +120,7 @@ function parseEntries(bytes: Uint8Array): Entry[] {
     }
     const fileName = name.split("/").at(-1)!;
     const suffix = fileName.includes(".") ? `.${fileName.split(".").at(-1)!.toLowerCase()}` : "";
-    if (!ALLOWED.has(suffix)) invalid(`文件类型问题：${label} 的 .${suffix.slice(1) || "无扩展名"} 类型不在 DeepTutor Skill 资源白名单内；请移除或转换为受支持的文本资源。`);
+    if (!ALLOWED.has(suffix)) invalid(`文件类型问题：${label} 的 .${suffix.slice(1) || "无扩展名"} 类型不在基座 Skill 资源白名单内；请移除或转换为受支持的文本资源。`);
     entries.push({ name, size, compressed, method, crc, start });
   }
   if (offset !== end) invalid("ZIP 格式问题：目录长度与条目记录不一致；请重新生成压缩包。");
@@ -204,7 +204,7 @@ export async function inspectSkillPackage(file: File): Promise<SkillPackageInspe
   if (!body) invalid("SKILL.md 格式问题：YAML frontmatter 后缺少 Markdown 说明正文；请补充正文。");
   if (value.always === true) invalid("使用限制：SKILL.md 中的 always: true 会自动注入内容，未经审查不能启用；请移除或改为 false。");
   if (value.tags !== undefined && (!Array.isArray(value.tags) || value.tags.some(tag => typeof tag !== "string"))) invalid("SKILL.md 格式问题：tags 必须是文本列表，例如 tags: [teaching]。");
-  if (Array.isArray(value.tags) && value.tags.some(tag => !/^[a-z0-9][a-z0-9\- _]{0,31}$/.test(tag))) invalid("SKILL.md 格式问题：tags 中的标签不符合 DeepTutor 格式；请使用小写字母、数字、空格或连字符。");
+  if (Array.isArray(value.tags) && value.tags.some(tag => !/^[a-z0-9][a-z0-9\- _]{0,31}$/.test(tag))) invalid("SKILL.md 格式问题：tags 中的标签不符合基座格式；请使用小写字母、数字、空格或连字符。");
   if (value.compatibility !== undefined && (typeof value.compatibility !== "string" || value.compatibility.length > 500)) invalid("SKILL.md 格式问题：compatibility 必须是 500 字符以内的文本。");
   if (value.license !== undefined && typeof value.license !== "string") invalid("SKILL.md 格式问题：license 必须是文本。");
   if (value["allowed-tools"] !== undefined && typeof value["allowed-tools"] !== "string") invalid("SKILL.md 格式问题：allowed-tools 必须是文本。");

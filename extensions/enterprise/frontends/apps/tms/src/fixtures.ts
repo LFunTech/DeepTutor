@@ -4,17 +4,28 @@ import type { ServiceView } from "@deeptutor/api-contracts";
 export const tenant = { id: "aurora", name: "演示学校（合成数据）", source: "EduPlus2", status: "正常", synced: "2026-09-26 14:28" };
 
 export const members = [
-  { id: "m-01", name: "林老师", role: "学校管理员", department: "教务处", status: "正常", source: "EduPlus2" },
-  { id: "m-02", name: "周老师", role: "资源管理员", department: "数学教研组", status: "正常", source: "EduPlus2" },
-  { id: "m-03", name: "王同学", role: "普通成员", department: "高二（3）班", status: "正常", source: "EduPlus2" },
-  { id: "m-04", name: "陈同学", role: "普通成员", department: "高一（2）班", status: "待同步", source: "EduPlus2" },
+  { id: "m-01", name: "林老师", identity: "教职工", department: "教务处", status: "正常", source: "EduPlus2（演示）" },
+  { id: "m-02", name: "周老师", identity: "教职工", department: "数学教研组", status: "正常", source: "EduPlus2（演示）" },
+  { id: "m-03", name: "王同学", identity: "学生", department: "高二（3）班", status: "正常", source: "EduPlus2（演示）" },
+  { id: "m-04", name: "陈同学", identity: "学生", department: "高一（2）班", status: "待同步", source: "EduPlus2（演示）" },
 ];
 
+// 仅供配对原型演示的明确成员—应用关系；不从成员列表或部门推断授权。
+export const memberAppAccess: Record<string, string[]> = { "m-01": ["app-01"], "m-02": ["app-02"], "m-03": ["app-01"], "m-04": [] };
+
+// 仅演示明确的应用—服务关系；展示名称和应用简介不能反推授权。
+export const appServiceAccess: Record<string, string[]> = {
+  "app-01": ["llm", "ocr"],
+  "app-02": ["deep-solve", "search", "ocr"],
+  "app-03": ["rag"],
+  "app-04": [],
+};
+
 export const apps = [
-  { id: "app-01", name: "校园学习助手", owner: "教务处", status: "运行中", services: "对话模型、文档 OCR", last: "今天 14:22" },
-  { id: "app-02", name: "数学教研工作台", owner: "数学教研组", status: "运行中", services: "深度解题、联网搜索", last: "今天 11:40" },
-  { id: "app-03", name: "资料归档助手", owner: "图书馆", status: "待接入", services: "文档解析", last: "尚无调用" },
-  { id: "app-04", name: "外部课程接入", owner: "教务处", status: "归口待核对", services: "未授权", last: "尚无调用" },
+  { id: "app-01", name: "校园学习助手", owner: "教务处", status: "运行中", last: "今天 14:22" },
+  { id: "app-02", name: "数学教研工作台", owner: "数学教研组", status: "运行中", last: "今天 11:40" },
+  { id: "app-03", name: "资料归档助手", owner: "图书馆", status: "待接入", last: "尚无调用" },
+  { id: "app-04", name: "外部课程接入", owner: "教务处", status: "归口待核对", last: "尚无调用" },
 ];
 
 export const services: ServiceView[] = [
@@ -54,9 +65,9 @@ export const processingTasks = [
 ];
 
 export const calls = [
-  { id: "use-7429", time: "今天 14:32", member: "王同学", app: "校园学习助手", service: "对话模型", usage: "50 Token", status: "已核对", grant: "赠送 30 + 充值 20" },
-  { id: "use-7426", time: "昨天 16:22", member: "周老师", app: "数学教研工作台", service: "文档 OCR", usage: "12 页", status: "已核对", grant: "q-103" },
-  { id: "use-7422", time: "09-24 11:15", member: "林老师", app: "校园学习助手", service: "对话模型", usage: "待核对", status: "待核对", grant: "待确认" },
+  { id: "use-7429", memberId: "m-03", appId: "app-01", serviceId: "llm", grantIds: ["q-101", "q-102"], time: "今天 14:32", member: "王同学", app: "校园学习助手", service: "对话模型", usage: "50 Token", status: "已核对", grant: "q-101 30 + q-102 20 Token" },
+  { id: "use-7426", memberId: "m-02", appId: "app-02", serviceId: "ocr", grantIds: ["q-103"], time: "昨天 16:22", member: "周老师", app: "数学教研工作台", service: "文档 OCR", usage: "12 页", status: "已核对", grant: "q-103" },
+  { id: "use-7422", memberId: "m-01", appId: "app-01", serviceId: "llm", grantIds: [], time: "09-24 11:15", member: "林老师", app: "校园学习助手", service: "对话模型", usage: "待核对", status: "待核对", grant: "待确认" },
 ];
 
 export const events = [

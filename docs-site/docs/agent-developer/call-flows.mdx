@@ -1,0 +1,58 @@
+---
+title: 调用链路
+description: 从身份交换到 turn 恢复的端到端链路
+slug: /call-flows/
+---
+
+# 调用链路
+
+下图是当前**企业入口**的正常调用顺序，不把部署方前置应用或 EduPlus2 系统能力当作基座已开放的 Agent API。前置应用须先取得可信用户身份和允许的 Origin；基座按用户授权验证，而不是信任 Agent 自报的学校 ID。
+
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant A as 第三方 Agent／前置应用
+  participant E as 用户身份提供方
+  participant B as 智能体基座企业入口
+  U->>A: 发起问题（已有合法登录态）
+  A->>E: 确认用户仍有效，取得新 user JWT
+  E-->>A: EduPlus2 user JWT
+  A->>B: POST /api/v1/auth/eduplus2/exchange（Bearer user JWT）
+  B-->>A: dt_token、expires_at、服务端 ID
+  A->>B: WS /api/v1/ws（dt_token + 允许的 Origin）
+  A->>B: start_turn（protocol_version 2.0，content，operation_id）
+  B-->>A: StreamEvent（turn_id、session_id、seq）
+  B-->>A: content／result／done 等事件
+  A-->>U: 展示结果并保存恢复游标
+```
+
+## 关键控制点
+
+1. **换票**：HTTP `exchange` 以外部 user JWT 为凭证；`tenant_id`、`user_id` 与注册 ID 是服务端解析结果。`X-Request-ID` 仅用于关联诊断。重复提交同一 JWT 可能触发 replay。
+2. **资源**：如需附件，先通过 `POST /api/v1/resources/upload-intents` 获取上传意向，向预签名地址上传字节，再 `POST /api/v1/resources/upload-intents/{resource_id}/complete`。随后在 WS `start_turn.resource_ids` 引用稳定 ID；生产入口拒绝直接 `attachments`。
+3. **发起 turn**：`content` 必填；当前企业入口仅支持 `chat`，可省略 `capability` 或显式传 `chat`。新对话不传 `session_id`，追问用先前事件中的 `session_id`。`operation_id` 用于同一次发起操作的幂等识别，重试不能改成新 ID。
+4. **消费结果**：收到首个流事件后记录服务端 `turn_id`、`session_id` 和每个已处理事件的最大 `seq`。`result` 是统一结果载荷；`content` 供增量展示，`done` 表示 turn 结束。按 `(turn_id, seq)` 去重，别只靠消息文本去重。
+
+## 长连接刷新与断线
+
+```mermaid
+sequenceDiagram
+  participant A as 第三方 Agent
+  participant E as EduPlus2
+  participant B as 智能体基座 WS
+  A->>E: 获取同一用户的新 user JWT
+  E-->>A: 新 user JWT
+  A->>B: auth_refresh（external_token、command_id）
+  alt 同一身份且仍有权限
+    B-->>A: auth_ack（expires_at、refresh_deadline）
+  else 身份不匹配或撤权
+    B-->>A: auth_revoked；关闭 1008
+  end
+  Note over A,B: 网络断开后，先重新换票／重连，不能把重连当新 turn
+  A->>B: resume_from（turn_id、seq）
+  B-->>A: seq 大于游标的持久化事件，再继续实时流
+```
+
+`subscribe_turn.after_seq` 与 `resume_from.seq` 都是**最后已处理**的序号；服务端返回更大的序号。断线时已知 `turn_id` 应直接恢复订阅，不再 `start_turn`。若首事件前断线，客户端应在发送前已保存完整 `start_turn` 请求；合法重连后原样重发同一请求及 `operation_id`，由服务端识别同一操作。新会话此时尚无 `session_id`，不能要求先查活跃 turn；已有会话可用 `check_active_turn` 辅助核对。幂等记录有保留期，超过保留期不能自动重发；不要用新操作 ID 制造重复 turn。
+
+连接恢复可能重放 `done` 前后的事件；客户端要按序号去重。会话所有权、资源权限、撤权状态会再次检查，恢复不绕过认证。命令及事件细节见 [WebSocket 协议](websocket-protocol.mdx)，HTTP 查询见 [API 目录](http-api.mdx)。

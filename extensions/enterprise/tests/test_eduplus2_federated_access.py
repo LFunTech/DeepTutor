@@ -95,6 +95,7 @@ async def test_eduplus2_migration_is_versioned_and_redacts_secret_material(enter
             "0002_profile_permission_snapshots",
             "0003_revocation_state",
             "0004_audit_export_jobs",
+            "0005_lifecycle_inbox",
         ]
         await c.execute(
             """
@@ -847,7 +848,7 @@ async def test_resolve_client_uses_m2m_token_and_normalizes_nested_response():
             assert request.headers.get("authorization") == "Bearer m2m-token"
             assert b"super-secret" not in content
             if b"expected_tenant_id" in content:
-                assert b"tenant-a" in content
+                assert b"92" in content
             return httpx.Response(
                 200,
                 json={
@@ -858,8 +859,13 @@ async def test_resolve_client_uses_m2m_token_and_normalizes_nested_response():
                         "reason": "ok",
                         "version": "rv-1",
                         "client": {"client_id": "client-a", "status": "active"},
-                        "tenant": {"id": "tenant-a", "name": "学校 A", "status": "active"},
-                        "app": {"id": "app-math", "name": "数学应用", "status": "active"},
+                        "tenant": {
+                            "tenant_id": 92,
+                            "name": "学校 A",
+                            "status": "active",
+                            "subscription_status": "active",
+                        },
+                        "app": {"app_id": 11, "app_name": "数学应用", "status": "active"},
                         "oauth": {"allowed_grant_types": ["authorization_code"]},
                         "policy": {"subscription_status": "active", "scopes": ["chat"]},
                     },
@@ -877,14 +883,14 @@ async def test_resolve_client_uses_m2m_token_and_normalizes_nested_response():
         )
         first = await client.resolve_client("client-a")
         second = await client.resolve_client("client-a")
-        third = await client.resolve_client("client-a", expected_tenant_id="tenant-a")
+        third = await client.resolve_client("client-a", expected_tenant_id=92)
 
     assert first == second
     assert third == first
     assert first["client_id"] == "client-a"
-    assert first["external_tenant_id"] == "tenant-a"
+    assert first["external_tenant_id"] == "92"
     assert first["external_tenant_name"] == "学校 A"
-    assert first["external_app_id"] == "app-math"
+    assert first["external_app_id"] == "11"
     assert first["status"] == "active"
     assert first["tenant_status"] == "active"
     assert first["app_status"] == "active"
@@ -1074,8 +1080,10 @@ async def test_permission_client_uses_m2m_token_and_normalizes_allowed_usages():
     assert permission["expires_at"] == expires_at
 
 
-async def test_exchange_auto_upserts_allowlisted_client_and_caches_resolve(enterprise_db, identity):
-    """防止 B1-lite 在没有 TMS/OMS 预注册页面时无法完成首次合法换票。"""
+async def test_exchange_auto_upserts_allowlisted_client_and_rechecks_resolve(
+    enterprise_db, identity
+):
+    """自动注册后仍须在线复核学校订阅，不得以旧 resolve 缓存继续换票。"""
 
     from deeptutor_enterprise.eduplus2.service import EduPlus2AccessService
     from deeptutor_enterprise.eduplus2.testing import StaticEduPlus2Resolver
@@ -1138,7 +1146,13 @@ async def test_exchange_auto_upserts_allowlisted_client_and_caches_resolve(enter
         user_jwt(tid="tenant-a", eui="u-auto", azp="client-allowed"), request_id="req-auto-2"
     )
     assert first["client_registration_id"] == second["client_registration_id"]
-    assert resolver.count == 1
+    assert resolver.count == 2
+    resolver._clients["client-allowed"]["subscription_status"] = "inactive"
+    with pytest.raises(PermissionError, match="inactive"):
+        await service.exchange_user_jwt(
+            user_jwt(tid="tenant-a", eui="u-auto", azp="client-allowed"),
+            request_id="req-auto-revoked",
+        )
 
     async with enterprise_db.transaction(TenantScope(identity.tenant_id, identity.tenant_id)) as c:
         registrations = await (

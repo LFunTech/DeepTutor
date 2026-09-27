@@ -10,7 +10,7 @@ beforeEach(() => { path = "/oms/prototype"; push.mockClear(); sessionStorage.cle
 
 describe("OMS 抽屉式维护", () => {
   it("额度操作弹出独立模态框，不在详情抽屉中撑开表单", () => {
-    path = "/oms/prototype/tenants/aurora";
+    path = "/oms/prototype/tenants/aurora/grants";
     render(<OmsPrototype/>);
     const drawer = screen.getByRole("dialog", { name: /详情.*星河实验学校/ });
     fireEvent.click(within(drawer).getByRole("button", { name: "授予额度（演示）" }));
@@ -29,7 +29,7 @@ describe("OMS 抽屉式维护", () => {
   });
 
   it("复核取消后返回原操作模态框并保留填写内容", () => {
-    path = "/oms/prototype/tenants/aurora";
+    path = "/oms/prototype/tenants/aurora/grants";
     render(<OmsPrototype/>);
     fireEvent.click(screen.getByRole("button", { name: "授予额度（演示）" }));
     const form = screen.getByRole("dialog", { name: "授予额度" });
@@ -43,7 +43,7 @@ describe("OMS 抽屉式维护", () => {
   it("从服务列表打开详情抽屉，关闭后保留列表", () => {
     path = "/oms/prototype/services";
     render(<OmsPrototype/>);
-    fireEvent.click(screen.getByRole("button", { name: "查看对话模型详情" }));
+    fireEvent.click(within(screen.getByText("对话模型").closest("tr")!).getByRole("button", { name: "服务概况" }));
     expect(screen.getByRole("dialog", { name: /详情.*对话模型/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "模型与服务" })).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
@@ -63,25 +63,25 @@ describe("OMS 抽屉式维护", () => {
     path = "/oms/prototype/services";
     render(<OmsPrototype/>);
     fireEvent.change(screen.getByRole("searchbox", { name: "搜索服务" }), { target: { value: "OCR" } });
-    fireEvent.click(screen.getByRole("button", { name: "查看文档 OCR详情" }));
+    fireEvent.click(within(screen.getByText("文档 OCR").closest("tr")!).getByRole("button", { name: "服务概况" }));
     fireEvent.click(within(screen.getByRole("dialog", { name: /文档 OCR/ })).getByRole("button", { name: "关闭抽屉" }));
     expect(screen.getByRole("searchbox", { name: "搜索服务" })).toHaveValue("OCR");
     expect(screen.getByText("文档 OCR")).toBeInTheDocument();
   });
 
   it("关闭额度详情返回学校详情，而不是直接丢失上级上下文", () => {
-    path = "/oms/prototype/tenants/aurora";
+    path = "/oms/prototype/tenants/aurora/grants";
     render(<OmsPrototype/>);
     const tenantDrawer = screen.getByRole("dialog", { name: /星河实验学校/ });
     fireEvent.click(within(tenantDrawer).getAllByRole("button", { name: /查看详情/ })[0]);
     expect(screen.getByRole("dialog", { name: /额度 q-101/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭抽屉" }));
     expect(screen.getByRole("dialog", { name: /星河实验学校/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "额度清单" })).toHaveAttribute("aria-selected", "true");
+    expect(within(screen.getByRole("dialog", { name: /星河实验学校/ })).getByRole("searchbox", { name: "搜索额度" })).toBeInTheDocument();
   });
 
   it("服务草稿在模态框保存，详情抽屉不变且可回读", () => {
-    path = "/oms/prototype/services/ocr";
+    path = "/oms/prototype/services/ocr/config";
     render(<OmsPrototype/>);
     const drawer = screen.getByRole("dialog", { name: /详情.*文档 OCR/ });
     fireEvent.click(within(drawer).getByRole("button", { name: "编辑配置草稿" }));
@@ -97,26 +97,36 @@ describe("OMS 抽屉式维护", () => {
   });
 
   it("服务发布申请经过复核且不伪装执行者已生效", () => {
-    path = "/oms/prototype/services/search";
+    path = "/oms/prototype/services/search/provider";
     render(<OmsPrototype/>);
+    fireEvent.click(screen.getByRole("button", { name: "新增 Provider profile" }));
+    const profileForm = screen.getByRole("dialog", { name: "新增 Provider profile" });
+    fireEvent.change(within(profileForm).getByRole("textbox", { name: "搜索配置名称" }), { target: { value: "无密钥搜索 Profile" } });
+    fireEvent.change(within(profileForm).getByRole("combobox", { name: "供应商" }), { target: { value: "none" } });
+    fireEvent.click(within(profileForm).getByRole("button", { name: "保存演示草稿" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭抽屉" }));
+    fireEvent.click(within(screen.getByText("联网搜索").closest("tr")!).getByRole("button", { name: "服务配置" }));
     const drawer = screen.getByRole("dialog", { name: /联网搜索/ });
     fireEvent.click(within(drawer).getByRole("button", { name: "编辑配置草稿" }));
     const form = screen.getByRole("dialog", { name: /编辑联网搜索配置/ });
     fireEvent.change(within(form).getByRole("textbox", { name: "搜索配置名称" }), { target: { value: "演示搜索配置 B" } });
+    fireEvent.change(within(form).getByRole("combobox", { name: "选用搜索 Profile" }), { target: { value: within(form).getByRole("option", { name: /无密钥搜索 Profile/ }).getAttribute("value") } });
     expect(within(form).queryByRole("textbox", { name: "模型标识" })).not.toBeInTheDocument();
     fireEvent.click(within(form).getByRole("button", { name: "保存演示草稿" }));
-    fireEvent.click(within(drawer).getByRole("button", { name: "提交发布申请（演示）" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "关闭抽屉" }));
+    fireEvent.click(within(screen.getByText("联网搜索").closest("tr")!).getByRole("button", { name: "发布记录" }));
+    const releaseDrawer = screen.getByRole("dialog", { name: /联网搜索/ });
+    fireEvent.click(within(releaseDrawer).getByRole("button", { name: "提交发布申请（演示）" }));
     expect(screen.getByRole("alertdialog", { name: "确认提交发布申请" })).toBeInTheDocument();
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认" }));
-    fireEvent.click(within(drawer).getByRole("tab", { name: "发布记录" }));
-    expect(within(drawer).getByText("待执行者确认")).toBeInTheDocument();
-    expect(within(drawer).queryByText("已生效")).not.toBeInTheDocument();
+    expect(within(releaseDrawer).getByText("待执行者确认")).toBeInTheDocument();
+    expect(within(releaseDrawer).queryByText("已生效")).not.toBeInTheDocument();
   });
 
   it.each(["agents", "tools", "knowledge", "runtime"])("%s 资源有可回读的策略维护入口", root => {
     path = `/oms/prototype/${root}`;
     render(<OmsPrototype/>);
-    fireEvent.click(screen.getAllByRole("button", { name: /查看详情/ })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "平台策略" })[0]);
     const drawer = screen.getByRole("dialog", { name: /详情/ });
     fireEvent.click(within(drawer).getByRole("button", { name: "管理平台策略" }));
     const form = screen.getByRole("dialog", { name: /管理.*策略/ });
@@ -133,7 +143,7 @@ describe("OMS 抽屉式维护", () => {
     expect(form.parentElement?.parentElement).toBe(document.body);
     expect(screen.getByRole("heading", { name: "供应商连接" })).toBeInTheDocument();
     fireEvent.change(within(form).getByRole("textbox", { name: "名称" }), { target: { value: "新供应商连接" } });
-    fireEvent.change(within(form).getByRole("textbox", { name: "供应商" }), { target: { value: "演示供应商 D" } });
+    fireEvent.change(within(form).getByRole("combobox", { name: "供应商" }), { target: { value: "dashscope" } });
     fireEvent.click(within(form).getByRole("button", { name: "保存演示草稿" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("新供应商连接")).toBeInTheDocument();
@@ -146,15 +156,15 @@ describe("OMS 抽屉式维护", () => {
     fireEvent.click(within(drawer).getByRole("button", { name: "编辑连接草稿" }));
     const form = screen.getByRole("dialog", { name: /编辑演示模型连接/ });
     expect(within(form).getByRole("checkbox", { name: "对话模型" })).toBeChecked();
-    expect(within(form).getByRole("checkbox", { name: "任务模型" })).toBeChecked();
+    expect(within(form).queryByRole("checkbox", { name: "任务模型" })).not.toBeInTheDocument();
     expect(within(form).getByRole("checkbox", { name: "向量服务" })).toBeChecked();
-    fireEvent.click(within(form).getByRole("checkbox", { name: "任务模型" }));
+    fireEvent.click(within(form).getByRole("checkbox", { name: "语音合成" }));
     fireEvent.click(within(form).getByRole("button", { name: "保存演示草稿" }));
-    expect(within(drawer).getByText("llm / embedding")).toBeInTheDocument();
+    expect(within(drawer).getByText("llm / embedding / tts")).toBeInTheDocument();
   });
 
   it("额度授予先确认，可取消；审计员没有维护入口", () => {
-    path = "/oms/prototype/tenants/aurora";
+    path = "/oms/prototype/tenants/aurora/grants";
     render(<OmsPrototype/>);
     fireEvent.click(screen.getByRole("button", { name: "授予额度（演示）" }));
     fireEvent.click(screen.getByRole("button", { name: "确认演示授予" }));
@@ -169,7 +179,7 @@ describe("OMS 抽屉式维护", () => {
     const future = new Date();
     future.setFullYear(future.getFullYear() + 1);
     const expiry = `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, "0")}-${String(future.getDate()).padStart(2, "0")}`;
-    path = "/oms/prototype/tenants/harbor";
+    path = "/oms/prototype/tenants/harbor/grants";
     render(<OmsPrototype/>);
     const drawer = screen.getByRole("dialog", { name: /海港职业学院/ });
     fireEvent.click(within(drawer).getByRole("button", { name: "授予额度（演示）" }));
@@ -184,23 +194,21 @@ describe("OMS 抽屉式维护", () => {
   });
 
   it("待核对额度不能通过撤销服务授权绕过预留", () => {
-    path = "/oms/prototype/tenants/north";
+    path = "/oms/prototype/tenants/north/access";
     render(<OmsPrototype/>);
-    const drawer = screen.getByRole("dialog", { name: /北辰研究院/ });
-    fireEvent.click(within(drawer).getByRole("tab", { name: "服务授权" }));
-    fireEvent.click(within(drawer).getByRole("button", { name: "撤销服务授权" }));
-    const form = screen.getByRole("dialog", { name: "撤销服务授权" });
-    fireEvent.change(within(form).getByRole("combobox", { name: "服务" }), { target: { value: "llm" } });
-    fireEvent.click(within(form).getByRole("button", { name: "继续撤销" }));
-    expect(within(form).getByText(/仍有关联有效或待核对额度/)).toBeInTheDocument();
+    const drawer = screen.getByRole("dialog", { name: /北辰学校/ });
+
+    const row = within(drawer).getByText("对话模型").closest("tr")!;
+    fireEvent.click(within(row).getByRole("button", { name: "撤销授权" }));
+    expect(within(drawer).getByText(/仍有关联有效或待核对额度/)).toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("服务授权后学校清单与详情显示一致的授权数量", () => {
-    path = "/oms/prototype/tenants/harbor";
+    path = "/oms/prototype/tenants/harbor/access";
     render(<OmsPrototype/>);
     const drawer = screen.getByRole("dialog", { name: /海港职业学院/ });
-    fireEvent.click(within(drawer).getByRole("tab", { name: "服务授权" }));
+
     fireEvent.click(within(drawer).getByRole("button", { name: "授权服务（演示）" }));
     const form = screen.getByRole("dialog", { name: "授权服务" });
     fireEvent.change(within(form).getByRole("combobox", { name: "服务" }), { target: { value: "video-learning" } });
@@ -213,17 +221,17 @@ describe("OMS 抽屉式维护", () => {
   });
 
   it("平台运营可维护权益但不能编辑高权限服务配置", () => {
-    path = "/oms/prototype/services/ocr";
+    path = "/oms/prototype/services/ocr/config";
     render(<OmsPrototype/>);
     fireEvent.change(screen.getByRole("combobox", { name: "演示角色" }), { target: { value: "operator" } });
     expect(screen.queryByRole("button", { name: "编辑配置草稿" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "学校列表" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "查看详情" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "额度清单" })[0]);
     expect(screen.getByRole("button", { name: "授予额度（演示）" })).toBeInTheDocument();
   });
 
   it("确认框 Escape 返回表单，详情抽屉仍保留", () => {
-    path = "/oms/prototype/tenants/aurora";
+    path = "/oms/prototype/tenants/aurora/grants";
     render(<OmsPrototype/>);
     fireEvent.click(screen.getByRole("button", { name: "授予额度（演示）" }));
     fireEvent.click(screen.getByRole("button", { name: "确认演示授予" }));
@@ -249,18 +257,12 @@ describe("OMS 抽屉式维护", () => {
     expect(within(drawer).getByText("120,000 Token")).toBeInTheDocument();
   });
 
-  it("供给补充有确认框，确认后可回读供给数量", () => {
-    path = "/oms/prototype/supply/s-ocr";
+  it("供给详情不能绕过批次核对直接增加可授予量", () => {
+    path = "/oms/prototype/supply/s-ocr/info";
     render(<OmsPrototype/>);
     const drawer = screen.getByRole("dialog", { name: /文档解析资源/ });
-    fireEvent.click(within(drawer).getByRole("button", { name: "补充供给（演示）" }));
-    const form = screen.getByRole("dialog", { name: "补充服务供给" });
-    fireEvent.change(within(form).getByRole("spinbutton", { name: /补充数量/ }), { target: { value: "100" } });
-    fireEvent.change(within(form).getByRole("textbox", { name: "来源说明" }), { target: { value: "采购单 DEMO-8" } });
-    fireEvent.click(within(form).getByRole("button", { name: "确认演示补充" }));
-    expect(screen.getByRole("alertdialog", { name: "确认补充供给" })).toBeInTheDocument();
-    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认" }));
-    expect(within(drawer).getByText("700")).toBeInTheDocument();
-    expect(within(drawer).getByText("采购单 DEMO-8")).toBeInTheDocument();
+    expect(within(drawer).getByText("600")).toBeInTheDocument();
+    expect(within(drawer).queryByRole("button", { name: /补充供给/ })).not.toBeInTheDocument();
+    expect(within(drawer).queryByRole("spinbutton", { name: /补充数量/ })).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-> 2026-09-26 用户已授权执行本清单、重订依赖提案及正式代码/迁移；仅在隔离合成数据中验证，不触碰真实租户数据、生产发布、归档或提交。只在各项证据真实完成后勾选；原型交互仍由 `add-c1-oms-operations-prototype` 承担，旧只读/计费/欠费任务须先重订或退役。实施证据见 `implementation-evidence.md`。
+> 2026-09-27 用户确认 EduPlus2 身份/学校/生命周期与 DeepTutor OMS 应用权限拆分，且本代理不得修改 EduPlus2；本 change 权限权威修订版及直接依赖提案随后已分别获批。内部总账实施授权和隔离合成数据限制保持。真实租户数据、生产发布、归档、此次提交/推送均未授权；test-cn Webhook mock 联调不改变 OMS 写入门禁。只在各项证据真实完成后勾选，实施证据见 `implementation-evidence.md`。
 
 ## 1. A1：状态与迁移基线
 
@@ -18,7 +18,7 @@
 ## 4. B1：EduPlus2 生命周期与可信主体
 
 - [ ] 4.1 与重订的 EduPlus2 lifecycle change 对齐签名事件、分源状态、同步异常及对账投影；验证 OMS 无开停写入、额度耗尽不产生 `tenant.suspended`，登录/管理未受额度误阻断。
-- [ ] 4.2 明确平台主体与租户主体不互继承的权限映射和默认/自定义角色迁移方案；验证伪造平台角色、目标 tenant 和旧 `tenant_admin` OMS 路由均不能写入。
+- [ ] 4.2 核实 EduPlus2 **既存**且适用 OMS 的 OIDC client/audience、账号在线状态和学校权威核验接口；依赖 `add-enterprise-management-authorization` 的 DeepTutor Enterprise 程序授权服务与 PG 唯一双应用域事实迁移完成 `(issuer,sub)` 平台主体、默认零权、受控初始管理员、默认/自定义角色与逐 `ops.*` 动作/目标学校授权、撤权版本和审计；不在本 change 复制权限表。建立内部 UUID↔权威学校 ID 的显式核验/撤权/版本栅栏；在账务事务内复核本地权限及绑定，验证伪造平台角色、目标 tenant、停用账号、撤权竞态、漂移绑定和旧 `tenant_admin` OMS 路由均不能写入。现有外部接口缺失时保持写路由关闭，不修改 EduPlus2。
 
 ## 5. B2：租户权益与 TMS 只读契约
 
@@ -27,7 +27,7 @@
 
 ## 6. C1：平台资源与配置管理
 
-- [ ] 6.1 重订旧 `add-b2-oms-platform-read-governance` 和 `add-enterprise-all-service-provider-settings`，批准 OMS 平台动作能力、Secret/导出边界、Provider 全服务管理入口及 PG/外部权限迁移。
+- [ ] 6.1 按新权威边界重新审阅 `add-enterprise-management-authorization`、`add-b2-oms-platform-read-governance` 和 `add-enterprise-all-service-provider-settings`：OMS 平台动作与目标学校授权由 DeepTutor Enterprise 程序判定、仅将事实迁移到本仓库企业 PG，EduPlus2 仅消费既存身份/学校接口，不代做其 OpenFGA/Keycloak 迁移；同时保持 Secret/导出边界、Provider 全服务入口。旧版曾获批并通过 strict validation，但本次权限权威变更须重新批准，不能把旧批准视为新契约实施验收。此前 PG 事实库版曾分别获批；用户最新 Enterprise 程序决策与订阅 actor 首位引导变更后，当前受影响修订版须复核，不等于外部接口或正式写 API 验收。
 - [ ] 6.2 建立五类平台资源与现有 DeepTutor descriptor/registry 的映射和安全状态 API；逐项验证 search、task 回退、embedding、TTS/STT、image/video、解析/RAG、外部 Agent/工具的条件字段与本地 Web 语义一致。
 - [ ] 6.3 实施并验证受控配置草稿、测试、目标执行者逐实例版本确认、部分确认/超时失败保留旧 active、新实例就绪前装载及回退；Secret 明文不进入响应、日志或审计，云端旧管理旁路被阻断。
 - [ ] 6.4 同步 OMS 原型中供给/调用扣量的简化文案与 fixture，再将独立 OMS 前端接入真实平台身份和资源管理 API；按列表→详情检查普通运营/高权限角色、加载/空/错误/无权限/待生效、审计关联与生产原型 404。
@@ -36,12 +36,12 @@
 ## 7. C2：供给、配额、真实消耗与治理
 
 - [x] 7.1 重订旧逐 Token usage change 并退役旧费用/欠费 change；批准供给、赠送/充值、非 Token 原生单位、待核对、OMS-only 成本的唯一总账和版本化 PG 迁移，不迁入旧租户售价/欠费字段。见 `implementation-evidence.md` §7.1；完成的是获批的目标契约和基础迁移门禁，不是 7.2–7.6 的供给管理、真实执行/核对或成本视图。
-- [ ] 7.2 实施供应商供给批次/兼容池与可授予量事务校验；验证供给过期仍保留历史消耗、授予不晚于供给有效期、金额/credits/paygo 无可信上界时拒绝硬额度及新调用，并以并发测试证明不超额承诺。
+- [x] 7.2 实施供应商供给批次/兼容池与可授予量事务校验；验证供给过期仍保留历史消耗、授予不晚于供给有效期、金额/credits/paygo 无可信上界时拒绝硬额度及新调用，并以并发测试证明不超额承诺。见 `implementation-evidence.md` §7.2；完成内部总账事务与合成验证，不代表平台采购写 API、供应商凭据核验或真实执行者已开放。
 - [ ] 7.3 实施 OMS 租户服务授权及同一列表的赠送/充值额度授予、调整、过期/撤销；验证操作审计、版本冲突、赠送优先与未使用承诺释放。
 - [ ] 7.4 在真实 CLI、HTTP/WS、SDK、后台和 Agent 子调用执行边界接入授权/额度/供给准入与预留；验证单服务耗尽只拒该服务新调用，登录/管理/历史与其他服务可用。
 - [ ] 7.5 以供应商可信 usage/可核验对账结算 Token，以真实原生单位结算其他服务；验证流中断、异步任务、同一 operation 多个可计费 attempt、重复回执、迟到响应、取消未知结果、一次 attempt 跨多笔额度及 Agent 防双扣。
 - [ ] 7.6 实施保留原始证据的核对/更正与 OMS-only 供应商成本视图；验证无成本契约时未核定、不生成租户费用，并检查权限、导出、日志及 TMS DTO 负例。
-- [ ] 7.7 以独立 OMS 正式入口验收采购补充→租户授权/额度→单次执行→租户/用户/供应商归集→异常核对全链路；保留迁移 dry-run/apply/verify、回退、审计、上游兼容与 G3 发布证据。
+- [ ] 7.7 以独立 OMS 正式入口验收采购补充→租户授权/额度→单次执行→租户/用户/供应商归集→异常核对全链路；验收既存 EduPlus2 身份/学校接口与 DeepTutor 本地 OMS 逐动作/目标授权、外部账号停用和本地撤权竞态负例；保留本仓库迁移 dry-run/apply/verify、回退、审计、上游兼容与 G3 发布证据。不得以外部发送端草稿或合成 JWT 代替真实联调。
 
 ## 8. H：条件性多执行者与高可用
 

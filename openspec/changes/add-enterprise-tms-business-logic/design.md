@@ -28,13 +28,13 @@ TMS 技术缩写、独立部署和 `/tms` 路径保持不变，对外产品名�
 
 正式入口 `/tms` 在认证且绑定唯一学校后跳转至 `/tms/{schoolCode}`。该前缀下有成员、应用、服务、Skills、配额、知识库、用量和事件的列表路由及稳定资源 ID 详情路由；详情在列表背景上以抽屉呈现，直接打开或刷新仍恢复同一列表与抽屉，维护动作使用模态框。筛选/分页/tab 只作为界面查询参数。侧栏、面包屑、关联对象跳转保留已核对的学校 code 和返回上下文，禁止任意 `returnTo` 跳向别的学校或域名。开发原型目标为 `/tms/prototype/{schoolCode}`，与正式数据和生产 404 隔离；现有 `/tms/prototype` 是待迁移的开发路径。
 
-EduPlus2 各学校管理员账号完全隔离，一个管理员账号只归属其学校，不建立跨学校选择器。学校管理员记录及其学校/角色关联应由签名 webhook 同步/变更/撤销，以外部学校稳定 ID + 外部用户稳定 ID 建立受控映射；密码和登录凭证不复制到 TMS。登录须独立验证 EduPlus2 身份、学校绑定与实际管理权限；收到 webhook 不是已登录或已授权。管理员事件需定义签名、版本/幂等、乱序、对账、撤权和登录时失效判断，事件 schema 与发送端能力尚待 EduPlus2 确认，未知或超时绑定按 fail closed 处理。现有 `add-b2-eduplus2-tenant-lifecycle-webhook` 只处理学校开停，不承载账号同步。账号同步所需 PG 身份映射/inbox 走版本化迁移；OpenFGA/Keycloak 如确需变更关系或 claim 才各走受控迁移，不因业务改称就迁移既有技术键。
+EduPlus2 各学校管理员账号完全隔离，一个管理员账号只归属其学校，不建立跨学校选择器。EduPlus2 密码、外部账号和学校主数据不复制到 TMS。学校的本产品 `tenant.*` 管理能力由 DeepTutor Enterprise 程序按 PG 授权事实判定，数据库权限/RLS 仅作兜底；首次登录零权。签名真实 `subscription.created.actor.user_id` 经目标应用/学校绑定与一次性栅栏校验后，仅登记本校待激活首位管理员身份；本人登录精确匹配 `(issuer,sub,school)` 才可由本产品程序激活 `school_admin`，mock/system/null、续期/恢复不产生新授权。此后本校 TMS 管理后续角色/成员授权；不依赖 EduPlus2 管理员角色或权限 webhook。现有 `add-b2-eduplus2-tenant-lifecycle-webhook` 只处理学校开停，不能给个人赋权。登录和每次敏感操作仍须核验既存外部账号在线状态、学校绑定及 DeepTutor 当前 `tenant.*`，缺外部核验能力时失败关闭。PG 身份/授权/审批迁移只在本仓库，OpenFGA/Keycloak 不因本产品权限改变而迁移。
 
 路由请求必须先由服务端取得可信学校 ID 和规范 code，再核对 URL code、具体 `tenant.*` 读写能力、资源学校归属及 owner/grant；不符合时不返回目标学校数据。主题查询同样使用核对后的学校 code 和 EduPlus2 tenant ID，不让路径或品牌接口响应充当认证。学校服务额度耗尽只限制相应服务新调用，不阻断管理员登录、管理路由或历史查询。
 
 ### 1. 一个可信租户上下文，角色不能代替资源授权
 
-TMS 后端从已验证主体/会话取得 `internal_tenant_id` 和绑定的 `external_tenant_id`；路由、筛选和写入体里的 tenant 字段仅作为一致性检查，不作为授权依据。入口、菜单、按钮、API、导出、WS/SDK 后续业务操作都用同一租户 scope 与具体 `tenant.*` 动作能力。`tenant_admin` 可管理其被明确允许的租户资源，但不因角色默认读取他人的 session、memory、notebook、私有文件或 KB 正文。共享资源的读取仍由 owner/显式读取 grant 定义；**转授权**仅由 owner 或另获分享/授权能力的主体执行，读取 grant 本身不能转授权。管理元数据、读取正文、导出与分享是不同动作。拒绝“前端锁定租户下拉框即可隔离”以及“同租户管理员拥有所有内容”。
+TMS 后端从已验证主体/会话取得 `internal_tenant_id` 和绑定的 `external_tenant_id`；路由、筛选和写入体里的 tenant 字段仅作为一致性检查，不作为授权依据。入口、菜单、按钮、API、导出、WS/SDK 后续业务操作都用同一租户 scope 与 DeepTutor Enterprise 程序当前具体 `tenant.*` 决策，不以 PG 行可见性放行。旧 `tenant_admin` 或外部 `eit=adm` 不自动取得本产品权限；受控学校管理员仅可管理其被明确允许的租户资源，但不因角色默认读取他人的 session、memory、notebook、私有文件或 KB 正文。共享资源的读取仍由 owner/显式读取 grant 定义；**转授权**仅由 owner 或另获分享/授权能力的主体执行，读取 grant 本身不能转授权。管理元数据、读取正文、导出与分享是不同动作。拒绝“前端锁定租户下拉框即可隔离”以及“同租户管理员拥有所有内容”。
 
 EduPlus2 继续权威维护外部租户、组织、用户、client/app 身份；TMS 展示必要同步信息与最后可信版本。外部资格、DeepTutor 本地隔离、资源就绪状态分源，不把某个旧 active 字段当全部准入事实。生命周期 webhook 的签名/重放/对账由重订后的独立 B2 change 交付；TMS 仅订阅可信投影并展示异常，不提供开停租户按钮。
 
@@ -83,6 +83,6 @@ TMS 管当前租户获授权的 KB、文档、共享资源及业务任务的元�
 ## Migration Plan
 
 1. 用户审阅本 proposal 与 OMS 业务契约；B1/B2 实施提案及 `docs/enterprise/02-*`、`11-*`、`12-*` 重订单体 Web、配额写入和 OMS 只读的旧内容。不得因文档校验就把 TMS 当作已批准生产实现。
-2. 先落可信身份/当前租户、成员及资源 owner/grant，再落 EduPlus2 client 注册/注销与服务访问 grant；采用版本化 PG migration，外部 OpenFGA/Keycloak 关系或 claim 真有变化才按各自受控迁移流程执行。原数据回填应保留 owner、client 历史与撤权，不把旧 admin 标记提升为跨租户权限。
+2. 先落可信身份/当前租户与双应用域权限事实迁移、真实订阅 actor 一次性首位管理员本人激活，再落成员及资源 owner/grant、EduPlus2 client 注册/注销与服务访问 grant；采用 DeepTutor 版本化 PG migration，不修改 EduPlus2/OpenFGA/Keycloak。原数据回填保留 owner、client 历史与撤权，不把旧 admin/tenant_admin 标记提升为本产品管理权限。
 3. 接入 OMS 只读配额投影、DeepTutor 逐调用用量及 KB/文档任务服务；分别验收正常、跨租户、失联、待核对、额度耗尽和权限撤销。前端迁入独立 TMS 构建，只在真实 API/权限/数据验收后开启正式 `/tms`；开发 `/tms/prototype` 与生产 404 保持隔离。
 4. 切换/回退保留上版兼容前端和 API 契约，client/grant/审计及用量历史不得因回滚删除；多实例前另经 H/G-H。若必须调整 DeepTutor 核心，仅提交 upstream-neutral seam 经严格审阅，未获批准不修改。

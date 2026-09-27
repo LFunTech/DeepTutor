@@ -1,0 +1,43 @@
+---
+title: "PATCH 重命名会话"
+description: "修改当前用户会话标题等允许字段。"
+slug: /api/http/rename-session/
+method: PATCH
+path: "/api/sessions/{session_id}"
+---
+
+# PATCH `/api/sessions/{session_id}`
+
+## 用途与时机
+
+用户明确要求修改当前会话标题时调用。
+
+## 前置条件
+
+有效 `dt_token`，且有该会话的修改权。
+
+## 请求
+
+**PATCH `/api/sessions/{session_id}`**
+
+| 字段 | 必填 | 约束 |
+| --- | --- | --- |
+| `session_id`（path） | 是 | 已授权会话 ID |
+| `title`（JSON） | 是 | 1～100 字符 |
+| `If-Match`（header） | 否 | 部署支持版本时可传当前版本，避免覆盖并发修改 |
+
+```bash
+curl --fail-with-body -X PATCH "$BASE_URL/api/sessions/$SESSION_ID" \
+  -H "Authorization: Bearer $DT_TOKEN" -H "Content-Type: application/json" \
+  --data "{\"title\":\"新的标题\"}"
+```
+
+## 响应
+
+`200` JSON：`{"session":{…}}`，其中 `session.title` 为更新后的标题。
+
+## 错误与恢复
+
+`400`／`422` 修正标题或版本格式；`404` 会话不可见；版本冲突时重新读取会话，征得用户确认后再修改。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

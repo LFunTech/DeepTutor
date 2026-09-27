@@ -1,0 +1,56 @@
+---
+title: "POST 创建资源上传意向"
+description: "创建受授权的对象资源上传意向。"
+slug: /api/http/upload-intent/
+method: POST
+path: "/api/v1/resources/upload-intents"
+---
+
+# POST `/api/v1/resources/upload-intents`
+
+## 用途与时机
+
+用户要给 turn 添加文件时先调用本接口，再按响应中的 URL 上传原始字节，最后调用完成接口。
+
+## 前置条件
+
+有效 `dt_token`；文件属于当前用户，若给已有会话使用，传同一 `session_id`。
+
+## 请求
+
+**POST `/api/v1/resources/upload-intents`**
+
+| JSON 字段 | 必填／默认 | 约束 |
+| --- | --- | --- |
+| `size_bytes` | 必填 | 1～512 MiB |
+| `sha256` | 必填 | 实际字节的 64 位十六进制摘要 |
+| `modality` | `file` | `file`／`image`／`audio`／`video`／`document` |
+| `mime_type` | `application/octet-stream` | 最长 255 字符 |
+| `purpose` | `chat_turn` | 1～128 字符 |
+| `session_id` | 空 | 已有会话 ID，最长 256 字符 |
+| `filename` | `upload.bin` | 1～255 字符 |
+| `expires_seconds` | `900` | `60`～`3600` |
+
+```bash
+curl --fail-with-body -X POST "$BASE_URL/api/v1/resources/upload-intents" \
+  -H "Authorization: Bearer $DT_TOKEN" -H "Content-Type: application/json" \
+  --data '{"modality":"file","mime_type":"text/plain","size_bytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824","purpose":"chat_turn","filename":"note.txt"}'
+```
+
+## 响应
+
+`200` JSON 返回 `resource_id`、`object_id`、`resource_kind`、`upload_url`、`headers`、`expires_in`（秒）与 `constraints`。`constraints` 包含 `mime_type`、`size_bytes`、`sha256`、`modality`、`purpose`；须与实际上传匹配。随后对 `upload_url` 发 **PUT 原始字节**，严格使用返回的 `headers`，不要附加 `dt_token`：
+
+```python
+from urllib.request import Request, urlopen
+with urlopen(Request(intent["upload_url"], data=blob, headers=intent["headers"], method="PUT")):
+    pass
+```
+
+PUT 成功后调用 [完成上传](complete-upload.mdx)。预签名 URL 不得记录或复用。
+
+## 错误与恢复
+
+`422` 修正大小、摘要或字段；`403` 无资源权限；`503` 暂不可用。URL 到期后重新创建意向，不重用过期地址。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

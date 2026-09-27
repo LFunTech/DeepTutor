@@ -2362,3 +2362,20 @@ origin_or_csrf_rejected -> False
 解释：未携带 `dt_token` 的 WebSocket probe 仍会被应用层鉴权拒绝，这是预期的负向结果；关键变化是响应不再是 `Origin or CSRF rejected`，说明公网 origin 已被运行时允许，浏览器页面后续携带有效 token 时不会再被 ConfigMap origin 阻断。
 
 使用本地 `.secrets/.login-credentials` 中的教师、第一个学生、管理员账号做浏览器自动化尝试（验证码填 `8888`，未输出账号/密码），三次均停留在 EduPlus 登录页，未回跳到 DeepTutor `/demo/callback` 或 `/demo/result`，DeepTutor 侧只观察到 `/demo/start` 303。因此，本轮无法证明“真实 EduPlus 账号登录后 dt_token + WS start_turn”完整闭环；该剩余验证依赖可登录的 EduPlus 测试账号或人工登录后的 request_id。当前可确认的部署结果是：Woodpecker/K8s 发布成功，ConfigMap origin、profile/permission 可选增强关闭、公网 callback、页面可达与 WebSocket Origin 层阻断均已修复并持久化。
+
+### 2026-09-27 test-cn 第三方 Agent 文档发布源（未部署）
+
+本轮仅修改 DeepTutor 发布源。`docs-site/` 独立 Docusaurus/Nginx 静态镜像、`compile-docs-test-cn`、test-cn 文档 digest 门禁、docs Deployment/Service/NetworkPolicy、同一 Ingress 的 `/docs` 路由、真实 HTTPS 首页与静态资源 smoke 脚本均已编写。pre/prod 仍只渲染 `/` runtime 路由，不要求文档镜像。文档部署只接受 test-cn registry 的 `docs@sha256:<64 hex>`；缺失或跨环境 digest 在 `kubectl` 前失败。
+
+本地验证记录：
+
+```text
+docs-site npm typecheck + DOCS_SITE_URL=https://llm-agent-test.f123.pub DOCS_BASE_URL=/docs/ npm build -> passed
+docs-site 契约测试 -> 21 passed（含无演示/内部机制公开内容）
+G1 发布与文档增量测试 -> 32 passed
+Woodpecker lint --strict（提供仓库现有 trusted clone allowlist） -> Config is valid
+OpenSpec validate --all --strict -> 28 passed, 0 failed
+本地 nginx:1.27-alpine 镜像，以非 root/read-only/tmpfs 运行同一 nginx.conf 与构建产物 -> /docs/ 200、引用 CSS 200、/ 404、缺失资源 404
+```
+
+本机 Docker Desktop overlay 为 `58.4G/58.3G`、可用空间 `0`，完整 `docker build` 在 `npm ci` 阶段以 `ENOSPC` 失败；未清理用户镜像或卷，也未把此失败伪称为镜像构建通过。`docs-site/` 当前未提交，Woodpecker 受保护 tag 的 clone 尚不可见；本轮未提交、打 tag、触发流水线或访问真实集群，因此 registry push、真实 K8s rollout 和 `https://llm-agent-test.f123.pub/docs/` 均保持未验证。D6.1 和 D6.4 待授权发布与有足够构建空间的环境完成后再勾选。

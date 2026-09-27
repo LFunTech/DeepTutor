@@ -8,6 +8,15 @@ digest-pinned migration/backend manifests, waits for the migration Job, and then
 for the backend rollout. `status.sh` prints the namespace-scoped rollout snapshot for
 redacted release evidence.
 
+For `test-cn` only, the release also requires `DEEPTUTOR_DOCS_IMAGE_DIGEST` from the
+target environment's `docs` repository before any kubectl call. It deploys a separate
+non-root static docs Deployment/Service/NetworkPolicy, waits for docs readiness, and
+applies `ingress-test-cn.yaml` to route `/docs` to that service while preserving `/`
+for the backend. The docs Pod reuses the pre-provisioned runtime ServiceAccount only
+for image pull configuration; its API token is not mounted. Other environments apply `ingress.yaml` with only `/` and do not
+require a docs image. The pipeline then checks the docs homepage and one referenced
+asset through the real HTTPS Ingress and records redacted evidence.
+
 `backend_executor_replicas` is rendered from the target environment contract via
 `DEEPTUTOR_BACKEND_EXECUTOR_REPLICAS`; `DEEPTUTOR_EXECUTION_MODE` is rendered as
 `single` or `replicated` from the same contract. A value greater than `1` is supported only when

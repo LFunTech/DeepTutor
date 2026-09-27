@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CONTRACT_VERSION } from "@deeptutor/api-contracts";
 
@@ -27,4 +29,12 @@ describe("OMS/TMS 共享包版本契约", () => {
       }
     }
   });
+
+  it("两个应用的 Turbopack 根目录固定到前端 workspace，不受用户目录 lockfile 干扰", () => {
+    for (const name of appNames) {
+      const root = execFileSync(process.execPath, ["--input-type=module", "-e", `import config from "./apps/${name}/next.config.mjs"; console.log(config.turbopack?.root ?? "/")`], { cwd: process.cwd(), encoding: "utf8" }).trim();
+      expect(resolve(root), name).toBe(process.cwd());
+    }
+  });
+
 });

@@ -1,0 +1,40 @@
+---
+title: "resume_from · 从序号恢复 turn"
+description: "WebSocket 命令 resume_from 的请求、响应与恢复"
+slug: /api/ws/resume_from/
+command: resume_from
+---
+
+# resume_from
+
+## 用途与时机
+
+网络中断后已知 `turn_id` 和已处理事件序号时使用；与 `subscribe_turn` 的恢复语义相同。
+
+## 前置条件
+
+重连并通过身份验证；持久保存 `turn_id` 与最后成功处理的 `seq`。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"resume_from"`。
+
+| 字段 | 必填／默认 | 说明 |
+| --- | --- | --- |
+| `turn_id` | 必填 | 原 turn ID |
+| `seq` | `0` | 最后已处理序号，非负 |
+
+<!-- ws-command -->
+```json
+{"type":"resume_from","protocol_version":"2.0","turn_id":"turn-001","seq":18}
+```
+
+## 响应与事件
+
+重放 `seq` 更大的事件并继续实时推送；按 `(turn_id, seq)` 去重。不要把“已收到但未处理”的序号写作游标。
+
+## 错误与恢复
+
+订阅被拒绝时检查当前用户权限和 turn ID；短暂故障可带同一游标有限退避重连，不能新建 turn 代替恢复。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

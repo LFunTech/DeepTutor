@@ -1,5 +1,7 @@
 # 云端 TMS 业务逻辑基础契约
 
+> **2026-09-27 权限权威再修订**：TMS 的 `tenant.*` 本产品权限由 DeepTutor Enterprise 程序按本地 PG 事实判定，与 OMS `ops.*` 共用内核但域隔离；PG 数据库权限/RLS 不代替程序鉴权，EduPlus2 在权限链路中只提供认证和稳定身份识别。用户指定签名真实 `subscription.created.actor.user_id` 为首位学校管理员身份来源，由本系统一次性登记、本人登录匹配后激活；不走旧双负责人开通。随后 TMS 管理本校权限。详细规则由 [`add-enterprise-management-authorization`](../add-enterprise-management-authorization/proposal.md) 唯一规定；mock/外部角色均不自动授权。
+
 ## Why
 
 现有 [`add-b2-tms-management-prototype`](../add-b2-tms-management-prototype/proposal.md) 已确定单一可信租户、六组导航、共享组件与配额只读，但尚未形成可实施的租户身份、应用接入、成员/资源授权、知识内容管理和用量查询业务契约。旧企业文档仍混有单体前端、TMS 可调整配额或 OMS 只读的过时描述；正式开发不能直接按页面原型或旧路由推断后端权限。
@@ -7,7 +9,7 @@
 ## What Changes
 
 - 将 TMS 对外称为**学校智能体管理后台**，保留 TMS 技术缩写、`/tms` 入口和现有 `tenant_id`、`tenant.*`、Skill `owner=tenant` 契约；在 EduPlus2 教育业务中一个 tenant 即一所学校，`school_code` 即学校的 tenant code，界面和业务文档使用“学校”。正式路由为 `/tms/{schoolCode}` 及其列表/详情子路径，URL code 只定位学校并与可信账号绑定核对，不能单凭 URL 授权或任意切换学校。
-- 学校管理员账号及学校/角色关联应由 EduPlus2 签名 webhook 同步，账号在不同学校之间隔离；登录凭证仍归 EduPlus2。管理员创建/变更/撤销事件必须有独立 schema、幂等版本、对账及撤权契约。现有学校 lifecycle webhook 只处理开停，不能冒充管理员账号同步已实现；缺发送端事件/登录校验契约时不开放正式入口。
+- EduPlus2 继续维护外部账号、学校和登录凭证；DeepTutor 在经验证的 `(issuer,sub,school)` 绑定上管理仅限本产品的 `tenant.*` 角色与动作，首次登录零权。首位学校管理员由已验签真实 `subscription.created.actor.user_id` 一次性登记，本人登录与学校身份精确匹配后由 Enterprise 程序激活，后续本校授权由 TMS 管理；一般 lifecycle 事件和 mock 不授予管理员权限。缺既存在线账号或学校核验能力时正式管理写入口保持关闭。
 - 定义 TMS 仅在可信当前租户内管理本租户应用/client、明确获授权的成员与资源使用权、共享 KB/文档和允许的 Agent/工具使用；EduPlus2 继续是租户生命周期、用户、组织及外部应用身份的权威，个人内容继续受 owner/显式 grant 保护。
 - 定义云端 Skill 的 `global`/`tenant` owner：DeepTutor builtin 是只读 global 来源，云端默认未授权；OMS 授权后 TMS 才能查看，并在 `requires` 满足时使用。TMS 仅通过完整 ZIP 包创建/更新 tenant Skill；受控 Hub 导入须取得并校验包，Skill 名称、说明、标签和依赖等内容元数据从包内 `SKILL.md` 读取，不接受单文件、纯文本或表单覆盖。可信 tenant owner、来源、审核状态及包摘要由平台生成，发布后仅本租户自用。与已授权 global（含 builtin）同名须先提醒并由租户管理员确认，运行时 tenant 优先且不静默回退；Skill 不走成员/应用服务访问 grant 或独立配额。
 - 定义应用/client 注册、状态复核、注销及审计：由 EduPlus2 权威解析 client/app/tenant，外部 tenant 必须与当前租户绑定一致，同 provider 的 active client 与同租户同 app 的 active 注册均唯一；TMS 不得代管其他租户或重建 EduPlus2 主数据。
@@ -28,6 +30,6 @@
 
 ## Impact
 
-- 未来实现涉及 `extensions/enterprise/` 的 `/api/v1/tms/*`、PG 学校管理员账号映射/事件 inbox 与学校资源/grant/client/审计迁移、EduPlus2 管理员事件和 resolve/状态复核、KB/文件与用量只读投影，以及 TMS 独立前端；不修改 OMS 的配额写入权威。EduPlus2 管理员 webhook 的发送端字段尚待确认，本 change 不宣称它已存在。
-- 依赖 B1 可信身份和 B2 多租户/资源隔离，配额视图依赖 OMS 授予与 DeepTutor 真实用量总账；TMS 不能用 fixture、客户端 tenant 参数或前端隐藏按钮替代真实授权。与 [`add-enterprise-oms-business-logic`](../add-enterprise-oms-business-logic/proposal.md) 共享对象 ID/状态契约，但前端和 API 权限边界分离。
+- 未来实现涉及 `extensions/enterprise/` 的 `/api/v1/tms/*`、共用企业 PG 应用授权迁移、学校主体绑定、学校资源/grant/client/审计、既存 EduPlus2 身份/学校状态复核、KB/文件与用量只读投影，以及 TMS 独立前端；不修改 OMS 的配额写入权威。学校生命周期 Webhook 与学校管理员的本产品授权是不同职责。
+- 依赖 B1 可信身份、B2 多租户/资源隔离和 [`add-enterprise-management-authorization`](../add-enterprise-management-authorization/proposal.md) 的本产品权限/双人开通；配额视图依赖 OMS 授予与 DeepTutor 真实用量总账。TMS 不能用 fixture、客户端 tenant 参数或前端隐藏按钮替代真实授权；OMS `ops.*` 角色/学校范围不授予 TMS 能力，也不进入 TMS DTO。既存外部身份/账号/学校接口若缺失，只能由所属团队独立提供，本代理不修改发送端；缺必要核验时正式管理写入口继续关闭。
 - 本 change **仅创建规划文档**，不实施真实 API、前端、DB/OpenFGA/Keycloak 迁移或云端部署；用户审阅批准及所依赖实施提案重订前，不按本任务清单开工。

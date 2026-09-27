@@ -23,6 +23,12 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "oms/0004_attempt_lifecycle",
         "oms/0005_command_result_summary",
         "oms/0006_append_only_facts",
+        "oms/0007_supply_evidence",
+        "oms/0008_quota_expiry",
+        "oms/0009_entitlement_commands",
+        "oms/0010_quota_adjustment",
+        "oms/0011_school_binding",
+        "oms/0012_school_binding_version_guard",
     } <= set(await runner.plan())
 
     await runner.apply()
@@ -50,11 +56,18 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         ("0004_attempt_lifecycle",),
         ("0005_command_result_summary",),
         ("0006_append_only_facts",),
+        ("0007_supply_evidence",),
+        ("0008_quota_expiry",),
+        ("0009_entitlement_commands",),
+        ("0010_quota_adjustment",),
+        ("0011_school_binding",),
+        ("0012_school_binding_version_guard",),
     ]
     assert {row[0]: tuple(row[1:]) for row in tables} == {
         "schema_history": (False, False),
         "service_definitions": (False, False),
         "supply_lots": (False, False),
+        "school_bindings": (False, False),
         "grant_commands": (False, False),
         "tenant_service_entitlements": (True, True),
         "quota_grants": (True, True),
@@ -63,6 +76,7 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "attempt_allocations": (True, True),
         "attempt_evidence_events": (True, True),
         "audit_events": (False, False),
+        "entitlement_commands": (True, True),
     }
 
 
@@ -72,6 +86,133 @@ async def test_oms_schema_drift_blocks_verify(pg_dsn):
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute("ALTER TABLE oms.usage_attempts DISABLE ROW LEVEL SECURITY")
 
+    with pytest.raises(RuntimeError, match="oms schema drift"):
+        await runner.verify()
+
+
+async def test_supply_verification_constraint_drift_blocks_verify(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE oms.supply_lots DROP CONSTRAINT supply_lots_verified_native"
+        )
+    with pytest.raises(RuntimeError, match="oms schema drift"):
+        await runner.verify()
+
+
+async def test_quota_expiry_constraint_drift_blocks_verify(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE oms.quota_grants DROP CONSTRAINT quota_grants_status_check"
+        )
+    with pytest.raises(RuntimeError, match="oms schema drift"):
+        await runner.verify()
+
+
+async def test_quota_adjustment_constraint_drift_blocks_verify(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE oms.quota_grants DROP CONSTRAINT quota_grants_adjustment_released_valid"
+        )
+    with pytest.raises(RuntimeError, match="oms schema drift"):
+        await runner.verify()
+
+
+async def test_school_binding_requires_explicit_unique_verified_numeric_target(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    internal_a, internal_b = uuid.uuid4(), uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        for internal_id in (internal_a, internal_b):
+            await connection.execute(
+                "INSERT INTO enterprise.tenants(id,external_eligibility,auth_epoch) "
+                "VALUES(%s,'allowed','test-epoch')",
+                (internal_id,),
+            )
+        rows = await (
+            await connection.execute("SELECT tenant_id FROM oms.school_bindings")
+        ).fetchall()
+        assert rows == []
+        await connection.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,42,'verified',now(),'operator','synthetic://binding')",
+            (internal_a,),
+        )
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            await connection.execute(
+                "INSERT INTO oms.school_bindings"
+                "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+                "VALUES(%s,42,'verified',now(),'operator','synthetic://duplicate')",
+                (internal_b,),
+            )
+
+
+async def test_school_binding_constraint_drift_blocks_verify(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE oms.school_bindings DROP CONSTRAINT school_bindings_eduplus_tenant_id_key"
+        )
+    with pytest.raises(RuntimeError, match="oms schema drift"):
+        await runner.verify()
+
+
+async def test_school_binding_retarget_requires_monotonic_version(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+    school = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "INSERT INTO enterprise.tenants(id,external_eligibility,auth_epoch) "
+            "VALUES(%s,'allowed','synthetic')",
+            (school,),
+        )
+        await connection.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,101,'verified',now(),'synthetic-verifier','synthetic://school-a')",
+            (school,),
+        )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            await connection.execute(
+                "UPDATE oms.school_bindings SET eduplus_tenant_id=202,"
+                "source_ref='synthetic://school-b' WHERE tenant_id=%s",
+                (school,),
+            )
+
+
+async def test_school_binding_cannot_be_deleted_and_recreated_to_resurrect_grants(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+    school = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "INSERT INTO enterprise.tenants(id,external_eligibility,auth_epoch) "
+            "VALUES(%s,'allowed','synthetic')",
+            (school,),
+        )
+        await connection.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,101,'verified',now(),'synthetic-verifier','synthetic://school')",
+            (school,),
+        )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            await connection.execute(
+                "DELETE FROM oms.school_bindings WHERE tenant_id=%s", (school,)
+            )
+
+
+async def test_school_binding_version_guard_drift_blocks_verify(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute("DROP TRIGGER guard_school_binding_version ON oms.school_bindings")
     with pytest.raises(RuntimeError, match="oms schema drift"):
         await runner.verify()
 

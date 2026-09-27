@@ -46,17 +46,22 @@ describe("OMS 类型化资源新增", () => {
     render(<OmsPrototype/>);
     const before = screen.getByText("520,000 Token");
     expect(before).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "资源方案" }));
     fireEvent.click(screen.getByRole("button", { name: "新增供给方案" }));
     expect(screen.getByRole("dialog", { name: "新增供给方案" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("tab", { name: "供给批次" }));
     fireEvent.click(screen.getByRole("button", { name: "新增供给批次" }));
     expect(screen.getByRole("dialog", { name: "新增供给批次" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(screen.getByRole("tab", { name: "供给概览" }));
     expect(screen.getByText("520,000 Token")).toBeInTheDocument();
   });
 
   it("供给方案与批次保存后可从列表回读，待核对量不进入平台可授予量", () => {
     path = "/oms/prototype/supply";
     render(<OmsPrototype/>);
+    fireEvent.click(screen.getByRole("tab", { name: "资源方案" }));
     fireEvent.click(screen.getByRole("button", { name: "新增供给方案" }));
     const plan = screen.getByRole("dialog", { name: "新增供给方案" });
     fireEvent.change(within(plan).getByRole("textbox", { name: "方案标识" }), { target: { value: "demo-plan" } });
@@ -65,6 +70,7 @@ describe("OMS 类型化资源新增", () => {
     fireEvent.change(within(plan).getByRole("textbox", { name: "资源说明" }), { target: { value: "采购方案待确认" } });
     fireEvent.click(within(plan).getByRole("button", { name: "保存草稿" }));
     expect(screen.getByText("演示模型资源方案")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "供给批次" }));
     fireEvent.click(screen.getByRole("button", { name: "新增供给批次" }));
     const batch = screen.getByRole("dialog", { name: "新增供给批次" });
     fireEvent.change(within(batch).getByRole("textbox", { name: "批次标识" }), { target: { value: "demo-batch" } });
@@ -95,14 +101,15 @@ describe("OMS 类型化资源新增", () => {
   });
 
   it("现有服务可分别新增 Provider profile 与模型草稿；搜索服务不出现模型入口", () => {
-    path = "/oms/prototype/services/llm";
+    path = "/oms/prototype/services/llm/provider";
     render(<OmsPrototype/>);
-    fireEvent.click(screen.getByRole("tab", { name: "供应商配置" }));
     fireEvent.click(screen.getByRole("button", { name: "新增 Provider profile" }));
     const profile = screen.getByRole("dialog", { name: "新增 Provider profile" });
     fireEvent.change(within(profile).getByRole("textbox", { name: "配置名称" }), { target: { value: "演示 profile" } });
-    fireEvent.change(within(profile).getByRole("textbox", { name: "供应商标识" }), { target: { value: "demo-provider" } });
+    fireEvent.change(within(profile).getByRole("combobox", { name: "供应商" }), { target: { value: "custom" } });
     fireEvent.click(within(profile).getByRole("button", { name: "保存演示草稿" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: /对话模型/ })).getByRole("button", { name: "关闭抽屉" }));
+    fireEvent.click(within(screen.getByText("对话模型").closest("tr")!).getByRole("button", { name: "模型清单" }));
     fireEvent.click(screen.getByRole("button", { name: "新增模型" }));
     const model = screen.getByRole("dialog", { name: "新增模型" });
     expect(within(model).getByRole("combobox", { name: "所属 Profile" })).toBeInTheDocument();
@@ -110,6 +117,12 @@ describe("OMS 类型化资源新增", () => {
     fireEvent.change(within(model).getByRole("textbox", { name: "模型标识" }), { target: { value: "demo-model" } });
     fireEvent.click(within(model).getByRole("button", { name: "保存模型草稿" }));
     expect(screen.getByText("演示模型")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByText("演示模型").closest("tr")!).getByRole("button", { name: /查看详情/ }));
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(within(screen.getByRole("dialog")).getByText("demo-model")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "查看所属 Profile" }));
+    expect(window.location.pathname).toMatch(/\/services\/llm\/provider\/profile-/);
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "查看关联模型" })).toBeInTheDocument();
   });
 
   it("审计员不能新增资源；学校/用量/审计无新增入口", () => {

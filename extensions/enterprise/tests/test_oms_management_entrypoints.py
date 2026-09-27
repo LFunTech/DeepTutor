@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 
 from deeptutor_enterprise.cli import parser
 
@@ -42,3 +43,9 @@ def test_generic_sdk_facade_does_not_publish_platform_management_methods():
             "upsert_secret",
         }
     )
+
+
+def test_withdrawn_sender_authorization_client_is_not_packaged():
+    """旧发送端在线决策端点已撤回，不能误接成 OMS 权限来源。"""
+
+    assert importlib.util.find_spec("deeptutor_enterprise.oms.authorization") is None

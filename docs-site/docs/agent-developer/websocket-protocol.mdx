@@ -1,0 +1,43 @@
+---
+title: WebSocket 入口与事件
+description: 连接、命令索引、服务端事件与游标
+slug: /websocket-protocol/
+---
+
+# WebSocket 入口与事件
+
+## 连接
+
+**`WS /api/v1/ws`** 是第三方 Agent 的 turn 实时入口。握手须携带有效 `dt_token` 和部署允许的 `Origin`。服务端客户端可用 `Authorization: Bearer <dt_token>`；浏览器不能设置该头，使用 `new WebSocket(url, ['deeptutor-token', dtToken])`。不要把凭证放在 URL、query 或日志中。连接认证不代替每个 turn 的用户、会话与资源权限校验。
+
+所有客户端命令为单个 JSON 对象，必须有 `"protocol_version":"2.0"`。字段不符时可能返回 `protocol_error`。新版本客户端应使用以下独立命令页面：
+
+| 调用阶段 | 命令与页面 | 主要作用 |
+| --- | --- | --- |
+| 发起 | [`start_turn`](api/ws/start_turn.mdx) | 创建或识别本次 turn 并自动订阅；兼容别名 `message` |
+| 订阅／恢复 | [`subscribe_turn`](api/ws/subscribe_turn.mdx)、[`resume_from`](api/ws/resume_from.mdx) | 用 `turn_id` 与最后已处理 `seq` 恢复 |
+| 会话发现 | [`subscribe_session`](api/ws/subscribe_session.mdx)、[`check_active_turn`](api/ws/check_active_turn.mdx) | 查询或订阅当前活动 turn；不会自动追踪未来 turn |
+| 订阅控制 | [`unsubscribe`](api/ws/unsubscribe.mdx) | 停止本连接订阅，不取消执行 |
+| turn 控制 | [`cancel_turn`](api/ws/cancel_turn.mdx)、[`regenerate`](api/ws/regenerate.mdx) | 取消或重新生成 |
+| 用户交互 | [`submit_user_reply`](api/ws/submit_user_reply.mdx) | 回答暂停中的提问；不能据此更改本轮知识库或 Skill |
+| 连接维护 | [`auth_refresh`](api/ws/auth_refresh.mdx)、[`ping`](api/ws/ping.mdx) | 同一用户身份续期、应用心跳 |
+
+## 服务端事件
+
+普通流事件字段：`type`、`source`、`stage`、`content`、`metadata`、`session_id`、`turn_id`、非负 `seq`、`timestamp`、`protocol_version`。事件类型可能为 `stage_start`、`stage_end`、`thinking`、`observation`、`content`、`tool_call`、`tool_result`、`progress`、`sources`、`result`、`error`、`session`、`session_meta`、`wait_for_input`、`done`。并非每次执行都会产生所有类型。
+
+```json
+{"type":"content","source":"chat","stage":"responding","content":"傅里叶变换…","metadata":{},"session_id":"session-001","turn_id":"turn-001","seq":3,"timestamp":1789999000.0,"protocol_version":"2.0"}
+```
+
+`content` 适合增量显示，`result` 是最终结果，`done` 表示 turn 执行结束；稍后的 `session_meta` 可能继续更新会话展示信息。收到 `wait_for_input` 时使用 [`submit_user_reply`](api/ws/submit_user_reply.mdx)，不要启动另一个 turn 代替回复。当前企业入口不开放运行中追加输入或更改本轮上下文选择；要调整选择，应在本轮结束后发起新 turn。
+
+控制事件包括 `command_ack`、`active_turn_info`、`pong`、`protocol_error`、`auth_ack`、`auth_revoked`，以及可选的 `auth_expiring`。`protocol_error` 是应用层消息，不一定关闭连接；`auth_revoked` 后连接会以 1008 关闭。`command_ack` 用于取消和提交回复；`start_turn` 没有单独创建确认，首个流事件携带标识。
+
+```json
+{"type":"protocol_error","error_code":"invalid_command","message":"Command does not match the turn protocol.","retryable":false,"session_id":"","turn_id":"","protocol_version":"2.0"}
+```
+
+## 断线恢复
+
+保存每个已成功处理事件的 `(turn_id, seq)`；已知 `turn_id` 时使用 [`resume_from`](api/ws/resume_from.mdx) 或 [`subscribe_turn`](api/ws/subscribe_turn.mdx)，请求更大序号并去重。`subscribe_session` **不会自动订阅未来**的 turn。首事件前断线则只能在部署提供的幂等有效期内，原样重发预先保存且带同一 `operation_id` 的完整 `start_turn` 请求；超过有效期须先核对执行结果，不自动重发。详见 [调用链路](call-flows.mdx)。

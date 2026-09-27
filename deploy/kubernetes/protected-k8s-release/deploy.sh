@@ -16,6 +16,16 @@ fi
 : "${DEEPTUTOR_MIGRATION_LOCK_REF:?must be set}"
 : "${KUBECONFIG_DATA:?must be set}"
 
+if [ "${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn" ]; then
+  : "${DEEPTUTOR_REGISTRY_REPOSITORY:?must be set for test-cn docs}"
+  docs_image_prefix="${DEEPTUTOR_REGISTRY_REPOSITORY}/docs@sha256:"
+  if [[ "${DEEPTUTOR_DOCS_IMAGE_DIGEST:-}" != "${docs_image_prefix}"* ]] ||
+     [[ ! "${DEEPTUTOR_DOCS_IMAGE_DIGEST#"${docs_image_prefix}"}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "test-cn docs image digest must be an immutable digest in the target registry" >&2
+    exit 1
+  fi
+fi
+
 namespace="${DEEPTUTOR_K8S_NAMESPACE}"
 manifest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 migration_job_name="dt-migrate-${DEEPTUTOR_RELEASE_ID}"
@@ -201,6 +211,13 @@ fi
 kubectl -n "${namespace}" logs "job/${migration_job_name}" --all-containers=true || true
 
 render_manifest "${manifest_dir}/backend.yaml" | kubectl -n "${namespace}" apply -f -
+if [ "${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn" ]; then
+  render_manifest "${manifest_dir}/docs-test-cn.yaml" | kubectl -n "${namespace}" apply -f -
+  kubectl -n "${namespace}" rollout status deployment/deeptutor-docs --timeout="${DEEPTUTOR_ROLLOUT_TIMEOUT:-600s}"
+  render_manifest "${manifest_dir}/ingress-test-cn.yaml" | kubectl -n "${namespace}" apply -f -
+else
+  render_manifest "${manifest_dir}/ingress.yaml" | kubectl -n "${namespace}" apply -f -
+fi
 if [ "${hpa_enabled}" = "true" ]; then
   render_manifest "${manifest_dir}/patches/autoscaling/hpa.yaml" | kubectl -n "${namespace}" apply -f -
 fi

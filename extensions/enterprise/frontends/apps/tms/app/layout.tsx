@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { brandThemeStyle, loadBrandTheme, type BrandContext } from "@deeptutor/branding";
 import { demoSchoolContext } from "../src/demo-school";
 
-export const metadata = { title: "TMS · 学校智能体管理后台原型", description: "仅供开发环境审计的学校智能体管理后台原型" };
+export const metadata = { title: "智能体基座 · 学校智能体管理后台原型", description: "仅供开发环境审计的学校智能体管理后台原型" };
 export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

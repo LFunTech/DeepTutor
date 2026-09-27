@@ -1,0 +1,40 @@
+---
+title: "subscribe_turn · 订阅指定 turn"
+description: "WebSocket 命令 subscribe_turn 的请求、响应与恢复"
+slug: /api/ws/subscribe_turn/
+command: subscribe_turn
+---
+
+# subscribe_turn
+
+## 用途与时机
+
+已知 `turn_id` 时订阅正在执行或可重放的事件，是断线恢复的首选路径。
+
+## 前置条件
+
+当前用户对该 turn 有访问权；保存最后已处理的事件序号。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"subscribe_turn"`。
+
+| 字段 | 必填／默认 | 说明 |
+| --- | --- | --- |
+| `turn_id` | 必填 | 已获得的 turn ID |
+| `after_seq` | `0` | 最后已处理序号，非负；只返回更大序号 |
+
+<!-- ws-command -->
+```json
+{"type":"subscribe_turn","protocol_version":"2.0","turn_id":"turn-001","after_seq":18}
+```
+
+## 响应与事件
+
+返回该 turn 中序号大于 `after_seq` 的流事件，并接续实时事件；没有单独订阅确认。按 `(turn_id, seq)` 去重。
+
+## 错误与恢复
+
+`subscription_failed` 时保留游标，更新合法身份后有限退避重连。不可把订阅失败改为新的 `start_turn`。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

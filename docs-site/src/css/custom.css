@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+
+:root {
+  --ifm-font-family-base: 'Noto Sans SC', 'PingFang SC', sans-serif;
+  --ifm-font-family-monospace: 'DM Mono', 'SFMono-Regular', monospace;
+  --ifm-color-primary: #096f66;
+  --ifm-color-primary-dark: #075e57;
+  --ifm-color-primary-darker: #06574f;
+  --ifm-color-primary-darkest: #04443d;
+  --ifm-color-primary-light: #108a7f;
+  --ifm-color-primary-lighter: #17998d;
+  --ifm-color-primary-lightest: #27a99c;
+  --ifm-background-color: #f7f8f5;
+  --ifm-navbar-background-color: #fcfdf9;
+  --ifm-footer-background-color: #152826;
+  --ifm-heading-color: #18312e;
+  --ifm-code-border-radius: 4px;
+  --ifm-global-radius: 6px;
+  --ifm-spacing-horizontal: 1.25rem;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #69d9c7;
+  --ifm-color-primary-dark: #4bcbb6;
+  --ifm-color-primary-darker: #3cc4ae;
+  --ifm-color-primary-darkest: #2c9e8c;
+  --ifm-color-primary-light: #86e3d3;
+  --ifm-color-primary-lighter: #98e8d9;
+  --ifm-color-primary-lightest: #b4eee4;
+  --ifm-background-color: #101b1a;
+  --ifm-navbar-background-color: #142220;
+  --ifm-heading-color: #e8f6f1;
+}
+
+.navbar {border-bottom: 1px solid rgba(12, 73, 67, 0.12); box-shadow: none;}
+.theme-doc-sidebar-container {border-right: 1px solid rgba(12, 73, 67, 0.11) !important;}
+.markdown h1, .markdown h2, .markdown h3 {letter-spacing: -0.035em;}
+.markdown h1 {font-weight: 700;}
+.markdown h2 {margin-top: 2.6rem; padding-bottom: .5rem; border-bottom: 1px solid rgba(12, 73, 67, .13);}
+.markdown table {display: table; width: 100%; font-size: .92rem;}
+.markdown thead {background: rgba(16, 138, 127, .08);}
+.markdown code {font-size: .9em;}
+.theme-code-block {border: 1px solid rgba(12, 73, 67, .12);}
+
+.guide-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(12, 73, 67, .18);
+  border-radius: 12px;
+  padding: clamp(2rem, 5vw, 4rem);
+  margin: 0 0 2.8rem;
+  background: radial-gradient(circle at 88% 18%, rgba(223, 150, 91, .28), transparent 27%),
+    linear-gradient(125deg, #143c38 0%, #102d2a 56%, #092320 100%);
+  color: #e7f5ef;
+}
+.guide-hero::after {
+  content: '';
+  position: absolute;
+  right: -2.4rem;
+  bottom: -7.5rem;
+  width: 19rem;
+  height: 19rem;
+  border: 1px solid rgba(130, 227, 205, .28);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5rem rgba(130, 227, 205, .045), 0 0 0 5rem rgba(130, 227, 205, .035);
+  pointer-events: none;
+}
+.guide-hero__eyebrow {font: 500 .75rem/1.4 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .15em; color: #9cdbc9;}
+.guide-hero h1 {color: #fff; max-width: 14ch; margin: 1rem 0; font-size: clamp(2.3rem, 5vw, 4rem); line-height: 1.14;}
+.guide-hero p {max-width: 42rem; font-size: 1.05rem; line-height: 1.85; color: #d5e9e1; margin-bottom: 0;}
+.guide-path {display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: .85rem; margin: 1.6rem 0 2.5rem;}
+.guide-path a {display: block; border: 1px solid rgba(12, 73, 67, .15); background: var(--ifm-background-surface-color); border-radius: 8px; padding: 1.15rem 1.2rem; text-decoration: none; font-weight: 600; transition: transform .18s ease, border-color .18s ease;}
+.guide-path a:hover {transform: translateY(-3px); border-color: var(--ifm-color-primary); text-decoration: none;}
+.guide-path small {display: block; font: 500 .7rem/1.6 'DM Mono', monospace; color: var(--ifm-color-primary); margin-bottom: .45rem;}
+@media (prefers-reduced-motion: reduce) {.guide-path a {transition: none;} .guide-path a:hover {transform: none;}}
+
+.api-table-wrap {width: 100%; overflow-x: auto; border: 1px solid rgba(12, 73, 67, .14); border-radius: 8px; margin: 1.25rem 0 2rem;}
+.api-table {min-width: 900px; margin: 0 !important; border: 0 !important;}
+.api-table th, .api-table td {vertical-align: top; padding: .85rem .8rem; border-left: 0 !important; border-right: 0 !important;}
+.api-table td:nth-child(2) {min-width: 285px; overflow-wrap: anywhere;}
+.api-table td:nth-child(5) {min-width: 220px;}
+.api-table code {font-size: .78rem; background: transparent; padding: 0; border: 0; color: var(--ifm-font-color-base);}
+.api-method {font: 500 .74rem/1.4 'DM Mono', monospace; display: inline-block; min-width: 3.5rem; text-align: center; border-radius: 3px; padding: .16rem .28rem; color: #fff; background: #24514a;}
+.api-method--get {background: #267467;}
+.api-method--post {background: #bb6a36;}
+.api-method--patch, .api-method--put {background: #586a9c;}
+.api-method--delete {background: #a84848;}

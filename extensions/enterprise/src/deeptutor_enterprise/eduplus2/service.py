@@ -1040,11 +1040,14 @@ class EduPlus2AccessService:
     @staticmethod
     def _is_active(resolved: dict) -> bool:
         status = str(resolved.get("status") or "").lower()
-        subscription = str(resolved.get("subscription_status") or "active").lower()
-        tenant_status = str(resolved.get("tenant_status") or "active").lower()
-        app_status = str(resolved.get("app_status") or "active").lower()
-        return all(
-            value in _ACTIVE_VALUES for value in (status, subscription, tenant_status, app_status)
+        subscription = str(resolved.get("subscription_status") or "").lower()
+        tenant_status = str(resolved.get("tenant_status") or "").lower()
+        app_status = str(resolved.get("app_status") or "").lower()
+        return (
+            status in _ACTIVE_VALUES
+            and subscription in {"active", "subscribed"}
+            and tenant_status in _ACTIVE_VALUES | {"trial"}
+            and app_status in _ACTIVE_VALUES
         )
 
     async def _resolve(
@@ -1055,18 +1058,8 @@ class EduPlus2AccessService:
         request_id: str = "",
         external_user_id: str = "",
     ) -> dict:
-        if c is not None and self.resolve_cache_seconds > 0:
-            cached = await (
-                await c.execute(
-                    """
-                    SELECT resolved FROM eduplus2.resolve_cache
-                     WHERE tenant_id=%s AND client_id=%s AND expires_at>now()
-                    """,
-                    (self.identity.tenant_id, client_id),
-                )
-            ).fetchone()
-            if cached:
-                return self._normalized_resolve(client_id, dict(cached["resolved"]))
+        # resolve 参与换票、注册和权限复核，绝不从历史缓存作允许决策。
+        # 保留旧表/构造参数只为已应用迁移及调用兼容，不再读写授权缓存。
         try:
             raw = await self.resolver.resolve_client(client_id)
         except LookupError as exc:
@@ -1097,26 +1090,6 @@ class EduPlus2AccessService:
                     policy_version=str(resolved.get("version") or ""),
                 )
             raise PermissionError("client/app/tenant is inactive")
-        if c is not None and self.resolve_cache_seconds > 0:
-            await c.execute(
-                """
-                INSERT INTO eduplus2.resolve_cache(
-                  tenant_id,client_id,resolved,resolve_version,expires_at,updated_at
-                ) VALUES(%s,%s,%s,%s,%s,now())
-                ON CONFLICT (tenant_id,client_id) DO UPDATE
-                   SET resolved=EXCLUDED.resolved,
-                       resolve_version=EXCLUDED.resolve_version,
-                       expires_at=EXCLUDED.expires_at,
-                       updated_at=now()
-                """,
-                (
-                    self.identity.tenant_id,
-                    client_id,
-                    Jsonb(resolved),
-                    str(resolved.get("version") or ""),
-                    datetime.now(timezone.utc) + timedelta(seconds=self.resolve_cache_seconds),
-                ),
-            )
         if c is not None:
             await self._audit(
                 c,

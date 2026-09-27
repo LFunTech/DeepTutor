@@ -1,0 +1,46 @@
+---
+title: 接入概览
+description: 智能体基座企业入口的第三方 Agent 接入边界
+slug: /
+---
+
+<div className="guide-hero">
+  <div className="guide-hero__eyebrow">Agent integration / current contract</div>
+  <h1>把你的 Agent 接入智能体基座</h1>
+  <p>从可信用户身份到一次可恢复的对话：这里记录当前企业入口真正可调用的协议、权限和边界。</p>
+</div>
+
+## 先确认接入范围
+
+本文面向第三方 Agent Web／Backend 开发者。当前企业入口提供 **EduPlus2 用户 JWT 交换**、**WebSocket turn 执行**，以及有限的会话／资源／语音 HTTP 接口。接口路径可访问不代表任意 Agent 均有调用权限。
+
+第三方 Agent 应代表已验证的用户调用，不得用 URL 中的学校代码、展示名称或自报的 `tenant_id` 取得数据权限。当前没有独立的 Agent client-credentials 授权，也没有可替代 `/api/v1/ws` 的通用 HTTP turn 创建接口。
+
+<div className="guide-path">
+  <a href="./quickstart/"><small>01 / START</small>完成一次调用 →</a>
+  <a href="./auth-and-security/"><small>02 / TRUST</small>理解身份与权限 →</a>
+  <a href="./websocket-protocol/"><small>03 / STREAM</small>掌握 turn 协议 →</a>
+  <a href="./http-api/"><small>04 / REFERENCE</small>查询接口目录 →</a>
+</div>
+
+## 从哪个页面开始
+
+| 你的问题 | 下一步 |
+| --- | --- |
+| 如何拿到 token 并完成一次对话？ | [快速开始](quickstart.mdx)；前置应用先取得真实用户 JWT |
+| Agent 能否用自己的身份或切换学校？ | [认证与安全](auth-and-security.mdx)；当前只能代表受权用户 |
+| 断线后怎样继续同一个 turn？ | [调用链路](call-flows.mdx)与 [WebSocket 协议](websocket-protocol.mdx)；保存 `turn_id` 和 `seq` |
+| 知识库、Skills 如何用于 Agent 对话？ | [对话能力选择](capability-selection.mdx)；区分请求项和实际使用 |
+| 有哪些 HTTP 路由可用？ | [企业 API 目录](http-api.mdx)；“已挂载”仍不等于“任意 Agent 已获授权” |
+| 401／403／429 怎么处理？ | [错误与排障](errors.mdx)；区分身份、权限和限流 |
+| 本地 OpenAPI 的其他接口能否直接调？ | [本地版差异](local-differences.mdx)；不视为企业正式契约 |
+
+## 当前已实现与未开放
+
+**当前文档范围：** 15 个第三方 HTTP 接口及 `WS /api/v1/ws` 的 11 个可用命令，均有独立参考页面。Agent 先交换短期 `dt_token`，再通过 WS 发起 turn。
+
+**尚未开放：** 独立 Agent M2M client-credentials、通用 HTTP external turns、OpenAI 兼容聊天接口，以及其他非第三方产品接口。详见[本地版差异](local-differences.mdx)。
+
+## 文档适用范围
+
+本站仅记录第三方 Agent 可使用的已发布契约；部署方仍需提供可访问地址、测试身份与授权范围，本站本身不发放凭证。

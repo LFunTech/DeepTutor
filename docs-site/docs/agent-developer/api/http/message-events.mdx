@@ -1,0 +1,42 @@
+---
+title: "GET 读取消息事件"
+description: "读取指定消息对应的已持久化事件。"
+slug: /api/http/message-events/
+method: GET
+path: "/api/sessions/{session_id}/messages/{message_id}/events"
+---
+
+# GET `/api/sessions/{session_id}/messages/{message_id}/events`
+
+## 用途与时机
+
+需要补读指定消息的事件或分页查看较长执行记录时调用；实时 turn 应使用 WebSocket 订阅。
+
+## 前置条件
+
+有效 `dt_token`，且有该会话和消息的读取权。
+
+## 请求
+
+**GET `/api/sessions/{session_id}/messages/{message_id}/events`**
+
+| 参数 | 默认 | 约束 |
+| --- | --- | --- |
+| `session_id`、`message_id`（path） | — | 从已授权会话详情获得 |
+| `after_seq`（query） | `0` | 非负；只取更大序号 |
+| `limit`（query） | `500` | `1`～`1000` |
+
+```bash
+curl --fail-with-body "$BASE_URL/api/sessions/$SESSION_ID/messages/$MESSAGE_ID/events?after_seq=18&limit=500" \
+  -H "Authorization: Bearer $DT_TOKEN"
+```
+
+## 响应
+
+`200` JSON 包含 `session_id`、整数 `message_id`、`turn_id`（消息没有关联 turn 时为 `null`）、`events`、`total`、`last_seq`、`next_seq` 和 `complete`。`next_seq` 为 `null` 表示当前已经读完；否则用它作为下一页的 `after_seq`。逐条处理事件并按 `(turn_id, seq)` 去重，不要假设所有事件都在一页。
+
+## 错误与恢复
+
+`404` 消息不存在或不可见；`422` 修正游标／页大小。传输中断时保留最后已处理 `seq`，勿从头重复展示。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

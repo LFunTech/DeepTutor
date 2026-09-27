@@ -326,6 +326,7 @@ class OmsAttemptLedger:
                     "AND sl.service_id=%s AND sl.unit_code=%s AND sl.provider_id=%s "
                     "AND sl.provider_account_id=%s AND sl.pool_id=%s AND sl.status='active' "
                     "AND sl.hard_ceiling IS NOT NULL AND sl.starts_at<=now() "
+                    "AND sl.supply_basis='native_units' AND sl.verified_at IS NOT NULL "
                     "AND sl.expires_at>now() "
                     "ORDER BY CASE WHEN g.acquisition_method='gift' THEN 0 ELSE 1 END,"
                     "g.expires_at,g.created_at,g.id,sl.expires_at,sl.id "

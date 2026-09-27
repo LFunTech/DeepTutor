@@ -1,0 +1,42 @@
+---
+title: "submit_user_reply · 回答暂停中的提问"
+description: "WebSocket 命令 submit_user_reply 的请求、响应与恢复"
+slug: /api/ws/submit_user_reply/
+command: submit_user_reply
+---
+
+# submit_user_reply
+
+## 用途与时机
+
+收到流事件 `wait_for_input` 后，把用户对该问题的回复送回**同一个** turn。
+
+## 前置条件
+
+目标 turn 正在等待用户输入；回答来自用户而非 Agent 擅自编造。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"submit_user_reply"`。
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `turn_id` | 是 | 正在等待的 turn |
+| `command_id` | 是 | 非空确认关联 ID，重试保持不变 |
+| `text` | 与 `answers` 二选一 | 自由文本回复，可为空字符串 |
+| `answers` | 与 `text` 二选一 | 数组项含非空 `questionId`、`text` |
+
+<!-- ws-command -->
+```json
+{"type":"submit_user_reply","protocol_version":"2.0","turn_id":"turn-001","command_id":"reply-001","text":"请继续"}
+```
+
+## 响应与事件
+
+`command_ack` 标明 `accepted`；接受后继续等待该 turn 的流事件。`command_id` 与确认对应，不等同于启动用的 `operation_id`。
+
+## 错误与恢复
+
+`accepted:false` 且 `turn_not_waiting_input` 表示当前并非等待状态；先查询/恢复原 turn，不要新建 turn 替代回复。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

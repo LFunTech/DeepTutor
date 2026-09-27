@@ -10,6 +10,7 @@
     "build:tms": "npm run build --workspace @deeptutor/tms-prototype",
     "typecheck:oms": "npm run typecheck --workspace @deeptutor/oms-prototype",
     "typecheck:tms": "npm run typecheck --workspace @deeptutor/tms-prototype",
+    "check:provider-snapshot": "../../../.venv/bin/python scripts/generate-provider-descriptors.py --check",
     "lint": "eslint apps packages tests",
     "test": "vitest run"
   },

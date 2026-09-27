@@ -1,0 +1,45 @@
+---
+title: 认证与安全
+description: 用户代表关系与权限边界
+slug: /auth-and-security/
+---
+
+# 认证与安全
+
+## 身份链与职责
+
+第三方 Agent **代表用户**：EduPlus2 用户登录态 → 受信任的前置应用获取 user JWT → `POST /api/v1/auth/eduplus2/exchange` → 智能体基座验签、解析 client／应用／学校绑定并签发短期 `dt_token` → 以该 token 访问受权的 HTTP／WS 业务接口。一个技术 `tenant` 对应一所学校；`school_code` 不是稳定的 `tenant_id`，也不是凭证。前置应用负责在打开、刷新及必要的周期窗口内确认外部用户仍可访问。基座在换票、WS 刷新和受保护操作时再次执行自己的信任边界检查。
+
+| 凭证或标识 | 用途 | 不可误用为 |
+| --- | --- | --- |
+| EduPlus2 user JWT | 仅用于身份交换，或作为同一用户的 WS `auth_refresh.external_token` | 基座业务 API 的通用 bearer、Agent M2M 凭证 |
+| `dt_token` | 当前用户的短期基座 bearer；HTTP 用 `Authorization`，WS 可用请求头或浏览器子协议 | 长期 API key、跨学校或跨用户 token |
+| `X-Request-ID` | 可选的诊断关联 ID | 身份证明、权限放行条件 |
+| `tenant_id`／`school_code`／`session_id` | 服务端签发或归属检查后的范围／资源标识 | 授权凭证、可自行切换的学校作用域 |
+
+当前未向第三方 Agent 提供独立 client-credentials、跨用户代理或通过 `tenant_id` 切换学校的能力。账号开通不由普通 Agent 处理。
+
+## 载体、Origin 与 CSRF
+
+- HTTP Bearer：`Authorization: Bearer <dt_token>`。`exchange` 的同一位置则是 **EduPlus2 user JWT**。
+- 服务端 WS：`Authorization: Bearer <dt_token>`，并发送已允许的 `Origin`。**每个 WS 握手都需要允许的 Origin**，不是只有浏览器才需要。
+- 浏览器 WS：`new WebSocket(url, ['deeptutor-token', dtToken])`；浏览器自动发送自己的 Origin。服务端只协商 `deeptutor-token`。网关必须避免记录完整子协议头。
+- Query token 不被接受。不要把 token 放在 URL、日志、源代码、持久化浏览器存储或异常消息中。
+- 第三方 BFF 应使用 Bearer；不要依赖浏览器 Cookie 传递 Agent 凭证。
+
+`exchange` 虽无需已有基座令牌，仍必须有有效的外部用户 JWT。完整请求条件见 [HTTP API 目录](http-api.mdx)。
+
+## 最小权限与资源归属
+
+会话、消息、对象资源按当前用户与学校归属校验；仅知道 `session_id` 或文件 URL 不产生读取权。生产部署的 WS turn 不接受直接 `attachments` 字节／URL，上传后应传服务端签发且已完成的 `resource_ids`；引用还会验证用途和会话范围。未知资源、跨学校引用和客户端自报学校应被拒绝，而不是尝试“降级”成匿名调用。
+
+## 到期与刷新
+
+使用 `exchange` 响应的 `expires_at` 安排刷新，不要等请求失败后并发重放旧 JWT。前置应用先取得**新的** EduPlus2 user JWT；已有 WS 可发送 `auth_refresh`，携带新的 `external_token`，或携带已由同一用户重新交换得到的 `dt_token`。刷新后必须保持同一用户及其授权范围。成功收到 `auth_ack` 的 `expires_at`、`refresh_deadline`；失败可能返回 `auth_revoked` 并以 1008 关闭，此时重新完成合法身份交换，再按 `turn_id`＋`seq` 恢复。不要依赖服务端一定提前发出 `auth_expiring`，客户端应自行按过期时间调度。
+
+<!-- ws-command -->
+```json
+{"type":"auth_refresh","protocol_version":"2.0","command_id":"refresh-001","external_token":"<新的 EduPlus2 user JWT>"}
+```
+
+同一个 user JWT 的重复 `exchange` 会触发重放拒绝；前置应用应合并并发换票请求。401、403、409、429 与 503 的区分见[错误与排障](errors.mdx)。

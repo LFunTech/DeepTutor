@@ -23,7 +23,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool, PoolClosed, TooManyRequests
 
 from ._ownership import Lease
-from .scope import TenantScope
+from .scope import GlobalScope, TenantScope
 
 T = TypeVar("T")
 
@@ -144,9 +144,10 @@ class _Configuration:
         )
 
     def _scope_values(self, scope):
-        if not isinstance(scope, TenantScope):
+        if not isinstance(scope, (TenantScope, GlobalScope)):
             raise ValueError("trusted scope is required")
-        values = (scope.tenant_id, scope.user_id, self._statement_timeout)
+        tenant_id = scope.tenant_id if isinstance(scope, TenantScope) else ""
+        values = (tenant_id, scope.user_id, self._statement_timeout)
         if self._transaction_timeout_supported:
             return (*values, self._transaction_timeout)
         return values
@@ -199,7 +200,7 @@ class Database(_Configuration):
             raise asyncio.CancelledError()
 
     @asynccontextmanager
-    async def transaction(self, scope: TenantScope):
+    async def transaction(self, scope: TenantScope | GlobalScope):
         values = self._scope_values(scope)
         if self._closing:
             raise PoolClosed("database is closed")
@@ -345,7 +346,7 @@ class SyncDatabase(_Configuration):
                 raise TypeError("SyncDatabase execution_guard must be synchronous")
 
     @contextmanager
-    def transaction(self, scope: TenantScope, *, _operation=None):
+    def transaction(self, scope: TenantScope | GlobalScope, *, _operation=None):
         values = self._scope_values(scope)
         with self._condition:
             if self._closing and _operation is None:
@@ -373,7 +374,7 @@ class SyncDatabase(_Configuration):
                 self._active -= 1
                 self._condition.notify_all()
 
-    async def run(self, scope: TenantScope, operation: Callable[..., T]) -> T:
+    async def run(self, scope: TenantScope | GlobalScope, operation: Callable[..., T]) -> T:
         """一个回调拥有完整事务；取消等回滚完成，不把线程余留 scope 带入。"""
         self._scope_values(scope)
         state = _Operation()

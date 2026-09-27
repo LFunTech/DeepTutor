@@ -6,9 +6,9 @@
 普通运营首先看到业务影响和建议动作，不显示内部主键、RLS、Webhook raw payload 或 provider 原始报错；需要排查时才可展开脱敏技术信息。所有状态/原因/操作文案从后端 descriptor 获取，缺失时统一显示“状态说明缺失，请联系支持”；不在前端硬编码后端 enum 映射。日期、币种、原生单位和时区有清晰标签，已结算与待核对明确分列。
 
 ## 权限与路由
-进入独立 OMS 需 EduPlus2 可信平台主体和 `ops.oms.access`；菜单/按钮按 `ops.tenants.read`、`ops.providers.read/manage`、`ops.credentials.manage`、`ops.supply.read/manage`、`ops.entitlements.read/manage`、`ops.quotas.read/manage`、`ops.usage.read`、`ops.reconciliation.manage`、`ops.cost.read`、`ops.audit.read/export`、`ops.jobs.read` 等具体动作控制。前端显隐不是授权边界：API 再校验相同或更严格的权限与目标范围。无权限时不预取敏感 API，不把上一租户数据残留到下一租户。
+进入独立 OMS 需 EduPlus2 既存 OIDC 可信身份和 DeepTutor 自有 `ops.oms.access`；菜单/按钮按 `ops.tenants.read`、`ops.providers.read/manage`、`ops.credentials.manage`、`ops.supply.read/manage`、`ops.entitlements.read/manage`、`ops.quotas.read/manage`、`ops.usage.read`、`ops.reconciliation.manage`、`ops.cost.read`、`ops.audit.read/export`、`ops.jobs.read`、`ops.permissions.manage` 等具体动作及 `platform`/`school` 范围控制。“审计与治理”按 `add-enterprise-management-authorization` 向高权限主体展示平台人员、角色/动作、平台人员学校操作范围和授权审计；不包含学校账号或首位管理员开通，不编辑 EduPlus2 身份或权限。前端显隐不是授权边界：每个 API 都由 DeepTutor Enterprise 程序按 PG 事实再校验相同或更严格的权限与目标范围；PG role/GRANT/RLS 与 EduPlus2 角色均不代替程序决策。无权限时不预取敏感 API，不把上一租户数据残留到下一租户。
 
-默认平台管理员仅按 EduPlus2 受控权限模板获得必要写权；普通运营员按显式读/动作能力操作，审计员只读被授予的报表和审计；`tenant_admin`/普通用户不可进入 OMS，但原有登录、TMS 与业务管理入口不因某服务额度耗尽受阻。EduPlus2 lifecycle、平台供给、租户额度和配置 readiness 分栏：供给不足/额度耗尽不能渲染成“租户已停用”，待确认/待核对不能渲染成已生效/已结算。
+默认平台管理员仅按 DeepTutor OMS 受控权限模板获得必要写权；普通运营员按显式读/动作能力操作，审计员只读被授予的报表和审计；`tenant_admin`/普通用户不可进入 OMS，但原有登录、TMS 与业务管理入口不因某服务额度耗尽受阻。EduPlus2 lifecycle、平台供给、租户额度和配置 readiness 分栏：供给不足/额度耗尽不能渲染成“租户已停用”，待确认/待核对不能渲染成已生效/已结算。
 
 ## 数据与交互
 仅消费真实企业 OMS API，服务端分页、筛选、排序和导出遵守同一授权与过滤；大明细不全量加载。API 错误显示可操作的重试/联系支持，不把空结果解释为零消耗。待核对显示原因和远端状态；成本只格式化后端已核定数据，不在前端估算。写操作先展示对象、当前/新值、影响时间、原因及二次确认，使用版本/幂等键，处理后回读并显示审计编号。禁止在浏览器持久化 Secret、完整请求正文、provider 原始敏感错误。

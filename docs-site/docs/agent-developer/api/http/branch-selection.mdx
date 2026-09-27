@@ -1,0 +1,43 @@
+---
+title: "PUT 保存会话分支选择"
+description: "保存当前会话的编辑分支选择。"
+slug: /api/http/branch-selection/
+method: PUT
+path: "/api/sessions/{session_id}/branch-selection"
+---
+
+# PUT `/api/sessions/{session_id}/branch-selection`
+
+## 用途与时机
+
+对话消息存在多个编辑分支，用户切换所见分支时调用。
+
+## 前置条件
+
+有效 `dt_token`，有会话修改权；分支 ID 应来自已读取的会话内容。
+
+## 请求
+
+**PUT `/api/sessions/{session_id}/branch-selection`**
+
+| JSON 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `selected_branches` | 否 | 对象：父消息 ID → 选中的子消息整数 ID；默认空对象 |
+
+支持时可加 `If-Match` 版本头。
+
+```bash
+curl --fail-with-body -X PUT "$BASE_URL/api/sessions/$SESSION_ID/branch-selection" \
+  -H "Authorization: Bearer $DT_TOKEN" -H "Content-Type: application/json" \
+  --data '{"selected_branches":{"12":15}}'
+```
+
+## 响应
+
+`200` JSON：`{"selected_branches":{"12":15}}`，即本次保存的选择。
+
+## 错误与恢复
+
+`404` 会话不可见；`400`／`422` 修正格式或版本；发生并发冲突时读取最新分支状态后再提交。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

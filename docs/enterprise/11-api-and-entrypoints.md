@@ -6,7 +6,7 @@ A1/A2 保留现有入口/产品协议并替换固定 tenant 的 PG/S3/scratch，
 
 ### 当前实现状态（2026-09-17）
 
-已实现并归档的 API-only 联邦访问切片包括：
+已实现并归档的 API-only 联邦访问切片包括（开发态独立 OMS/TMS 原型不在此列）：
 
 - `POST /api/v1/auth/eduplus2/exchange`：EduPlus2 user JWT → DeepTutor 短期 `dt_token`。
 - `POST /api/v1/auth/eduplus2/revocations`：可选签名 revocation 事件入口；不是实时撤权 SLA gate。
@@ -14,7 +14,7 @@ A1/A2 保留现有入口/产品协议并替换固定 tenant 的 PG/S3/scratch，
 - `GET /api/v1/enterprise/audit/eduplus2/events` 与 `POST /api/v1/enterprise/audit/eduplus2/exports`。
 - 独立页面 `/enterprise/audit/eduplus2`，不依赖 `/tms` 或 `/oms`。
 
-P1 前置应用联调 contract、错误矩阵、配置矩阵和 smoke 命令见 [EduPlus2 前置应用接入联调契约](eduplus2-fronting-app-integration-contract.md)。仍未实现：`/tms`、`/oms`、TMS/OMS Handoff/OIDC callback、在线 client 注册治理页面，以及 `/api/v1/tms/*`、`/api/v1/oms/*` 的完整管理闭环。前置应用负责打开/refresh/周期合法性校验；当前 repo 只处理自身 token/session/owner/resource guard 与审计。
+P1 前置应用联调 contract、错误矩阵、配置矩阵和 smoke 命令见 [EduPlus2 前置应用接入联调契约](eduplus2-fronting-app-integration-contract.md)。云端 OMS/TMS 已有**独立开发态前端原型**，但真实 `/tms`、`/oms` 管理入口、Handoff/OIDC callback、在线 client 注册治理及 `/api/v1/tms/*`、`/api/v1/oms/*` 的完整管理闭环仍未交付；DeepTutor 本地 Web 同名占位页不是生产管理入口。前置应用负责打开/refresh/周期合法性校验；当前联邦切片只处理自身 token/session/owner/resource guard 与审计。
 
 ## 企业应用外壳与核心入口
 
@@ -66,7 +66,7 @@ DeepTutor 当前主要入口：
 所有受保护 router 当前通过 `Depends(require_auth)` 安装用户上下文。需要确保：
 
 - `require_auth()` 解码 DeepTutor `dt_token` 后恢复 `tenant_id/eui/eit`。
-- 管理类 API 不再统一使用旧 `require_admin()`，而是拆成 platform / tenant 管理权限。
+- 管理类 API 不再统一使用旧 `require_admin()`，而是统一调用 DeepTutor Enterprise 程序授权服务，按企业 PG 保存的 `ops.*`/`tenant.*`、`platform`/当前 `school` 及撤权版本逐动作鉴权；PG 数据库权限/RLS 仅作兜底，EduPlus2 只供认证与身份识别，不参与本产品动作授权。
 - 数据库调用统一使用 tenant/owner-scoped PG Store，默认入口也不保留 SQLite 模式；`get_current_path_service()` 不得产生数据库权威，企业仅用于受控 scratch/只读资源，其余文件载荷按对应资源契约处理。
 - `POST /api/v1/auth/eduplus2/exchange` 是特殊认证交换入口：它不要求已有 `dt_token`，但必须要求 EduPlus2 user JWT、active client/app registration、租户状态和审计写入；失败必须 fail closed。
 
@@ -188,7 +188,7 @@ deeptutor eduplus2 sync --tenant <tid>
 deeptutor eduplus2 tenant list
 ```
 
-阶段一不依赖这些命令；阶段二必须提供受保护管理 API 和可审计运维入口用于开通/绑定/停用/配额，不手工改库，也不等阶段三 UI。上面命令为拟定接口，不是当前可执行命令。
+阶段一不依赖这些命令；阶段二必须提供受保护管理 API 和可审计运维入口。学校 lifecycle 开停只接收 EduPlus2 权威 webhook；学校服务授权与额度仅由 OMS 获授权入口维护，TMS 只读额度清单，不手工改库。上面命令为拟定接口，不是当前可执行命令，也不得成为 lifecycle 或 OMS 权益的旁路写入口。
 
 ## Plugin API
 
@@ -202,7 +202,7 @@ deeptutor eduplus2 tenant list
 
 1. 所有入口都必须先 auth，再解析 path/resource。
 2. 不允许 query/body 中的 `tenant_id` 覆盖 token 中 tenant。
-3. 管理接口区分 `platform_admin` 与 `tenant_admin`。
+3. 管理接口区分 OMS `ops.*` 与 TMS `tenant.*` 的具体动作、范围和版本；`platform_admin`/`tenant_admin` 名称或 JWT `eit=adm` 不直接授权。
 4. WebSocket token 过期时不得接受新 turn；应优先走 `auth_expiring` / `auth_refresh` 静默刷新，失败再关闭连接或要求重连恢复。
 5. 第三方传入的 EduPlus2 JWT 只用于换票和校验，不在 DeepTutor 日志、审计、前端存储中保留原文。
 6. 错误响应不泄露路径、secret、token、signature。
@@ -213,14 +213,16 @@ deeptutor eduplus2 tenant list
 
 | 管理域 | 页面入口 | 专属管理 API | 范围与交付 |
 | --- | --- | --- | --- |
-| TMS（Tenant Management System，租户管理系统） | `/tms`、`/tms/*` | `/api/v1/tms/*`，例如 `/api/v1/tms/kbs` | 当前可信租户；M1 复用既有管理功能服务固定租户，B2 完成多租户自管理适配 |
-| OMS（Operations Management System，平台运营管理系统） | `/oms`、`/oms/*` | `/api/v1/oms/*`，例如 `/api/v1/oms/tenants`、`/api/v1/oms/tenants/{tenant_id}` | 平台获授权范围；B2 先提供治理 API，C1/C2 再交付运营界面 |
+| TMS（学校智能体管理后台） | 独立云端前端 `/tms`、`/tms/*`；学校路径含 `school_code` | `/api/v1/tms/*`，例如 `/api/v1/tms/kbs` | 当前可信学校及显式 TMS `tenant.*` 授权；B2 完成自管理适配，OMS 服务授权和额度只读 |
+| OMS（平台运营管理后台） | 独立云端前端 `/oms`、`/oms/*` | `/api/v1/oms/*`，例如 `/api/v1/oms/tenants`、`/api/v1/oms/tenants/{tenant_id}` | 平台获授权范围；B2 可先提供可信权限与必要治理数据面，C1/C2 交付资源/Provider/供给/权益/用量工作流 |
 
-1. **术语与权限分离**：本方案 OMS 指平台运营，不指订单管理。URL 改名不修改 `tenant_admin`、`platform_admin/platform_operator/platform_auditor` 或 `tenant.*`、`ops.*` 能力 key；页面与后端继续按同一具体能力鉴权，不根据路径名自动授予角色。
-2. **TMS 锁定当前租户**：租户来自可信身份 scope，不接受 query/body/header 覆盖。M1 仍使用受保护本地身份和固定内部租户，不提前引入 EduPlus2 或平台运营能力；B1/B2 的 TMS 首先做成单租户管理视图，只能管理与当前 TMS 绑定的 `external_tenant_id` 完全一致的 client/app；B2 使用 `tenant_admin` 及获具体能力的自定义角色。首页按已有授权显示可用管理模块，不要求所有角色都具备 KB 管理能力。
-3. **OMS 显式目标范围**：租户 ID 出现在运营路由时，必须先校验平台具体能力，再验证并绑定目标租户；列表只返回获授权管理元数据。OMS 只读查询已归口的 EduPlus2 client；写入在 TMS 或其他独立获授权流程，不由 OMS 自动注册。普通业务 API 不获得任意 tenant override，租户管理员不能因路径改名访问运营 API。
+1. **术语与权限分离**：教育业务文案统一称“学校”；技术契约保留 `tenant_id`、`tenant.*` 等名称，EduPlus2 `school_code` 即学校租户代码，**不是**稳定学校 ID 或授权凭据。URL 不自动授予 `tenant.*`/`ops.*` 权限，菜单、动作与 API 校验相同具体能力。
+2. **TMS 锁定当前学校**：学校来自外部权威核验的身份 scope，且当前主体须由 DeepTutor Enterprise 程序按 PG 事实获准 `tenant.*` 动作/本校范围；首次登录默认零权。首位学校管理员仅由签名真实 `subscription.created.actor.user_id` 一次性登记并在本人登录匹配后由 Enterprise 程序激活，之后由该校 TMS 自主管理；缺真实事件/身份匹配则写入口关闭。`school_code` 深链必须与已认证学校 ID/code 绑定核对，不能由 query/body/header 覆盖。M1 固定学校能力须在实际受保护入口验收；B1/B2 的独立 TMS 只管理当前学校绑定的 client/app、用户与实例，学校服务授权和配额只读。首页按已有授权显示模块，不要求所有角色具备 KB 管理能力。
+3. **OMS 显式目标范围**：目标学校 ID 出现在运营路由时，先验证 EduPlus2 既存可信身份与账号在线状态，再由 DeepTutor Enterprise 程序按 PG 事实校验当前 `ops.*` 动作、经核验的目标学校范围和撤权版本；列表只返回获授权管理元数据。OMS 唯一维护平台资源、全服务 Provider/Secret 引用、服务供给、学校服务授权及额度，以及本产品 OMS 应用角色/目标学校授权；OMS 不列出或管理任何学校账号，首位 TMS 管理员也只能在学校侧开通；EduPlus2 学校 lifecycle 和 TMS client/app 注册仍只读。普通业务 API 不获得任意 tenant override，学校管理员不能因路径改名访问运营 API。未具备既存外部接口和本地权限迁移时写路由关闭，不修改 EduPlus2。
 4. **专属管理前缀，不迁移全部 API**：仅租户/运营专属管理接口采用 TMS/OMS 前缀；聊天、资源等通用业务 API、`/api/v1/ws`、`/api/v1/auth/eduplus2/exchange` 和 `/api/v1/eduplus2/*` 保持各自契约。共用业务服务不等于共用全局放行依赖。
-5. **源码基线与目标入口分开**：`web/app/(admin)/admin` 是现有源码位置，复用其页面/组件后由企业前端路由组合接入 `/tms`，不把该源码引用改写为已经存在的 `tms` 目录。企业目标入口不再使用 `/admin`、`/ops` 及旧管理 API 前缀；不默认增加旧 URL 重定向，原生未适配路由不得作为旁路暴露。默认应用也必须使用 PG；本次取消 SQLite 不自动改变非企业管理页面 URL，页面改名仍按各自入口契约实施。
+5. **源码基线与部署分开**：`web/app/(admin)/admin` 是 DeepTutor 本地 Web 的源码参考，不是云端 TMS 生产壳。OMS、TMS 在 `extensions/enterprise/frontends/apps/{oms,tms}` 独立构建/部署，只复用同仓管理设计系统和安全业务组件；`web/app/{oms,tms}` 占位不暴露正式管理能力，原型生产路径返回 404。企业云端不开放旧 `/settings` 平台管理页或写 API 旁路，本地 Web 的设置功能保持。管理 URL/Ingress、API client、身份与权限仍须随正式实施提案验收。
+
+正式权限 API 目标另含 OMS `/me/permissions`、`/principals`、`/roles`、`/school-grants`（仅平台人员操作范围）、`/authz-audit` 与 TMS `/me/permissions`、`/school-activation-requests`、`/members`、`/roles`、`/access-grants`、`/authz-audit`；具体方法/DTO 由待批准的 [`add-enterprise-management-authorization`](../../openspec/changes/add-enterprise-management-authorization/proposal.md) 实施时固定。两端会话、API client、安全 DTO 独立；权限摘要只驱动 UI，服务端逐次复验。
 
 后续实施须同步企业路由注册、菜单/按钮链接、工作台跳转目标、前端 API client、Ingress 路由规则及 smoke/权限负例，不能只改页面标题。完整权限/菜单矩阵见 [12](12-platform-operations-admin.md)。
 

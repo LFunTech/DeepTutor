@@ -1,0 +1,42 @@
+---
+title: "POST 语音转文字"
+description: "调用已配置语音服务转写音频。"
+slug: /api/http/stt/
+method: POST
+path: "/api/voice/stt"
+---
+
+# POST `/api/voice/stt`
+
+## 用途与时机
+
+用户提交音频并要求转写时调用；不是长连接流式识别接口。
+
+## 前置条件
+
+有效 `dt_token`；用户已同意上传音频。
+
+## 请求
+
+**POST `/api/voice/stt`**
+
+| multipart 字段 | 必填 | 约束 |
+| --- | --- | --- |
+| `file` | 是 | 非空音频文件，最大 25 MiB |
+| `language` | 否 | 可选语言提示，按部署支持值传入 |
+
+```bash
+curl --fail-with-body -X POST "$BASE_URL/api/voice/stt" \
+  -H "Authorization: Bearer $DT_TOKEN" \
+  -F "file=@speech.webm" -F "language=zh"
+```
+
+## 响应
+
+`200` JSON：`{"text":"转写后的文本"}`。文本可能需要用户确认，不能直接当作已授权的新命令执行。
+
+## 错误与恢复
+
+`400` 空文件或配置问题；`413` 超过 25 MiB，缩短音频后再传；`502` 语音服务故障，可有限退避。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

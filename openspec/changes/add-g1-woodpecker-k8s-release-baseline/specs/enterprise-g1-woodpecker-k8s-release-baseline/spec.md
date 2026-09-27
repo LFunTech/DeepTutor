@@ -4,6 +4,26 @@
 
 ## ADDED Requirements
 
+### Requirement: test-cn 第三方 Agent 文档必须独立构建并经现有 Ingress 发布
+
+系统 SHALL 仅在 `test-cn` 受保护发布分支，从同一受信提交独立构建 `docs-site/`，使文档构建节点与 `compile-frontend-test-cn` 并行，并将文档镜像推送至 test-cn 环境仓库。部署前 MUST 锁定文档镜像 digest，缺失、格式错误或跨环境 digest MUST 阻断部署。文档 Deployment/Service MUST 与 runtime 分离；现有 test-cn TLS host 的 Ingress MUST 将 `/docs` Prefix 路由至文档服务，并保留 `/` 到 runtime 的路由。pre/prod 不得因 test-cn 发布而新增文档路由。发布后 MUST 经真实 HTTPS 校验 `/docs/` 首页及其引用的静态资源，并将脱敏结果与 digest 留入 release evidence。
+
+#### Scenario: test-cn 文档与前端并行构建
+- **WHEN** 受保护 `deploy/test-cn/*` tag 通过发布门禁
+- **THEN** 文档和主前端构建节点均在 `prepare-release-metadata` 后可运行，文档镜像按 test-cn 仓库推送，部署阶段仅使用 `docs@sha256:<digest>`
+
+#### Scenario: 文档构建失败或 digest 错配
+- **WHEN** 文档构建/推送失败、registry 未返回 digest、或 digest 不属于 test-cn 文档仓库
+- **THEN** test-cn 不进入 K8s 部署，不能以 mutable tag、旧镜像或 runtime 镜像替代
+
+#### Scenario: test-cn 经真实 HTTPS 访问文档
+- **WHEN** 文档 Deployment rollout 完成
+- **THEN** `https://<test-cn-host>/docs/` 和首页引用的静态资源可达，`/` 仍路由 runtime；检查失败则发布失败并记录脱敏证据
+
+#### Scenario: 其他环境保持原路由
+- **WHEN** 发布目标为 pre 或任一 prod 环境
+- **THEN** 只渲染原有 `/` runtime Ingress，不要求文档 digest，也不创建文档 Deployment/Service
+
 
 ### Requirement: 发布流水线必须维护环境 registry 并从 deployment tag 解析目标环境
 

@@ -1,0 +1,122 @@
+[
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/eduplus2/exchange",
+    "audience": "agent",
+    "credential": "eduplus2_user_jwt",
+    "summary": "把已验证的 EduPlus2 用户 JWT 交换为短期 dt_token。",
+    "doc": "api/http/exchange"
+  },
+  {
+    "method": "GET",
+    "path": "/api/settings/ui",
+    "audience": "agent",
+    "credential": "none",
+    "summary": "读取登录前也需要的界面语言和主题设置。",
+    "doc": "api/http/ui-settings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "列出当前用户可见的会话。",
+    "doc": "api/http/list-sessions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "读取当前用户有权访问的会话详情。",
+    "doc": "api/http/get-session"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/sessions/{session_id}",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "修改当前用户会话标题等允许字段。",
+    "doc": "api/http/rename-session"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/sessions/{session_id}",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "删除当前用户有权操作的会话。",
+    "doc": "api/http/delete-session"
+  },
+  {
+    "method": "GET",
+    "path": "/api/sessions/{session_id}/messages/{message_id}/events",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "读取指定消息对应的已持久化事件。",
+    "doc": "api/http/message-events"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/sessions/{session_id}/organization",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "更新会话的组织和归档元数据。",
+    "doc": "api/http/update-organization"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/sessions/{session_id}/branch-selection",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "保存当前会话的编辑分支选择。",
+    "doc": "api/http/branch-selection"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/sessions/{session_id}/messages/{message_id}",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "删除当前会话中有权操作的消息。",
+    "doc": "api/http/delete-message"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/resources/upload-intents",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "创建受授权的对象资源上传意向。",
+    "doc": "api/http/upload-intent"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/resources/upload-intents/{resource_id}/complete",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "确认对象上传完成并取得稳定 resource_id。",
+    "doc": "api/http/complete-upload"
+  },
+  {
+    "method": "GET",
+    "path": "/files/resources/{resource_kind}/{resource_id}/{object_id}/{filename:path}",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "按当前用户资源权限读取对象文件。",
+    "doc": "api/http/read-resource"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice/tts",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "调用已配置语音服务把文本合成为音频。",
+    "doc": "api/http/tts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/voice/stt",
+    "audience": "agent",
+    "credential": "dt_token",
+    "summary": "调用已配置语音服务转写音频。",
+    "doc": "api/http/stt"
+  }
+]

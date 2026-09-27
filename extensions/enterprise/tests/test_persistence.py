@@ -30,12 +30,22 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "0002_profile_permission_snapshots",
     "0003_revocation_state",
     "0004_audit_export_jobs",
+    "0005_lifecycle_inbox",
     "oms/0001_ledger_base",
     "oms/0002_grant_source",
     "oms/0003_grant_command_idempotency",
     "oms/0004_attempt_lifecycle",
     "oms/0005_command_result_summary",
     "oms/0006_append_only_facts",
+    "oms/0007_supply_evidence",
+    "oms/0008_quota_expiry",
+    "oms/0009_entitlement_commands",
+    "oms/0010_quota_adjustment",
+    "oms/0011_school_binding",
+    "oms/0012_school_binding_version_guard",
+    "management/0001_authorization_base",
+    "management/0002_approval_delegation_guards",
+    "management/0003_assignment_school_binding_version",
 ]
 
 
@@ -70,7 +80,9 @@ async def test_migrations_repeat_concurrent_and_runtime_ddl(pg_dsn):
     async with pool:
         scope = module("scope").TenantScope(str(uuid.uuid4()), "u1")
         async with pool.transaction(scope) as c:
-            assert (await (await c.execute("SELECT current_user AS user")).fetchone())["user"].startswith("owner_")
+            assert (await (await c.execute("SELECT current_user AS user")).fetchone())[
+                "user"
+            ].startswith("owner_")
 
 
 async def test_eduplus2_extension_catalog_drift_blocks_verify(pg_dsn):
@@ -81,6 +93,52 @@ async def test_eduplus2_extension_catalog_drift_blocks_verify(pg_dsn):
         await runner.verify()
     with pytest.raises(RuntimeError, match="eduplus2 schema drift"):
         await runner.apply()
+
+
+async def test_lifecycle_migration_failure_rolls_back_inbox_and_history(pg_dsn):
+    runner_type = module("migrations.runner").MigrationRunner
+
+    class FailingRunner(runner_type):
+        def _extension_migrations(self):
+            return super()._extension_migrations() + [
+                ("0006_forced_failure", "SELECT 1/0;")
+            ]
+
+    with pytest.raises(psycopg.errors.DivisionByZero):
+        await FailingRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        inbox = await (
+            await c.execute("SELECT to_regclass('eduplus2.lifecycle_inbox')")
+        ).fetchone()
+        history = await (
+            await c.execute("SELECT to_regclass('eduplus2.schema_history')")
+        ).fetchone()
+    assert inbox == (None,)
+    assert history == (None,)
+    await runner_type(pg_dsn).apply()
+    await runner_type(pg_dsn).verify()
+
+
+async def test_lifecycle_due_proof_has_expiry_index(pg_dsn):
+    runner = module("migrations.runner").MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        indexes = await (
+            await c.execute(
+                "SELECT indexname FROM pg_indexes WHERE schemaname='eduplus2' "
+                "AND tablename='lifecycle_targets'"
+            )
+        ).fetchall()
+    assert ("eduplus2_lifecycle_targets_expiry",) in indexes
+
+
+async def test_lifecycle_index_drift_blocks_verify(pg_dsn):
+    runner = module("migrations.runner").MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("DROP INDEX eduplus2.eduplus2_lifecycle_targets_expiry")
+    with pytest.raises(RuntimeError, match="lifecycle indexes"):
+        await runner.verify()
 
 
 async def test_drift_blocks_start(pg_dsn):
@@ -97,9 +155,7 @@ async def test_scope_reuse_cancel_rollback_and_missing_scope(pg_dsn):
     await migrated(pg_dsn)
     mod = module("stores.postgres.connection")
     Scope = module("scope").TenantScope
-    async with mod.Database(
-        single_database_user_dsn(pg_dsn), resource="test", max_size=1
-    ) as db:
+    async with mod.Database(single_database_user_dsn(pg_dsn), resource="test", max_size=1) as db:
         a, b = Scope(str(uuid.uuid4()), "same-user"), Scope(str(uuid.uuid4()), "same-user")
 
         async def settings(scope):
@@ -171,9 +227,7 @@ async def test_real_catalog_drift_blocks_verify_even_when_history_unchanged(pg_d
 
 async def test_verify_catalog_works_without_migration_privileges(pg_dsn):
     await migrated(pg_dsn)
-    runner = module("migrations.runner").MigrationRunner(
-        single_database_user_dsn(pg_dsn)
-    )
+    runner = module("migrations.runner").MigrationRunner(single_database_user_dsn(pg_dsn))
     await runner.verify()
 
 
@@ -346,9 +400,9 @@ async def test_runtime_rejects_privileged_session_user_hidden_by_startup_role(pg
     safe_role = "safe_" + uuid.uuid4().hex
     async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
         await c.execute(
-            psycopg.sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS").format(
-                psycopg.sql.Identifier(safe_role)
-            )
+            psycopg.sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+            ).format(psycopg.sql.Identifier(safe_role))
         )
     dsn = psycopg.conninfo.make_conninfo(pg_dsn, options=f"-c role={safe_role}")
     with pytest.raises(RuntimeError, match="restricted"):

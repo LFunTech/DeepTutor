@@ -1,0 +1,43 @@
+---
+title: "POST 文本转语音"
+description: "调用已配置语音服务把文本合成为音频。"
+slug: /api/http/tts/
+method: POST
+path: "/api/voice/tts"
+---
+
+# POST `/api/voice/tts`
+
+## 用途与时机
+
+需要把用户可见的文本转换为音频时调用；可用性取决于部署的语音配置。
+
+## 前置条件
+
+有效 `dt_token`；请求文本已获得用户授权。
+
+## 请求
+
+**POST `/api/voice/tts`**
+
+| JSON 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `text` | 是 | 非空文本 |
+| `voice` | 否 | 可选音色名称，按部署支持值传入 |
+| `format` | 否 | 可选输出格式，按部署支持值传入 |
+
+```bash
+curl --fail-with-body -X POST "$BASE_URL/api/voice/tts" \
+  -H "Authorization: Bearer $DT_TOKEN" -H "Content-Type: application/json" \
+  --data '{"text":"你好"}' -o speech.bin
+```
+
+## 响应
+
+`200` 返回音频**字节**，以响应 `Content-Type` 判断实际格式；不要按 JSON 解析。响应不应长期缓存。
+
+## 错误与恢复
+
+`400` 语音功能未配置或参数不合法；`422` 请求字段错误；`502` 语音服务故障。对 `502` 有上限退避，避免重复消耗配额。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

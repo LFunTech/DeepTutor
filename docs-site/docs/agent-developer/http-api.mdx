@@ -1,0 +1,21 @@
+---
+title: HTTP API 目录
+description: 第三方 Agent 可调用的 HTTP 接口索引
+slug: /http-api/
+---
+
+import EnterpriseApiTable from '@site/src/components/EnterpriseApiTable';
+
+# HTTP API 目录
+
+此处仅记录第三方 Agent 可使用的 **15 个 HTTP 接口**，涵盖用户身份交换、会话、资源与语音。每个接口均有独立参考页面，说明请求、响应与错误处理。
+
+<EnterpriseApiTable />
+
+## 调用顺序
+
+1. 代表已验证用户调用 [身份交换](api/http/exchange.mdx)，取得短期 `dt_token`。
+2. 可选：按[对话能力选择](capability-selection.mdx)填写部署方提供的受权知识库／Skill ID；当前没有第三方选项发现接口。有附件时先 [创建上传意向](api/http/upload-intent.mdx)，上传字节，再 [确认完成](api/http/complete-upload.mdx)。
+3. 使用 [WebSocket 入口](websocket-protocol.mdx)发起和恢复 turn；会话 HTTP 接口用于读取与管理，不用于创建 turn。
+
+所有需 `dt_token` 的请求均应在当前用户授权范围内进行。仅知道路径或资源 ID 不构成授权。通用规则见 [认证与安全](auth-and-security.mdx)。

@@ -1,0 +1,46 @@
+---
+title: "PATCH 更新会话组织信息"
+description: "更新会话的组织和归档元数据。"
+slug: /api/http/update-organization/
+method: PATCH
+path: "/api/sessions/{session_id}/organization"
+---
+
+# PATCH `/api/sessions/{session_id}/organization`
+
+## 用途与时机
+
+用户整理或归档已有会话时调用。只提交需要改变的字段。
+
+## 前置条件
+
+有效 `dt_token`，有会话修改权。
+
+## 请求
+
+**PATCH `/api/sessions/{session_id}/organization`**
+
+| JSON 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `course_id` | string／null | 课程关联，空值清除 |
+| `parent_session_id` | string／null | 父会话，不能为自身 |
+| `session_kind` | `chat`／`selection_tutor`／`immersive_reading`／null | 会话类型 |
+| `pinned`、`archived` | boolean／null | 置顶与归档 |
+
+`If-Match` 可用于部署支持的版本控制。
+
+```bash
+curl --fail-with-body -X PATCH "$BASE_URL/api/sessions/$SESSION_ID/organization" \
+  -H "Authorization: Bearer $DT_TOKEN" -H "Content-Type: application/json" \
+  --data '{"archived":true}'
+```
+
+## 响应
+
+`200` JSON：`{"session":{…}}`，返回更新后的会话。字段是否允许修改还取决于当前部署策略。
+
+## 错误与恢复
+
+`400` 父子关系不合法；`404` 会话／引用不存在或不可见；并发冲突时先读取最新会话，再按用户意图重新提交。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

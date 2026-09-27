@@ -26,3 +26,43 @@ Woodpecker 已新增仅 `tag` 事件可用的仓库 Secret `dt_test_cn_eduplus2_
 ## 正式生命周期仍缺
 
 发送端当前 `SubscriptionWebhookRequest` 有 `event_id`/时间戳/订阅状态，但未见可比较的单调订阅版本；此前暂拟的 `tenant.enabled|suspended|resumed` 不是现行发送事件。需与 EduPlus2 确认 `subscription.*` 对目标租户资格的映射、应用绑定、版本/乱序、权威快照与恢复时序，再新增 PG inbox/状态版本迁移、真实事件事务处理与全入口准入。无版本时不能按到达顺序猜测。mock 接收不改变 OMS 4.1 未完成状态。
+
+## 2026-09-27 test 应用提审前只读核对
+
+- 在 EduPlus2 test 开发者控制台核对 `智能体基座` 应用 51：状态仍为**草稿**；点击“提交审核”只打开前置检查，显示 **8/12 通过**、确认提交禁用。缺少至少一个**已启用应用入口**，Webhook 配置、HTTPS、事件订阅三项因既有 `租户订阅回调` **已禁用**而未通过。应用入口列表当前为空；开发者明确要求将来分别登记 OMS 与 TMS 两个入口。本轮未创建入口、未启用 Webhook、未提交申请或执行运营审批。
+- 唯一配置环境 `DeepTutor test-cn` 的 Base URL 为 `https://llm-agent-test.f123.pub`，环境状态“配置中”、尚无最后验证时间。对该公开 Base URL 做无凭据只读 HTTP 核对：`/tms`、`/oms` 与 `/tms/demo-school` 均为 **404**；`GET /api/v1/eduplus2/webhooks` 为 **405**（该接收器仅支持 POST）。不能将当前不存在的管理路由登记为可用 handoff 入口，也不能为通过提审而启用真实事件仍返回 503 的 Webhook。先交付真实入口/回调和正式事件处理，再配置两入口及激活 Webhook，复核 12/12 后提交并由有权运营人员独立审批。
+
+## 2026-09-27 两条入口草稿登记
+
+- 用户明确接受当前 `/oms`、`/tms` 的 404，要求先登记入口并申请审批；这只豁免入口路由的当前可用性，不代表真实 Webhook 503 已解决。
+- EduPlus2 test 应用 51 已登记两条 **草稿** PC 网页入口：`oms`，名称“平台智能体运营后台”，路径 `/oms`，适配“管理人员”；`tms`，名称“学校智能体管理后台”，路径 `/tms`，适配“教职工、管理人员”。两条描述均声明实际权限由智能体基座校验，未把入口身份类型当作授权凭据。
+- 控制台确认“启用后入口将立即对用户可见”。在用户进一步确认启用与当前 503 风险前，入口仍为草稿，现有 Webhook 仍禁用，应用尚未提交或审批；不能把登记草稿写成正式 handoff 可用。
+
+## 2026-09-27 test 应用已提交审核（非获批）
+
+- 用户在获知入口立即可见及真实事件 503 风险后明确要求继续至成功提交审核。回读控制台时，两条入口 `oms`/`tms` 均显示“已启用”；没有把该状态解释为目标路由已可用。
+- 首次尝试启用 `租户订阅回调` 被控制台拒绝：最后一次 8/8 成功 demo 记录为 `staging`，首次启用必须先在 `production` 环境测试或完成 MQ 预检。为满足 **EduPlus2 测试控制台内部**的审核前置条件，另建“DeepTutor test-cn 提审槽位”（环境类型“生产环境”），描述明确写明实际指向现有 test-cn、非真实生产发布；其 Base URL、API Base URL、OAuth 回调均复用现有 test-cn 测试配置。该槽位没有部署新服务，也不构成生产验收。
+- 在上述槽位对 `https://llm-agent-test.f123.pub/api/v1/eduplus2/webhooks` 再次执行控制台签名 mock demo，显示 **8/8 个事件全部成功**。随后启用既有 Webhook，控制台状态为“活跃”；该验证只覆盖 mock，真实事件仍按当前代码返回可重试 503。控制台提示首次启用后此 Webhook 不能删除；可停止，但不应把启用等同生命周期业务完成。
+- 应用“提交审核前检查”显示 **12/12 通过**。直接提交应用时，控制台要求先创建草稿版本。创建 `v0.1.0`，发布说明明确披露 `/oms`/`/tms` 当前 404、真实事件当前 503、审核槽位非真实生产，然后从该版本执行“提交审核”。控制台显示**“提交审核成功”**，版本状态为**“待审核”**（创建时间 2026-09-27 14:25:16，控制台当地时间）；尚未由运营后台审批或发布，应用页顶部仍显示“草稿”。
+
+## 2026-09-27 首校订阅后的只读数据库核对
+
+- 随后的 EduPlus2 test 运营页面显示应用“已通过”，一所学校授权状态“已启用”。授权操作结果为**部分成功**：订阅创建/恢复、OAuth Client、两条入口权限初始化、生命周期事件发布到 RabbitMQ 成功，但 Webhook 回调收到 **HTTP 503 `Lifecycle receiver unavailable`**。此处不记录学校名、外部 ID、OAuth Client ID、请求体或签名，也未点击“重试 Webhook”。
+- 对 `deeptutor-test-cn/deeptutor-backend` 所连 PostgreSQL 使用迁移 DSN 开启 **`BEGIN READ ONLY`** 核对；该角色是所查三张表的 owner，RLS 虽启用但未 `FORCE`，因此这些计数不是缺少 tenant GUC 所致的空结果。`enterprise.tenants` 只有 1 行，`external_eligibility=not_required`、`external_tid IS NULL`；`eduplus2.external_client_registrations` 只有 1 行，来源 `env_allowlist`，创建于此次订阅之前。本次订阅时间之后新建/更新的 registration 为 **0**，`eduplus2.audit_events` 为 **0**。全库无名称含 `webhook`、`subscription`、`inbox`、`school` 的业务表；已部署 `eduplus2` schema history 仅至 `0004_audit_export_jobs`。这不是已同步首校的数据库证据。
+- 已部署后端仍为 test-cn runtime digest `sha256:cb8e5eb10f730d010311c0362f8f37a3156c9c2fc786096482f3d04d1bf1de95`，Deployment **1/1 Ready**。现行接收代码只对验签的 mock 返回 204，真实事件明确返回 503，因此 DeepTutor 数据库保持不变是当前 fail-closed 设计的预期结果，**但不满足“订阅学校已在本系统完成接入”的业务目标**。禁止手工补学校/订阅行或将外部“已启用”当作本系统可用。
+
+## 2026-09-27 权威版本与快照门禁复核
+
+已把官方字段、发送端只读实现、本系统 online resolve 与 test PG 证据逐项整理在[外部契约核对](external-contract-audit-2026-09-27.md)。事件无单调订阅版本；online resolve 返回不可排序的快照哈希，停用响应也不提供可绑定的完整快照；现有 check 接口无版本/订阅 ID。故不能按**此前批准的来源版本设计**安全实现乱序处理或对账。当时提出的 DeepTutor-only“持久通知 + 在线当前态核验”草案**在该核对节点尚未获审阅/实施**；此后用户已批准重订版，实施进度见下文。新版任务 1.1 的目标环境既存接口适用性仍未验证。没有修改 EduPlus2、执行 test 数据写入/重试或部署。
+
+本地重新执行 `test_application.py -k signed_webhook_demo_only_checks_delivery_without_state_change`：**1 passed，30 deselected**。该回归仅证明现行 mock 204、伪签名/过期拒绝、真实事件 503、租户状态和撤销表不变，不是正式 lifecycle 验收。
+
+## 2026-09-27 重订版的本地实施进度（非 test 发布）
+
+用户已单独批准重订版实施，仅在 DeepTutor 工作区使用隔离合成数据推进。新增 `eduplus2/0005_lifecycle_inbox.sql`、`lifecycle.py` 及企业组合接线：真实事件的白名单投影、目标应用校验、独立稳定 HMAC 业务摘要、事件 ID 幂等/冲突、事务性 inbox；同一事务使已验证学校旧允许状态失效。`204` 仅表示安全入队，存储失败返回 `503`。mock 不入队。OAuth Secret、原始 body、签名未加入持久字段。接收器运行开关 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED` **默认关闭**；本地合成测试临时启用，不代表 test-cn 已部署或真实事件已被确认。
+
+已增加已验证学校—应用的 online resolve 对账、PG advisory lock 串行、本地 generation/绑定版本栅栏、证明 TTL、未知重试退避、重启与周期扫描，以及无 Webhook 时从既有已验证 registration 发现目标。现有会话及新登录在启用接收器后复核短时证明；原固定租户 `not_required` 且无外部学校绑定的路径仍保持兼容。`created.actor` 仅在学校绑定后落入 `pending_verification` 候选表；**没有**创建 TMS principal、assignment 或激活角色。当前 resolve 不含当前订阅 ID，候选本人可用的既存只读证明尚未核实，故首位管理员激活写入口继续关闭。
+
+本地针对入队、重投/冲突与脱敏告警、Secret 轮换/独立性、过期证明、停用与恢复门禁、在线拒绝/超时/矛盾、重启重试、漏送扫描、并发锁、generation、超量 client、双学校隔离及 actor 待核验编写合成测试。新增 lifecycle 表已启用 `FORCE ROW LEVEL SECURITY`，隔离 PG 中验证 owner 无租户 GUC 不可旁路；版本化迁移的计划、重复执行、schema/index 漂移阻断和失败回滚均有测试。`PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests --tb=short` 完整执行 **451 passed，3 skipped**；随后针对最新补充的入口/双学校用例执行 **4 passed**，相关应用/生命周期/迁移集合 **98 passed，1 skipped**。Ruff、`git diff --check` 与 OpenSpec strict validation 通过。未在目标 test 环境应用迁移、开启正式接收、重投首校事件或读取/写入真实学校业务数据。
+
+**剩余放行门禁**：B1 的正式稳定内部学校绑定及跨校应用授权/运行角色验证（新增 lifecycle 表的 FORCE RLS 不替代 B1 全系统隔离）；当前订阅 ID 的受权只读证明与本人 TMS 引导；所有入口（尤其管理、下载和后台派发）的短时证明与逐服务额度负例；生产所需的候选/收件箱保留清理政策及可观测指标；目标环境只读契约与真实事件 smoke。未完成前本 change 不勾选完成，接收器开关继续关闭，不能把外部学校“已订阅”解释为本产品已接入。

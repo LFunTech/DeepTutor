@@ -1,0 +1,2390 @@
+{
+  "source": "deeptutor.api.routers.settings._provider_choices/_connection_targets",
+  "source_revision": "4f9ccb49b234",
+  "reasoning_source": "web/lib/reasoning-effort.ts",
+  "reasoning_source_revision": "995e22861401",
+  "providers": {
+    "llm": [
+      {
+        "value": "aihubmix",
+        "label": "AiHubMix",
+        "base_url": "https://aihubmix.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://aihubmix.com/v1",
+          "openai_chat": "https://aihubmix.com/v1",
+          "openai_responses": "https://aihubmix.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "anthropic",
+        "label": "Anthropic",
+        "base_url": "https://api.anthropic.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [
+          "anthropic"
+        ],
+        "default_api_format": "anthropic",
+        "base_urls": {
+          "anthropic": "https://api.anthropic.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "atlascloud",
+        "label": "Atlas Cloud",
+        "base_url": "https://api.atlascloud.ai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.atlascloud.ai/v1",
+          "openai_chat": "https://api.atlascloud.ai/v1",
+          "openai_responses": "https://api.atlascloud.ai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "azure_openai",
+        "label": "Azure OpenAI",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "byteplus",
+        "label": "BytePlus",
+        "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.ap-southeast.bytepluses.com/api/v3",
+          "openai_chat": "https://ark.ap-southeast.bytepluses.com/api/v3",
+          "openai_responses": "https://ark.ap-southeast.bytepluses.com/api/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "byteplus_coding_plan",
+        "label": "BytePlus Coding Plan",
+        "base_url": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+          "openai_chat": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+          "openai_responses": "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "codebuddy",
+        "label": "CodeBuddy/WorkBuddy",
+        "base_url": "",
+        "auth_mode": "oauth",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "custom_anthropic",
+        "label": "Custom (Anthropic API)",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [
+          "anthropic"
+        ],
+        "default_api_format": "anthropic",
+        "base_urls": {},
+        "status": "legacy"
+      },
+      {
+        "value": "custom",
+        "label": "Custom (OpenAI API)",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses",
+          "anthropic"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "dashscope",
+        "label": "DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "openai_chat": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "openai_responses": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "deepseek",
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.deepseek.com",
+          "openai_chat": "https://api.deepseek.com",
+          "openai_responses": "https://api.deepseek.com"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "edenai",
+        "label": "Eden AI",
+        "base_url": "https://api.edenai.run/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.edenai.run/v3",
+          "openai_chat": "https://api.edenai.run/v3",
+          "openai_responses": "https://api.edenai.run/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "gemini",
+        "label": "Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://generativelanguage.googleapis.com/v1beta/openai/",
+          "openai_chat": "https://generativelanguage.googleapis.com/v1beta/openai/",
+          "openai_responses": "https://generativelanguage.googleapis.com/v1beta/openai/"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "github_copilot",
+        "label": "GitHub Copilot",
+        "base_url": "https://api.githubcopilot.com",
+        "auth_mode": "oauth",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "groq",
+        "label": "Groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.groq.com/openai/v1",
+          "openai_chat": "https://api.groq.com/openai/v1",
+          "openai_responses": "https://api.groq.com/openai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "lemonade",
+        "label": "Lemonade",
+        "base_url": "http://localhost:13305/api/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:13305/api/v1",
+          "openai_chat": "http://localhost:13305/api/v1",
+          "openai_responses": "http://localhost:13305/api/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "llama_cpp",
+        "label": "llama.cpp",
+        "base_url": "http://localhost:8080/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:8080/v1",
+          "openai_chat": "http://localhost:8080/v1",
+          "openai_responses": "http://localhost:8080/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "lm_studio",
+        "label": "LM Studio",
+        "base_url": "http://localhost:1234/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:1234/v1",
+          "openai_chat": "http://localhost:1234/v1",
+          "openai_responses": "http://localhost:1234/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "minimax",
+        "label": "MiniMax",
+        "base_url": "https://api.minimax.io/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses",
+          "anthropic"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.minimax.io/v1",
+          "openai_chat": "https://api.minimax.io/v1",
+          "openai_responses": "https://api.minimax.io/v1",
+          "anthropic": "https://api.minimax.io/anthropic"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "minimax_anthropic",
+        "label": "MiniMax (Anthropic)",
+        "base_url": "https://api.minimax.io/anthropic",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [
+          "anthropic"
+        ],
+        "default_api_format": "anthropic",
+        "base_urls": {
+          "anthropic": "https://api.minimax.io/anthropic"
+        },
+        "status": "legacy"
+      },
+      {
+        "value": "mistral",
+        "label": "Mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.mistral.ai/v1",
+          "openai_chat": "https://api.mistral.ai/v1",
+          "openai_responses": "https://api.mistral.ai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "moonshot",
+        "label": "Moonshot",
+        "base_url": "https://api.moonshot.cn/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.moonshot.cn/v1",
+          "openai_chat": "https://api.moonshot.cn/v1",
+          "openai_responses": "https://api.moonshot.cn/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "novita",
+        "label": "Novita AI",
+        "base_url": "https://api.novita.ai/openai",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.novita.ai/openai",
+          "openai_chat": "https://api.novita.ai/openai",
+          "openai_responses": "https://api.novita.ai/openai"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "nvidia_nim",
+        "label": "NVIDIA NIM",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://integrate.api.nvidia.com/v1",
+          "openai_chat": "https://integrate.api.nvidia.com/v1",
+          "openai_responses": "https://integrate.api.nvidia.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "ollama",
+        "label": "Ollama",
+        "base_url": "http://localhost:11434/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:11434/v1",
+          "openai_chat": "http://localhost:11434/v1",
+          "openai_responses": "http://localhost:11434/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.openai.com/v1",
+          "openai_chat": "https://api.openai.com/v1",
+          "openai_responses": "https://api.openai.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "openai_codex",
+        "label": "OpenAI Codex",
+        "base_url": "https://chatgpt.com/backend-api",
+        "auth_mode": "oauth",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://openrouter.ai/api/v1",
+          "openai_chat": "https://openrouter.ai/api/v1",
+          "openai_responses": "https://openrouter.ai/api/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "ovms",
+        "label": "OpenVINO Model Server",
+        "base_url": "http://localhost:8000/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:8000/v3",
+          "openai_chat": "http://localhost:8000/v3",
+          "openai_responses": "http://localhost:8000/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "orcarouter",
+        "label": "OrcaRouter",
+        "base_url": "https://api.orcarouter.ai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.orcarouter.ai/v1",
+          "openai_chat": "https://api.orcarouter.ai/v1",
+          "openai_responses": "https://api.orcarouter.ai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "qianfan",
+        "label": "Qianfan",
+        "base_url": "https://qianfan.baidubce.com/v2",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://qianfan.baidubce.com/v2",
+          "openai_chat": "https://qianfan.baidubce.com/v2",
+          "openai_responses": "https://qianfan.baidubce.com/v2"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "siliconflow",
+        "label": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.siliconflow.cn/v1",
+          "openai_chat": "https://api.siliconflow.cn/v1",
+          "openai_responses": "https://api.siliconflow.cn/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "stepfun",
+        "label": "Step Fun",
+        "base_url": "https://api.stepfun.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.stepfun.com/v1",
+          "openai_chat": "https://api.stepfun.com/v1",
+          "openai_responses": "https://api.stepfun.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "vllm",
+        "label": "vLLM/Local",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "volcengine",
+        "label": "VolcEngine",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.cn-beijing.volces.com/api/v3",
+          "openai_chat": "https://ark.cn-beijing.volces.com/api/v3",
+          "openai_responses": "https://ark.cn-beijing.volces.com/api/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "volcengine_coding_plan",
+        "label": "VolcEngine Coding Plan",
+        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "openai_chat": "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "openai_responses": "https://ark.cn-beijing.volces.com/api/coding/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "xiaomi_mimo",
+        "label": "Xiaomi MIMO",
+        "base_url": "https://api.xiaomimimo.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.xiaomimimo.com/v1",
+          "openai_chat": "https://api.xiaomimimo.com/v1",
+          "openai_responses": "https://api.xiaomimimo.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "zhipu",
+        "label": "Zhipu AI",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://open.bigmodel.cn/api/paas/v4",
+          "openai_chat": "https://open.bigmodel.cn/api/paas/v4",
+          "openai_responses": "https://open.bigmodel.cn/api/paas/v4"
+        },
+        "status": "supported"
+      }
+    ],
+    "task": [
+      {
+        "value": "aihubmix",
+        "label": "AiHubMix",
+        "base_url": "https://aihubmix.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://aihubmix.com/v1",
+          "openai_chat": "https://aihubmix.com/v1",
+          "openai_responses": "https://aihubmix.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "anthropic",
+        "label": "Anthropic",
+        "base_url": "https://api.anthropic.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [
+          "anthropic"
+        ],
+        "default_api_format": "anthropic",
+        "base_urls": {
+          "anthropic": "https://api.anthropic.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "atlascloud",
+        "label": "Atlas Cloud",
+        "base_url": "https://api.atlascloud.ai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.atlascloud.ai/v1",
+          "openai_chat": "https://api.atlascloud.ai/v1",
+          "openai_responses": "https://api.atlascloud.ai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "azure_openai",
+        "label": "Azure OpenAI",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "byteplus",
+        "label": "BytePlus",
+        "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.ap-southeast.bytepluses.com/api/v3",
+          "openai_chat": "https://ark.ap-southeast.bytepluses.com/api/v3",
+          "openai_responses": "https://ark.ap-southeast.bytepluses.com/api/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "byteplus_coding_plan",
+        "label": "BytePlus Coding Plan",
+        "base_url": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+          "openai_chat": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+          "openai_responses": "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "codebuddy",
+        "label": "CodeBuddy/WorkBuddy",
+        "base_url": "",
+        "auth_mode": "oauth",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "custom_anthropic",
+        "label": "Custom (Anthropic API)",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [
+          "anthropic"
+        ],
+        "default_api_format": "anthropic",
+        "base_urls": {},
+        "status": "legacy"
+      },
+      {
+        "value": "custom",
+        "label": "Custom (OpenAI API)",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses",
+          "anthropic"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "dashscope",
+        "label": "DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "openai_chat": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "openai_responses": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "deepseek",
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.deepseek.com",
+          "openai_chat": "https://api.deepseek.com",
+          "openai_responses": "https://api.deepseek.com"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "edenai",
+        "label": "Eden AI",
+        "base_url": "https://api.edenai.run/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.edenai.run/v3",
+          "openai_chat": "https://api.edenai.run/v3",
+          "openai_responses": "https://api.edenai.run/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "gemini",
+        "label": "Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://generativelanguage.googleapis.com/v1beta/openai/",
+          "openai_chat": "https://generativelanguage.googleapis.com/v1beta/openai/",
+          "openai_responses": "https://generativelanguage.googleapis.com/v1beta/openai/"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "github_copilot",
+        "label": "GitHub Copilot",
+        "base_url": "https://api.githubcopilot.com",
+        "auth_mode": "oauth",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "groq",
+        "label": "Groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.groq.com/openai/v1",
+          "openai_chat": "https://api.groq.com/openai/v1",
+          "openai_responses": "https://api.groq.com/openai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "lemonade",
+        "label": "Lemonade",
+        "base_url": "http://localhost:13305/api/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:13305/api/v1",
+          "openai_chat": "http://localhost:13305/api/v1",
+          "openai_responses": "http://localhost:13305/api/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "llama_cpp",
+        "label": "llama.cpp",
+        "base_url": "http://localhost:8080/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:8080/v1",
+          "openai_chat": "http://localhost:8080/v1",
+          "openai_responses": "http://localhost:8080/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "lm_studio",
+        "label": "LM Studio",
+        "base_url": "http://localhost:1234/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:1234/v1",
+          "openai_chat": "http://localhost:1234/v1",
+          "openai_responses": "http://localhost:1234/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "minimax",
+        "label": "MiniMax",
+        "base_url": "https://api.minimax.io/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses",
+          "anthropic"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.minimax.io/v1",
+          "openai_chat": "https://api.minimax.io/v1",
+          "openai_responses": "https://api.minimax.io/v1",
+          "anthropic": "https://api.minimax.io/anthropic"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "minimax_anthropic",
+        "label": "MiniMax (Anthropic)",
+        "base_url": "https://api.minimax.io/anthropic",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": false,
+        "api_formats": [
+          "anthropic"
+        ],
+        "default_api_format": "anthropic",
+        "base_urls": {
+          "anthropic": "https://api.minimax.io/anthropic"
+        },
+        "status": "legacy"
+      },
+      {
+        "value": "mistral",
+        "label": "Mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.mistral.ai/v1",
+          "openai_chat": "https://api.mistral.ai/v1",
+          "openai_responses": "https://api.mistral.ai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "moonshot",
+        "label": "Moonshot",
+        "base_url": "https://api.moonshot.cn/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.moonshot.cn/v1",
+          "openai_chat": "https://api.moonshot.cn/v1",
+          "openai_responses": "https://api.moonshot.cn/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "novita",
+        "label": "Novita AI",
+        "base_url": "https://api.novita.ai/openai",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.novita.ai/openai",
+          "openai_chat": "https://api.novita.ai/openai",
+          "openai_responses": "https://api.novita.ai/openai"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "nvidia_nim",
+        "label": "NVIDIA NIM",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://integrate.api.nvidia.com/v1",
+          "openai_chat": "https://integrate.api.nvidia.com/v1",
+          "openai_responses": "https://integrate.api.nvidia.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "ollama",
+        "label": "Ollama",
+        "base_url": "http://localhost:11434/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:11434/v1",
+          "openai_chat": "http://localhost:11434/v1",
+          "openai_responses": "http://localhost:11434/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.openai.com/v1",
+          "openai_chat": "https://api.openai.com/v1",
+          "openai_responses": "https://api.openai.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "openai_codex",
+        "label": "OpenAI Codex",
+        "base_url": "https://chatgpt.com/backend-api",
+        "auth_mode": "oauth",
+        "supports_wire_api_selection": false,
+        "api_formats": [],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://openrouter.ai/api/v1",
+          "openai_chat": "https://openrouter.ai/api/v1",
+          "openai_responses": "https://openrouter.ai/api/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "ovms",
+        "label": "OpenVINO Model Server",
+        "base_url": "http://localhost:8000/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "http://localhost:8000/v3",
+          "openai_chat": "http://localhost:8000/v3",
+          "openai_responses": "http://localhost:8000/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "orcarouter",
+        "label": "OrcaRouter",
+        "base_url": "https://api.orcarouter.ai/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.orcarouter.ai/v1",
+          "openai_chat": "https://api.orcarouter.ai/v1",
+          "openai_responses": "https://api.orcarouter.ai/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "qianfan",
+        "label": "Qianfan",
+        "base_url": "https://qianfan.baidubce.com/v2",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://qianfan.baidubce.com/v2",
+          "openai_chat": "https://qianfan.baidubce.com/v2",
+          "openai_responses": "https://qianfan.baidubce.com/v2"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "siliconflow",
+        "label": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.siliconflow.cn/v1",
+          "openai_chat": "https://api.siliconflow.cn/v1",
+          "openai_responses": "https://api.siliconflow.cn/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "stepfun",
+        "label": "Step Fun",
+        "base_url": "https://api.stepfun.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.stepfun.com/v1",
+          "openai_chat": "https://api.stepfun.com/v1",
+          "openai_responses": "https://api.stepfun.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "vllm",
+        "label": "vLLM/Local",
+        "base_url": "",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {},
+        "status": "supported"
+      },
+      {
+        "value": "volcengine",
+        "label": "VolcEngine",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.cn-beijing.volces.com/api/v3",
+          "openai_chat": "https://ark.cn-beijing.volces.com/api/v3",
+          "openai_responses": "https://ark.cn-beijing.volces.com/api/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "volcengine_coding_plan",
+        "label": "VolcEngine Coding Plan",
+        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "openai_chat": "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "openai_responses": "https://ark.cn-beijing.volces.com/api/coding/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "xiaomi_mimo",
+        "label": "Xiaomi MIMO",
+        "base_url": "https://api.xiaomimimo.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.xiaomimimo.com/v1",
+          "openai_chat": "https://api.xiaomimimo.com/v1",
+          "openai_responses": "https://api.xiaomimimo.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "zhipu",
+        "label": "Zhipu AI",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://open.bigmodel.cn/api/paas/v4",
+          "openai_chat": "https://open.bigmodel.cn/api/paas/v4",
+          "openai_responses": "https://open.bigmodel.cn/api/paas/v4"
+        },
+        "status": "supported"
+      }
+    ],
+    "embedding": [
+      {
+        "value": "aliyun",
+        "label": "Aliyun DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+        "default_dim": "2560"
+      },
+      {
+        "value": "azure_openai",
+        "label": "Azure OpenAI",
+        "base_url": "",
+        "default_dim": ""
+      },
+      {
+        "value": "cohere",
+        "label": "Cohere",
+        "base_url": "https://api.cohere.com/v2/embed",
+        "default_dim": "1024"
+      },
+      {
+        "value": "gemini",
+        "label": "Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents",
+        "default_dim": "3072"
+      },
+      {
+        "value": "jina",
+        "label": "Jina",
+        "base_url": "https://api.jina.ai/v1/embeddings",
+        "default_dim": "1024"
+      },
+      {
+        "value": "ollama",
+        "label": "Ollama",
+        "base_url": "http://localhost:11434/api/embed",
+        "default_dim": "768"
+      },
+      {
+        "value": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1/embeddings",
+        "default_dim": "3072"
+      },
+      {
+        "value": "custom",
+        "label": "OpenAI Compatible",
+        "base_url": "",
+        "default_dim": ""
+      },
+      {
+        "value": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1/embeddings",
+        "default_dim": ""
+      },
+      {
+        "value": "orcarouter",
+        "label": "OrcaRouter",
+        "base_url": "https://api.orcarouter.ai/v1/embeddings",
+        "default_dim": "3072"
+      },
+      {
+        "value": "siliconflow",
+        "label": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1/embeddings",
+        "default_dim": "4096"
+      },
+      {
+        "value": "vllm",
+        "label": "vLLM / LM Studio",
+        "base_url": "http://localhost:8000/v1/embeddings",
+        "default_dim": ""
+      }
+    ],
+    "search": [
+      {
+        "value": "none",
+        "label": "None",
+        "base_url": "",
+        "requires_api_key": false,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "supported"
+      },
+      {
+        "value": "brave",
+        "label": "Brave",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "supported"
+      },
+      {
+        "value": "tavily",
+        "label": "Tavily",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "supported"
+      },
+      {
+        "value": "jina",
+        "label": "Jina",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "supported"
+      },
+      {
+        "value": "searxng",
+        "label": "SearXNG",
+        "base_url": "",
+        "requires_api_key": false,
+        "requires_base_url": true,
+        "soft_fallback": true,
+        "status": "supported"
+      },
+      {
+        "value": "duckduckgo",
+        "label": "DuckDuckGo",
+        "base_url": "",
+        "requires_api_key": false,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "supported"
+      },
+      {
+        "value": "perplexity",
+        "label": "Perplexity",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "serper",
+        "label": "Serper",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "serply",
+        "label": "Serply",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "firecrawl",
+        "label": "Firecrawl",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "doubao",
+        "label": "Doubao",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "bocha",
+        "label": "Bocha",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "zhipu",
+        "label": "Zhipu",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "qianfan",
+        "label": "Baidu Qianfan",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "aliyun_iqs",
+        "label": "Aliyun IQS",
+        "base_url": "",
+        "requires_api_key": true,
+        "requires_base_url": false,
+        "soft_fallback": false,
+        "status": "supported"
+      },
+      {
+        "value": "baidu",
+        "label": "baidu",
+        "base_url": "",
+        "requires_api_key": false,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "deprecated"
+      },
+      {
+        "value": "exa",
+        "label": "exa",
+        "base_url": "",
+        "requires_api_key": false,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "deprecated"
+      },
+      {
+        "value": "openrouter",
+        "label": "openrouter",
+        "base_url": "",
+        "requires_api_key": false,
+        "requires_base_url": false,
+        "soft_fallback": true,
+        "status": "deprecated"
+      }
+    ],
+    "tts": [
+      {
+        "value": "dashscope",
+        "label": "Aliyun DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "default_model": "qwen3-tts-flash",
+        "default_voice": "Cherry"
+      },
+      {
+        "value": "azure_openai",
+        "label": "Azure OpenAI",
+        "base_url": "",
+        "default_model": "tts-1",
+        "default_voice": "alloy"
+      },
+      {
+        "value": "groq",
+        "label": "Groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "default_model": "canopylabs/orpheus-v1-english",
+        "default_voice": "autumn"
+      },
+      {
+        "value": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o-mini-tts",
+        "default_voice": "alloy"
+      },
+      {
+        "value": "custom",
+        "label": "OpenAI Compatible",
+        "base_url": "",
+        "default_model": "",
+        "default_voice": ""
+      },
+      {
+        "value": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "default_model": "openai/gpt-4o-mini-tts",
+        "default_voice": "alloy"
+      },
+      {
+        "value": "siliconflow",
+        "label": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "default_model": "FunAudioLLM/CosyVoice2-0.5B",
+        "default_voice": "FunAudioLLM/CosyVoice2-0.5B:alex"
+      },
+      {
+        "value": "vllm",
+        "label": "vLLM / Local",
+        "base_url": "http://localhost:8000/v1",
+        "default_model": "",
+        "default_voice": ""
+      }
+    ],
+    "stt": [
+      {
+        "value": "dashscope",
+        "label": "Aliyun DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "default_model": "paraformer-realtime-v2"
+      },
+      {
+        "value": "azure_openai",
+        "label": "Azure OpenAI",
+        "base_url": "",
+        "default_model": "whisper-1"
+      },
+      {
+        "value": "groq",
+        "label": "Groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "default_model": "whisper-large-v3-turbo"
+      },
+      {
+        "value": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o-mini-transcribe"
+      },
+      {
+        "value": "custom",
+        "label": "OpenAI Compatible",
+        "base_url": "",
+        "default_model": ""
+      },
+      {
+        "value": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "default_model": "openai/whisper-large-v3"
+      },
+      {
+        "value": "siliconflow",
+        "label": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "default_model": "FunAudioLLM/SenseVoiceSmall"
+      },
+      {
+        "value": "vllm",
+        "label": "vLLM / Local",
+        "base_url": "http://localhost:8000/v1",
+        "default_model": ""
+      }
+    ],
+    "imagegen": [
+      {
+        "value": "dashscope",
+        "label": "Aliyun DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "default_model": "wanx2.1-t2i-turbo"
+      },
+      {
+        "value": "azure_openai",
+        "label": "Azure OpenAI",
+        "base_url": "",
+        "default_model": "dall-e-3"
+      },
+      {
+        "value": "custom_chat",
+        "label": "Chat Completions (Custom)",
+        "base_url": "",
+        "default_model": ""
+      },
+      {
+        "value": "openai",
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-image-1"
+      },
+      {
+        "value": "custom",
+        "label": "OpenAI Compatible",
+        "base_url": "",
+        "default_model": ""
+      },
+      {
+        "value": "openrouter",
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "default_model": "google/gemini-2.5-flash-image-preview"
+      },
+      {
+        "value": "siliconflow",
+        "label": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "default_model": "Kwai-Kolors/Kolors"
+      },
+      {
+        "value": "volcengine",
+        "label": "Volcengine Ark (Seedream)",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "default_model": "doubao-seedream-3-0-t2i-250415"
+      }
+    ],
+    "videogen": [
+      {
+        "value": "dashscope",
+        "label": "Aliyun DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "default_model": "wanx2.1-t2v-turbo"
+      },
+      {
+        "value": "custom",
+        "label": "Async Task (Custom)",
+        "base_url": "",
+        "default_model": ""
+      },
+      {
+        "value": "volcengine",
+        "label": "Volcengine Ark (Seedance)",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "default_model": "doubao-seedance-1-0-pro-250528"
+      }
+    ]
+  },
+  "connection_targets": [
+    {
+      "provider": "aihubmix",
+      "label": "AiHubMix",
+      "default_base_url": "https://aihubmix.com/v1",
+      "services": {
+        "llm": {
+          "provider": "aihubmix",
+          "base_url": "https://aihubmix.com/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "anthropic",
+      "label": "Anthropic",
+      "default_base_url": "https://api.anthropic.com/v1",
+      "services": {
+        "llm": {
+          "provider": "anthropic",
+          "base_url": "https://api.anthropic.com/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "atlascloud",
+      "label": "Atlas Cloud",
+      "default_base_url": "https://api.atlascloud.ai/v1",
+      "services": {
+        "llm": {
+          "provider": "atlascloud",
+          "base_url": "https://api.atlascloud.ai/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "azure_openai",
+      "label": "Azure OpenAI",
+      "default_base_url": "",
+      "services": {
+        "llm": {
+          "provider": "azure_openai",
+          "base_url": "",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "azure_openai",
+          "base_url": "",
+          "default_model": "",
+          "default_dim": ""
+        },
+        "tts": {
+          "provider": "azure_openai",
+          "base_url": "",
+          "default_model": "tts-1",
+          "default_voice": "alloy"
+        },
+        "stt": {
+          "provider": "azure_openai",
+          "base_url": "",
+          "default_model": "whisper-1"
+        },
+        "imagegen": {
+          "provider": "azure_openai",
+          "base_url": "",
+          "default_model": "dall-e-3"
+        }
+      }
+    },
+    {
+      "provider": "byteplus",
+      "label": "BytePlus",
+      "default_base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+      "services": {
+        "llm": {
+          "provider": "byteplus",
+          "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "byteplus_coding_plan",
+      "label": "BytePlus Coding Plan",
+      "default_base_url": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+      "services": {
+        "llm": {
+          "provider": "byteplus_coding_plan",
+          "base_url": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "custom_anthropic",
+      "label": "Custom (Anthropic API)",
+      "default_base_url": "",
+      "services": {
+        "llm": {
+          "provider": "custom_anthropic",
+          "base_url": "",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "custom",
+      "label": "Custom (OpenAI API)",
+      "default_base_url": "",
+      "services": {
+        "llm": {
+          "provider": "custom",
+          "base_url": "",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "custom",
+          "base_url": "",
+          "default_model": "",
+          "default_dim": ""
+        },
+        "tts": {
+          "provider": "custom",
+          "base_url": "",
+          "default_model": "",
+          "default_voice": ""
+        },
+        "stt": {
+          "provider": "custom",
+          "base_url": "",
+          "default_model": ""
+        },
+        "imagegen": {
+          "provider": "custom",
+          "base_url": "",
+          "default_model": ""
+        },
+        "videogen": {
+          "provider": "custom",
+          "base_url": "",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "dashscope",
+      "label": "DashScope",
+      "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "services": {
+        "llm": {
+          "provider": "dashscope",
+          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "aliyun",
+          "base_url": "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+          "default_model": "qwen3-vl-embedding",
+          "default_dim": "2560"
+        },
+        "tts": {
+          "provider": "dashscope",
+          "base_url": "https://dashscope.aliyuncs.com/api/v1",
+          "default_model": "qwen3-tts-flash",
+          "default_voice": "Cherry"
+        },
+        "stt": {
+          "provider": "dashscope",
+          "base_url": "https://dashscope.aliyuncs.com/api/v1",
+          "default_model": "paraformer-realtime-v2"
+        },
+        "imagegen": {
+          "provider": "dashscope",
+          "base_url": "https://dashscope.aliyuncs.com/api/v1",
+          "default_model": "wanx2.1-t2i-turbo"
+        },
+        "videogen": {
+          "provider": "dashscope",
+          "base_url": "https://dashscope.aliyuncs.com/api/v1",
+          "default_model": "wanx2.1-t2v-turbo"
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "label": "DeepSeek",
+      "default_base_url": "https://api.deepseek.com",
+      "services": {
+        "llm": {
+          "provider": "deepseek",
+          "base_url": "https://api.deepseek.com",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "edenai",
+      "label": "Eden AI",
+      "default_base_url": "https://api.edenai.run/v3",
+      "services": {
+        "llm": {
+          "provider": "edenai",
+          "base_url": "https://api.edenai.run/v3",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "gemini",
+      "label": "Gemini",
+      "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "services": {
+        "llm": {
+          "provider": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents",
+          "default_model": "gemini-embedding-2",
+          "default_dim": "3072"
+        }
+      }
+    },
+    {
+      "provider": "groq",
+      "label": "Groq",
+      "default_base_url": "https://api.groq.com/openai/v1",
+      "services": {
+        "llm": {
+          "provider": "groq",
+          "base_url": "https://api.groq.com/openai/v1",
+          "default_model": ""
+        },
+        "tts": {
+          "provider": "groq",
+          "base_url": "https://api.groq.com/openai/v1",
+          "default_model": "canopylabs/orpheus-v1-english",
+          "default_voice": "autumn"
+        },
+        "stt": {
+          "provider": "groq",
+          "base_url": "https://api.groq.com/openai/v1",
+          "default_model": "whisper-large-v3-turbo"
+        }
+      }
+    },
+    {
+      "provider": "lemonade",
+      "label": "Lemonade",
+      "default_base_url": "http://localhost:13305/api/v1",
+      "services": {
+        "llm": {
+          "provider": "lemonade",
+          "base_url": "http://localhost:13305/api/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "llama_cpp",
+      "label": "llama.cpp",
+      "default_base_url": "http://localhost:8080/v1",
+      "services": {
+        "llm": {
+          "provider": "llama_cpp",
+          "base_url": "http://localhost:8080/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "lm_studio",
+      "label": "LM Studio",
+      "default_base_url": "http://localhost:1234/v1",
+      "services": {
+        "llm": {
+          "provider": "lm_studio",
+          "base_url": "http://localhost:1234/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "minimax",
+      "label": "MiniMax",
+      "default_base_url": "https://api.minimax.io/v1",
+      "services": {
+        "llm": {
+          "provider": "minimax",
+          "base_url": "https://api.minimax.io/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "minimax_anthropic",
+      "label": "MiniMax (Anthropic)",
+      "default_base_url": "https://api.minimax.io/anthropic",
+      "services": {
+        "llm": {
+          "provider": "minimax_anthropic",
+          "base_url": "https://api.minimax.io/anthropic",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "mistral",
+      "label": "Mistral",
+      "default_base_url": "https://api.mistral.ai/v1",
+      "services": {
+        "llm": {
+          "provider": "mistral",
+          "base_url": "https://api.mistral.ai/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "moonshot",
+      "label": "Moonshot",
+      "default_base_url": "https://api.moonshot.cn/v1",
+      "services": {
+        "llm": {
+          "provider": "moonshot",
+          "base_url": "https://api.moonshot.cn/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "novita",
+      "label": "Novita AI",
+      "default_base_url": "https://api.novita.ai/openai",
+      "services": {
+        "llm": {
+          "provider": "novita",
+          "base_url": "https://api.novita.ai/openai",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "nvidia_nim",
+      "label": "NVIDIA NIM",
+      "default_base_url": "https://integrate.api.nvidia.com/v1",
+      "services": {
+        "llm": {
+          "provider": "nvidia_nim",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "ollama",
+      "label": "Ollama",
+      "default_base_url": "http://localhost:11434/v1",
+      "services": {
+        "llm": {
+          "provider": "ollama",
+          "base_url": "http://localhost:11434/v1",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "ollama",
+          "base_url": "http://localhost:11434/api/embed",
+          "default_model": "nomic-embed-text",
+          "default_dim": "768"
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "label": "OpenAI",
+      "default_base_url": "https://api.openai.com/v1",
+      "services": {
+        "llm": {
+          "provider": "openai",
+          "base_url": "https://api.openai.com/v1",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "openai",
+          "base_url": "https://api.openai.com/v1/embeddings",
+          "default_model": "text-embedding-3-large",
+          "default_dim": "3072"
+        },
+        "tts": {
+          "provider": "openai",
+          "base_url": "https://api.openai.com/v1",
+          "default_model": "gpt-4o-mini-tts",
+          "default_voice": "alloy"
+        },
+        "stt": {
+          "provider": "openai",
+          "base_url": "https://api.openai.com/v1",
+          "default_model": "gpt-4o-mini-transcribe"
+        },
+        "imagegen": {
+          "provider": "openai",
+          "base_url": "https://api.openai.com/v1",
+          "default_model": "gpt-image-1"
+        }
+      }
+    },
+    {
+      "provider": "openrouter",
+      "label": "OpenRouter",
+      "default_base_url": "https://openrouter.ai/api/v1",
+      "services": {
+        "llm": {
+          "provider": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1/embeddings",
+          "default_model": "",
+          "default_dim": ""
+        },
+        "tts": {
+          "provider": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "default_model": "openai/gpt-4o-mini-tts",
+          "default_voice": "alloy"
+        },
+        "stt": {
+          "provider": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "default_model": "openai/whisper-large-v3"
+        },
+        "imagegen": {
+          "provider": "openrouter",
+          "base_url": "https://openrouter.ai/api/v1",
+          "default_model": "google/gemini-2.5-flash-image-preview"
+        }
+      }
+    },
+    {
+      "provider": "ovms",
+      "label": "OpenVINO Model Server",
+      "default_base_url": "http://localhost:8000/v3",
+      "services": {
+        "llm": {
+          "provider": "ovms",
+          "base_url": "http://localhost:8000/v3",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "orcarouter",
+      "label": "OrcaRouter",
+      "default_base_url": "https://api.orcarouter.ai/v1",
+      "services": {
+        "llm": {
+          "provider": "orcarouter",
+          "base_url": "https://api.orcarouter.ai/v1",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "orcarouter",
+          "base_url": "https://api.orcarouter.ai/v1/embeddings",
+          "default_model": "openai/text-embedding-3-large",
+          "default_dim": "3072"
+        }
+      }
+    },
+    {
+      "provider": "qianfan",
+      "label": "Qianfan",
+      "default_base_url": "https://qianfan.baidubce.com/v2",
+      "services": {
+        "llm": {
+          "provider": "qianfan",
+          "base_url": "https://qianfan.baidubce.com/v2",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "siliconflow",
+      "label": "SiliconFlow",
+      "default_base_url": "https://api.siliconflow.cn/v1",
+      "services": {
+        "llm": {
+          "provider": "siliconflow",
+          "base_url": "https://api.siliconflow.cn/v1",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "siliconflow",
+          "base_url": "https://api.siliconflow.cn/v1/embeddings",
+          "default_model": "Qwen/Qwen3-Embedding-8B",
+          "default_dim": "4096"
+        },
+        "tts": {
+          "provider": "siliconflow",
+          "base_url": "https://api.siliconflow.cn/v1",
+          "default_model": "FunAudioLLM/CosyVoice2-0.5B",
+          "default_voice": "FunAudioLLM/CosyVoice2-0.5B:alex"
+        },
+        "stt": {
+          "provider": "siliconflow",
+          "base_url": "https://api.siliconflow.cn/v1",
+          "default_model": "FunAudioLLM/SenseVoiceSmall"
+        },
+        "imagegen": {
+          "provider": "siliconflow",
+          "base_url": "https://api.siliconflow.cn/v1",
+          "default_model": "Kwai-Kolors/Kolors"
+        }
+      }
+    },
+    {
+      "provider": "stepfun",
+      "label": "Step Fun",
+      "default_base_url": "https://api.stepfun.com/v1",
+      "services": {
+        "llm": {
+          "provider": "stepfun",
+          "base_url": "https://api.stepfun.com/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "vllm",
+      "label": "vLLM/Local",
+      "default_base_url": "",
+      "services": {
+        "llm": {
+          "provider": "vllm",
+          "base_url": "",
+          "default_model": ""
+        },
+        "embedding": {
+          "provider": "vllm",
+          "base_url": "http://localhost:8000/v1/embeddings",
+          "default_model": "",
+          "default_dim": ""
+        },
+        "tts": {
+          "provider": "vllm",
+          "base_url": "http://localhost:8000/v1",
+          "default_model": "",
+          "default_voice": ""
+        },
+        "stt": {
+          "provider": "vllm",
+          "base_url": "http://localhost:8000/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "volcengine",
+      "label": "VolcEngine",
+      "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "services": {
+        "llm": {
+          "provider": "volcengine",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "default_model": ""
+        },
+        "imagegen": {
+          "provider": "volcengine",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "default_model": "doubao-seedream-3-0-t2i-250415"
+        },
+        "videogen": {
+          "provider": "volcengine",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "default_model": "doubao-seedance-1-0-pro-250528"
+        }
+      }
+    },
+    {
+      "provider": "volcengine_coding_plan",
+      "label": "VolcEngine Coding Plan",
+      "default_base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+      "services": {
+        "llm": {
+          "provider": "volcengine_coding_plan",
+          "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "xiaomi_mimo",
+      "label": "Xiaomi MIMO",
+      "default_base_url": "https://api.xiaomimimo.com/v1",
+      "services": {
+        "llm": {
+          "provider": "xiaomi_mimo",
+          "base_url": "https://api.xiaomimimo.com/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "label": "Zhipu AI",
+      "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "services": {
+        "llm": {
+          "provider": "zhipu",
+          "base_url": "https://open.bigmodel.cn/api/paas/v4",
+          "default_model": ""
+        }
+      }
+    }
+  ]
+}

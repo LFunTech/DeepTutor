@@ -5,6 +5,6 @@ export const dynamic = "force-dynamic";
 
 export default function OmsPrototypePage() {
   if (process.env.NODE_ENV !== "development") notFound();
-  // 旧 Token 计费演示退役，开发态进入独立 OMS 前端。
+  // 本地 Web 的旧演示入口仅在开发态转到独立 OMS 原型；生产仍为 404。
   redirect("http://127.0.0.1:4310/oms/prototype");
 }

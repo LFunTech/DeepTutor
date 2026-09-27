@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { ServiceView, SkillView, DisplayState } from "@deeptutor/api-contracts";
 import { DataTable, DetailGrid, Notice, Section, StatusBadge } from "@deeptutor/admin-ui";
+import type { TableRowAction } from "@deeptutor/admin-ui";
 import type { SkillPackageInspection } from "./skill-package";
 export { inspectSkillPackage } from "./skill-package";
 export type { SkillPackageInspection, SkillPackageRevision } from "./skill-package";
@@ -31,15 +32,15 @@ function skillTone(status: string): "good" | "warn" {
   return status.includes("可用") || status.includes("优先") || status === "已发布" ? "good" : "warn";
 }
 
-export function ServiceList({ services, onOpen, state = "ready", title = "服务目录", categories }: {
-  services: ServiceView[]; onOpen: (id: string) => void; state?: DisplayState; title?: string; categories?: string[];
+export function ServiceList({ services, onOpen, rowActions, state = "ready", title = "服务目录", categories, showHeading = true }: {
+  services: ServiceView[]; onOpen?: (id: string) => void; rowActions?: (service: ServiceView) => TableRowAction[]; state?: DisplayState; title?: string; categories?: string[]; showHeading?: boolean;
 }) {
   const [category, setCategory] = useState("all");
   const values = categories ?? [...new Set(services.map(item => item.category))];
-  return <Section title={title} subtitle="选择服务查看配置、授权与使用情况">
+  return <Section title={showHeading ? title : undefined} subtitle={showHeading ? "选择服务查看配置、授权与使用情况" : undefined}>
     <DataTable rows={services.filter(item => category === "all" || item.category === category)} searchLabel="搜索服务" searchText={row => `${row.name} ${row.description}`}
       filters={[{ label: "类别", value: category, options: [{ value: "all", label: "全部类别" }, ...values.map(value => ({ value, label: value }))], onChange: setCategory }]}
-      state={state} onOpen={row => onOpen(row.id)} openLabel={row => `查看${row.name}详情`} persistKey={`services:${title}`} columns={[
+      state={state} onOpen={onOpen ? row => onOpen(row.id) : undefined} rowActions={rowActions} openLabel={row => `查看${row.name}详情`} persistKey={`services:${title}`} columns={[
         { key: "name", label: "服务", render: row => <><span className="cell-title">{row.name}</span><span className="cell-sub">{row.description}</span></> },
         { key: "category", label: "类别", render: row => row.category },
         { key: "unit", label: "计量单位", render: row => row.unit },
@@ -48,7 +49,7 @@ export function ServiceList({ services, onOpen, state = "ready", title = "服务
   </Section>;
 }
 
-export function OcrServiceList(props: { services: ServiceView[]; onOpen: (id: string) => void; state?: DisplayState }) {
+export function OcrServiceList(props: { services: ServiceView[]; onOpen?: (id: string) => void; rowActions?: (service: ServiceView) => TableRowAction[]; state?: DisplayState; showHeading?: boolean }) {
   return <ServiceList {...props} title="文档识别与解析" categories={["知识处理"]}/>;
 }
 
@@ -57,20 +58,20 @@ export function ServiceDetail({ service, children }: { service: ServiceView; chi
     { label: "服务类别", value: service.category },
     { label: "状态", value: <StatusBadge tone={labels[service.status][1]}>{labels[service.status][0]}</StatusBadge> },
     { label: "计量单位", value: service.unit },
-  ]}/><Notice>{service.id === "ocr" ? "文档 OCR 当前属于 DeepTutor 解析引擎能力；原型不宣称已有独立 OCR Provider 或真实配置已生效。" : "此服务信息来自原型演示数据，不代表真实配置已发布或执行者已生效。"}</Notice>{children}</>;
+  ]}/><Notice>{service.id === "ocr" ? "文档 OCR 当前属于基座解析引擎能力；原型不宣称已有独立 OCR Provider 或真实配置已生效。" : "此服务信息来自原型演示数据，不代表真实配置已发布或执行者已生效。"}</Notice>{children}</>;
 }
 
-export function SkillList({ skills, onOpen, state = "ready", persistKey = "skills:list" }: { skills: SkillView[]; onOpen: (id: string) => void; state?: DisplayState; persistKey?: string }) {
+export function SkillList({ skills, onOpen, rowActions, state = "ready", persistKey = "skills:list" }: { skills: SkillView[]; onOpen?: (id: string) => void; rowActions?: (skill: SkillView) => TableRowAction[]; state?: DisplayState; persistKey?: string }) {
   const [owner, setOwner] = useState("all");
-  return <Section title="Skills 清单" subtitle="选择 Skill 查看来源、版本与可用状态">
+  return <Section>
     <DataTable rows={skills.filter(row => owner === "all" || row.owner === owner)} state={state} persistKey={persistKey}
       searchLabel="搜索 Skill" searchText={row => `${row.name} ${row.description} ${row.tags.join(" ")}`}
       filters={[{ label: "归属", value: owner, onChange: setOwner, options: [{ label: "全部归属", value: "all" }, { label: "平台", value: "global" }, { label: "本学校", value: "tenant" }] }]}
-      onOpen={row => onOpen(row.id)} openLabel={row => `查看${row.name}详情`}
+      onOpen={onOpen ? row => onOpen(row.id) : undefined} rowActions={rowActions} openLabel={row => `查看${row.name}详情`}
       columns={[
         { key: "name", label: "Skill", render: row => <><span className="cell-title">{row.name}</span><span className="cell-sub">{row.description}</span></> },
         { key: "owner", label: "归属", render: row => row.owner === "global" ? "平台" : "本学校" },
-        { key: "source", label: "来源", render: row => ({ builtin: "DeepTutor 内置", created: "人工创建", hub: "Hub 导入", upload: "文件上传" })[row.source] },
+        { key: "source", label: "来源", render: row => ({ builtin: "基座内置", created: "人工创建", hub: "Hub 导入", upload: "文件上传" })[row.source] },
         { key: "version", label: "版本", render: row => row.version },
         { key: "status", label: "状态", render: row => <StatusBadge tone={skillTone(row.status)}>{row.status}</StatusBadge> },
       ]}/>

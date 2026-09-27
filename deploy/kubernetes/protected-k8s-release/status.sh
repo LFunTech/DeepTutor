@@ -33,4 +33,9 @@ kubectl -n "${namespace}" get deployment "${app_name}" -o wide
 kubectl -n "${namespace}" get pods -l app.kubernetes.io/name="${app_name}" -o wide
 kubectl -n "${namespace}" get service "${app_name}" -o wide
 kubectl -n "${namespace}" get ingress "${app_name}" -o wide || true
+if [ "${DEEPTUTOR_TARGET_ENV_ID:-}" = "test-cn" ]; then
+  kubectl -n "${namespace}" get deployment deeptutor-docs -o wide
+  kubectl -n "${namespace}" get pods -l app.kubernetes.io/name=deeptutor-docs -o wide
+  kubectl -n "${namespace}" get service deeptutor-docs -o wide
+fi
 kubectl -n "${namespace}" get jobs -l app.kubernetes.io/part-of=deeptutor-protected-k8s-release -o wide || true

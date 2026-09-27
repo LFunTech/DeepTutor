@@ -9,7 +9,7 @@ import { initialTenantSkills, type TenantSkill } from "./skill-fixtures";
 import { tenant } from "./fixtures";
 
 type Mode = "hub" | "upload" | "edit" | null;
-export default function TmsSkills({ selectedId, onOpen, onClose, state }: { selectedId?: string; onOpen: (id: string) => void; onClose: () => void; state: DisplayState }) {
+export default function TmsSkills({ schoolCode, selectedId, view = "info", onOpen, onClose, state }: { schoolCode: string; selectedId?: string; view?: string; onOpen: (id: string, view: string) => void; onClose: () => void; state: DisplayState }) {
   const [rows, setRows] = useState<TenantSkill[]>(initialTenantSkills);
   const [mode, setMode] = useState<Mode>(null);
   const [confirm, setConfirm] = useState<{ title: string; description: string; action: () => void } | null>(null);
@@ -75,28 +75,30 @@ export default function TmsSkills({ selectedId, onOpen, onClose, state }: { sele
   };
   if (selectedId && !selected) return <StatePanel state="forbidden" message="当前学校不能访问此 Skill。"/>;
   return <>
-    <PageHead eyebrow="TENANT SKILLS" title="Skills" description="查看平台授权 Skill，维护仅本学校使用的 Skill；不另分配给成员或应用。"
+    <PageHead eyebrow="学校 Skills" title="Skills" description="查看平台授权 Skill，维护仅本学校使用的 Skill；不另分配给成员或应用。"
       actions={!selectedId && <div className="inline-list"><Button variant="primary" onClick={() => openForm("upload")}>上传 Skill</Button><Button onClick={() => openForm("hub")}>从 Hub 导入</Button></div>}/>
-    <SkillList skills={state === "empty" ? [] : displayRows} state={state} onOpen={onOpen} persistKey="tms:skills"/>
+    <SkillList skills={state === "empty" ? [] : displayRows} state={state} persistKey={`tms:${schoolCode}:skills`} rowActions={row => [{ label: "Skill 资料", onClick: () => onOpen(row.id, "info") }, { label: "包与版本", onClick: () => onOpen(row.id, "package") }, { label: "审查与发布", onClick: () => onOpen(row.id, "release") }]}/>
     {message && <Notice>{message}</Notice>}
     {selectedId && <Drawer title={`详情 · ${selected?.name ?? "未找到"}`} onClose={onClose} suspended={!!mode || !!confirm}>
       {selected ? <>
-        <PageHead eyebrow="SKILL DETAIL" title={selected.name} description={selected.description} breadcrumbs={[{ label: "Skills", onClick: onClose }, { label: selected.name }]}
-          actions={selected.owner === "tenant" ? <div className="inline-list"><Button onClick={() => selected.published ? setConfirm({ title: "编辑已发布 Skill", description: rows.some(row => row.owner === "global" && row.name === selected.name) ? "保存编辑草稿后，当前本学校版本暂停发布；同名平台版本将重新成为候选。" : "保存编辑草稿后，当前本学校版本暂停发布，待重新审核。", action: () => openForm("edit") }) : openForm("edit")}>编辑 Skill</Button>
-            {!selected.published ? <>
+        <PageHead eyebrow="Skill 详情" title={selected.name} description={selected.description} breadcrumbs={[{ label: "Skills", onClick: onClose }, { label: selected.name }]}
+          actions={selected.owner === "tenant" ? <div className="inline-list">{view === "package" && <Button onClick={() => selected.published ? setConfirm({ title: "编辑已发布 Skill", description: rows.some(row => row.owner === "global" && row.name === selected.name) ? "保存编辑草稿后，当前本学校版本暂停发布；同名平台版本将重新成为候选。" : "保存编辑草稿后，当前本学校版本暂停发布，待重新审核。", action: () => openForm("edit") }) : openForm("edit")}>上传新包版本</Button>}
+            {view === "release" && !selected.published ? <>
               {(selected.status === "草稿" || selected.status === "待安全审查") && <Button onClick={() => setConfirm({ title: "提交 Skill 审查", description: "导入/上传内容须进行真实服务端安全检查；这里只登记演示审查流程。", action: () => changeStatus("审核中") })}>提交审查</Button>}
               {selected.status === "审核中" && <Button onClick={() => setConfirm({ title: "记录演示审查通过", description: "仅记录原型审查通过，不代表真实安全扫描已经执行；生产环境必须阻止未审查内容发布。", action: () => changeStatus("审核通过") })}>记录演示审查通过</Button>}
               {selected.status === "审核通过" && <Button variant="primary" onClick={() => setConfirm({ title: "发布本学校 Skill", description: "仅原型模拟本学校发布；真实执行者仍未接入。发布后不改变平台服务授权或额度。", action: () => changeStatus("本学校可用", true) })}>发布（演示）</Button>}
             </>
-              : <Button onClick={() => setConfirm({ title: "撤销本学校 Skill", description: rows.some(row => row.owner === "global" && row.name === selected.name) ? "撤销后，同名已授权平台 Skill 将重新成为运行候选；请先核对影响。" : "撤销后本学校将无法继续使用此 Skill。", action: () => changeStatus("已撤销", false) })}>撤销发布</Button>}</div> : undefined}/>
-        <DetailGrid rows={[{ label: "归属", value: selected.owner === "global" ? "平台授权 · 只读" : tenant.name }, { label: "来源", value: ({ builtin: "DeepTutor 内置", created: "人工创建", hub: "Hub 导入", upload: "ZIP 上传" })[selected.source] }, { label: "状态", value: <StatusBadge tone={selected.ready ? "good" : "warn"}>{selected.status}</StatusBadge> }, { label: "作者版本", value: selected.version }, { label: "平台修订", value: selected.revision ? `第 ${selected.revision} 版` : "打包条目" }, { label: "ZIP 包", value: selected.archive?.name || "打包条目" }, { label: "Hub 地址", value: selected.origin ? `${selected.origin}（未核验）` : "无" }, { label: "标签", value: selected.tags.join("、") || "未标记" }, { label: "运行条件", value: selected.requires }, { label: "许可", value: selected.license || "未声明" }, { label: "兼容性", value: selected.compatibility || "未声明" }, { label: "可用工具", value: selected.allowedTools || "未声明" }, { label: "就绪状态", value: selected.readiness }, { label: "审核", value: selected.owner === "global" ? "OMS 已发布并授权（配对演示）" : selected.review }, { label: "同名运行候选", value: resolution?.id === selected.id ? "当前条目优先" : resolution ? `${resolution.owner === "tenant" ? "本学校" : "平台"}版本优先` : "尚无可用候选" }]}/>
-        <Notice tone="warn">已授权不代表运行条件满足。Skill 不单独计 Token；底层服务按可信用量扣减。</Notice>
-        <Section title="正文与参考文件解析（演示）"><p>{resolution ? resolution.ready ? `当前候选：${resolution.name} · ${resolution.owner === "tenant" ? "本学校" : "平台"}` : "当前候选运行条件不足，不回退同名平台版本。" : "未发布或未授权，不可读取。"}</p>{resolution?.ready && <DetailGrid rows={[{ label: "正文", value: resolution.body }, { label: "参考文件", value: resolution.reference }]}/>}</Section>
-        {selected.owner === "tenant" && selected.frontmatter && <Section title="包内元数据"><details><summary>查看 SKILL.md 原始声明</summary><pre>{JSON.stringify(selected.frontmatter, null, 2)}</pre></details></Section>}
-        {!!selected.history?.length && <Section title="历史包版本" subtitle="仅在当前原型会话内保留；正式审计需服务端不可变包记录。"><ul>{selected.history.map((item, index) => <li key={`${index}:${item.version}`}>第 {index + 1} 版 · {item.archive?.name || "演示条目"} · 作者版本 {item.version} · {item.description}</li>)}</ul></Section>}
+              : view === "release" ? <Button onClick={() => setConfirm({ title: "撤销本学校 Skill", description: rows.some(row => row.owner === "global" && row.name === selected.name) ? "撤销后，同名已授权平台 Skill 将重新成为运行候选；请先核对影响。" : "撤销后本学校将无法继续使用此 Skill。", action: () => changeStatus("已撤销", false) })}>撤销发布</Button> : null}</div> : undefined}/>
+        {view === "package" && <DetailGrid rows={[{ label: "当前修订", value: selected.revision ? `第 ${selected.revision} 版` : "打包条目" }, { label: "ZIP 包", value: selected.archive?.name || "打包条目" }, { label: "作者版本", value: selected.version }]}/>}
+        {view === "info" && <DetailGrid rows={[{ label: "归属", value: selected.owner === "global" ? "平台授权 · 只读" : tenant.name }, { label: "来源", value: ({ builtin: "基座内置", created: "人工创建", hub: "Hub 导入", upload: "ZIP 上传" })[selected.source] }, { label: "说明", value: selected.description }, { label: "标签", value: selected.tags.join("、") || "未标记" }, { label: "运行条件", value: selected.requires }, { label: "同名运行候选", value: resolution?.id === selected.id ? "当前条目优先" : resolution ? `${resolution.owner === "tenant" ? "本学校" : "平台"}版本优先` : "尚无可用候选" }]}/>}
+        {view === "info" && <Notice tone="warn">已授权不代表运行条件满足。Skill 不单独计 Token；底层服务按可信用量扣减。</Notice>}
+        {view === "package" && <Section title="正文与参考文件解析（演示）"><p>{resolution ? resolution.ready ? `当前候选：${resolution.name} · ${resolution.owner === "tenant" ? "本学校" : "平台"}` : "当前候选运行条件不足，不回退同名平台版本。" : "未发布或未授权，不可读取。"}</p>{resolution?.ready && <DetailGrid rows={[{ label: "正文", value: resolution.body }, { label: "参考文件", value: resolution.reference }]}/>}</Section>}
+        {view === "package" && selected.owner === "tenant" && selected.frontmatter && <Section title="包内元数据"><details><summary>查看 SKILL.md 原始声明</summary><pre>{JSON.stringify(selected.frontmatter, null, 2)}</pre></details></Section>}
+        {view === "package" && !!selected.history?.length && <Section title="历史包版本" subtitle="仅在当前原型会话内保留；正式审计需服务端不可变包记录。"><ul>{selected.history.map((item, index) => <li key={`${index}:${item.version}`}>第 {index + 1} 版 · {item.archive?.name || "演示条目"} · 作者版本 {item.version} · {item.description}</li>)}</ul></Section>}
+        {view === "release" && <DetailGrid rows={[{ label: "状态", value: selected.status }, { label: "审查", value: selected.review }, { label: "就绪状态", value: selected.readiness }, { label: "运行候选", value: resolution?.ready ? `当前候选：${resolution.name} · ${resolution.owner === "tenant" ? "本学校" : "平台"}` : resolution ? "当前候选运行条件不足，不回退同名平台版本。" : "尚无可用候选" }]}/>}
       </> : <Notice tone="bad">Skill 不存在或不可访问。</Notice>}
     </Drawer>}
-    {mode && <FormModal title={mode === "edit" ? "编辑 Skill" : mode === "hub" ? "从 Hub 导入" : "上传 Skill"} onClose={() => setMode(null)} suspended={!!confirm}>
+    {mode && <FormModal title={mode === "edit" ? "上传新包版本" : mode === "hub" ? "从 Hub 导入" : "上传 Skill"} onClose={() => setMode(null)} suspended={!!confirm}>
       <div className="side-panel"><Notice tone="warn">仅本学校草稿；完整 ZIP 包须经过服务端安全审查后方可真实发布。Hub 需同时提供地址与包，浏览器无法核验真实来源；不调用本地用户级 Skill API。</Notice>{mode === "edit" && <Notice>请上传 {selected?.name ?? "当前 Skill"} 的完整 ZIP 新版本；名称必须一致。</Notice>}{mode === "hub" && <label className="form-field">Hub HTTPS 地址<input value={hubRef} onChange={event => setHubRef(event.target.value)}/></label>}<SkillPackageField file={file} inspection={inspection} error={error} inspecting={inspecting} onSelect={next => { void selectFile(next); }}/><div className="form-actions"><Button variant="primary" onClick={save} disabled={inspecting}>保存草稿</Button><Button onClick={() => setMode(null)}>取消</Button></div></div>
     </FormModal>}
     {confirm && <ConfirmModal title={confirm.title} description={confirm.description} onCancel={() => setConfirm(null)} onConfirm={() => { confirm.action(); setConfirm(null); }}/ >}

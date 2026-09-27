@@ -1,6 +1,6 @@
 # 设计：OMS 正式业务逻辑与 DeepTutor 执行契约
 
-> 2026-09-26 用户另行授权按任务分片实施；下文“本轮不开发代码”保留原规划阶段背景，不代表当前 apply 已完成或可跳过依赖重订、权限及迁移门禁。实施证据见 `implementation-evidence.md`。
+> 2026-09-27 用户确认 OMS 应用权限由 DeepTutor 自主管理且不得修改 EduPlus2；本次权威模型修订版已单独获批。既有内部实现证据见 `implementation-evidence.md`，不据此开放平台写 API。
 
 ## Context
 
@@ -23,7 +23,7 @@
 ## Goals / Non-Goals
 
 - 目标：给出能够推导 API、持久化、权限、服务准入与验收的稳定业务模型，并以 DeepTutor 真实设置/执行逻辑为核心；单次服务执行可以完整追溯供给、租户授予及用量。
-- 非目标：本轮不开发代码、部署 OMS、采购真实供应商资源或改变外部权限；不建设租户售价、费用、账单、欠费、支付或“停整个租户”的额度政策；不把 OMS 变成学员私有内容后台。
+- 非目标：在 EduPlus2 仓库、Keycloak 或 OpenFGA 中增改 OMS 角色/client/relation、迁移或运行数据；不部署 OMS、采购真实供应商资源；不建设租户售价、费用、账单、欠费、支付或“停整个租户”的额度政策；不把 OMS 变成学员私有内容后台。
 
 ## Decisions
 
@@ -32,11 +32,13 @@
 | 事实 | 权威写入 | 其他端可见/不可见 |
 | --- | --- | --- |
 | 租户开通/暂停/恢复 | EduPlus2 签名事件；DeepTutor 独立本地隔离状态沿用已有归口 | OMS/TMS 只读来源、状态和异常；配额不足不修改 lifecycle |
+| 平台操作者身份与学校主数据 | EduPlus2 已存在的受信 OIDC/学校接口 | DeepTutor 只验证和绑定，不在本系统注册外部账号或修改外部学校 |
+| DeepTutor OMS 平台动作、目标学校授权与本应用撤权 | DeepTutor Enterprise 程序的受控授权决策；PG 仅保存版本化事实/审计及事务栅栏 | 不冒充 EduPlus2 通用平台权限，也不授予 TMS 或第三方应用能力 |
 | 平台服务/Provider/Agent/工具/基础能力配置 | OMS 的获授权平台动作，DeepTutor descriptor/执行者定义可用语义 | TMS 仅获授权目录与安全状态；本地 Web 维持本地设置 |
 | 供应商连接/Secret 与采购供给 | OMS 高权限动作 + 外部供应商证据 | TMS/API/共享组件不得接收明文 Secret、采购成本和供给批次敏感细节 |
 | 租户服务授权、赠送/充值配额 | OMS 获授权动作 | TMS 当前租户只读投影；成员/应用 grant 不更改额度 |
 | 真实调用与消耗 | DeepTutor 可信执行边界、企业总账和受控对账 | OMS 按平台权限追溯；TMS 只读本租户；个人仅见自身可见范围 |
-| 租户成员、应用/client、KB/文件实例与个人内容 | EduPlus2/TMS/业务 owner 按对象归口 | OMS 仅必要脱敏状态和聚合，不取私有正文 |
+| 租户成员、应用/client、KB/文件实例与个人内容 | EduPlus2 外部身份 + DeepTutor TMS 本产品授权/业务 owner 按对象归口 | OMS 不列出或管理任何学校账号；首位管理员也由 TMS／学校侧开通，不取私有正文 |
 
 平台目录以稳定 service ID 标识可调用服务，provider/model/配置版本作为执行选择；Agent/工具/模板有独立资源 ID 和依赖边，不能把每个目录项强制转成一份 Provider profile。服务授权和配额分别持有 service ID 与可兼容供应商资源范围。拒绝“复制一套 DeepTutor provider 注册表给 OMS”——它会在上游新增服务时漂移。
 
@@ -74,9 +76,11 @@ DeepTutor builtin 来自打包目录而非 OMS 编辑表，企业层以 `owner=g
 
 供应商采购/补充金额可作为 OMS 内部供给事实；供应商成本拆分必须基于具体 provider/model 调用证据和当时适用的合同/单价/币种口径，不同单位不可凭想象折算。合同不能可靠分摊时只展示已采购金额和“归集待核定”，不生成零成本或租户费用。OMS 成本权限与用量、配额、采购写权限拆分；TMS 不接收成本字段。旧 `ops.billing.*`、独立模型资格和欠费 webhook 不是本目标的授权依据，实施前需迁移/停用旧目标并清理入口。
 
-OMS API 先验证平台身份与具体动作，再绑定目标 tenant、查询/写入最小字段。服务 DTO 分共同安全投影和 OMS 专有投影；共享 OCR 等业务组件只接受前者。Secret 仅以引用和安全状态呈现，成本/供给/跨租户指标留在 OMS 专有容器与 API。配置发布、供给补充、授权/额度、核对、导出均有独立权限、原因、版本与审计。状态文案由后端稳定状态/display 契约供给，普通运营默认看到影响与下一步，高级技术细节再展开。
+OMS API 先验证平台身份与具体动作，再绑定目标 tenant、查询/写入最小字段。服务 DTO 分共同安全投影和 OMS 专有投影；共享 OCR 等业务组件只接受前者。Secret 仅以引用和安全状态呈现，成本/供给/跨租户指标留在 OMS 专有容器与 API。配置发布、供给补充、授权/额度、核对、导出均有独立权限；全局配置/Secret/未定向供给查 `platform` 范围，学校定向写入查对应 `school` 范围，两者兼有则双查；写入附原因、版本与审计。状态文案由后端稳定状态/display 契约供给，普通运营默认看到影响与下一步，高级技术细节再展开。
 
-用户选择 **EduPlus2 平台身份与权限**作为 OMS 操作者来源；现有 `tid/eui/sub/azp` 租户换票与管理权限过滤不能直接复用。根据 EduPlus2 文档，平台路径可复用同一受信 Keycloak realm issuer/JWKS，但须有专用 OMS client/audience、独立主体绑定与权限 API/OpenFGA 动作/撤权校验，不能信 JWT realm/client role；平台与租户 session 不互继承。OMS relation/object/目标范围、operator 可调用的权限端点及必要迁移尚未提供，故跨租户写 router 在双方契约和合成伪造/越权负例通过前保持未装配；不可用 DeepTutor 本地 DB 自建一个“平台管理员”绕过该门禁。
+平台登录只接受 EduPlus2 **既存且实际可用**的 OIDC client/audience 的 access token：验证受信 issuer/JWKS、签名、`aud`、`azp`、时效和稳定 `sub`；不复用要求 `tid/eui` 的租户换票，不从 JWT realm/client role、`eit`、header 或学校管理员身份推导 `ops.*`。敏感写入前还必须通过已存在的在线接口核验外部账号当前有效；所需 client 凭据或接口不可用即拒绝写入，不自行修改 EduPlus2/Keycloak。OMS 角色、动作、`platform`/`school` 范围按 `add-enterprise-management-authorization` 由 DeepTutor Enterprise 程序按 PG 事实统一维护和判定；数据库角色/GRANT/RLS 不代替逐动作鉴权；TMS `tenant.*` 为隔离的另一应用域：以 `(issuer, sub)` 绑定平台主体，默认无权；受控初始管理员登记后，角色授予/撤销、逐动作能力、范围和版本均需有操作者、原因、幂等键、审计及受限迁移。任何管理员不可凭自报主体、JWT role 或数据库手工改动自授。每次写入先验证外部身份状态，再在同一 PG 事务内锁定并复核本地授权/撤权版本、适用时的学校绑定版本和业务账务状态；撤权与在途写入同锁序串行，版本变化失败关闭。读/导出同样逐动作和范围校验，平台与租户 session 不互继承。
+
+DeepTutor 内部租户 ID 为 UUID，外部学校 ID 的类型及语义须以 EduPlus2 **现有正式接口**为准；绑定必须一对一、经权威核验、可撤权且有版本栅栏，不能从可空文本 `external_tid`、`schoolCode` 或请求 header 推断。已存在的 `0011_school_binding.sql` 只是待核验空表草稿；如果外部 ID 契约不同，只能新增 DeepTutor 后续迁移而不改已应用迁移。缺现有 OIDC client/audience、账号在线状态或学校核验接口时保留对应写路由未装配；跨学校写 router 在权限迁移和双租户负例完成前同样关闭。此前在 EduPlus2 工作树中的 OMS 草稿已撤销，不能作为外部契约。
 
 ## Risks / Trade-offs
 
@@ -91,6 +95,6 @@ OMS API 先验证平台身份与具体动作，再绑定目标 tenant、查询/�
 ## Migration Plan
 
 1. 用户先审阅本 proposal 与配套 TMS 业务 proposal；旧实施提案、两份原型中简化的扣量/权限文案、`docs/enterprise/02-*`、`11-*`、`12-*` 及权限矩阵按权威边界重订，不把当前 OpenSpec 文档验证当成实施批准。
-2. 分片完成平台可信身份/权限、全服务 descriptor 与生效、供给/授予/预留/用量总账，使用版本化 PG 迁移和必要的 OpenFGA/Keycloak 迁移；旧计费/欠费目标不得迁入生产。供应商配置/凭据与业务状态各走受控 Secret/PG 来源。
+2. 分片完成 EduPlus2 既存可信身份接入、DeepTutor OMS 应用权限、全服务 descriptor 与生效、供给/授予/预留/用量总账；本产品权限和业务状态均用本仓库版本化 PG 迁移，不修改外部 OpenFGA/Keycloak。旧计费/欠费目标不得迁入生产。供应商配置/凭据分别走受控 Secret/PG 来源。
 3. 真实 CLI、HTTP/WS、SDK、后台、Agent/非 Token 服务逐项验证准入/用量/取消/对账；独立 OMS 前端只在 API 与权限通过后接真实适配器，开发 fixture 不进入生产。独立部署、负例、审计、迁移 dry-run/apply/verify、故障与回退证据齐全后才开放正式入口。
 4. 回退保持上一配置 active、已结算调用和授予历史不可丢；停止新授予/调用或切回上一兼容前端/API 版本前，必须先处理在途预留和待核对调用，不靠删除总账回滚。多执行者前另通过 H/G-H。核心如确需改动，逐处提交 upstream-neutral seam 审阅，未经批准不改。

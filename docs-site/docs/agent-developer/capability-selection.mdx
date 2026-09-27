@@ -1,0 +1,111 @@
+---
+title: 对话能力选择
+description: 第三方 Agent 如何在 start_turn 中选择知识库、Skills 与上下文策略
+slug: /capability-selection/
+---
+
+# 对话能力选择
+
+`capability` 是顶层对话能力。当前企业第三方入口仅支持 `"capability":"chat"`，**不能选择其他顶层 `capability`**。知识库和 Skills 是本次对话请求的上下文，分别放在 `start_turn.knowledge_bases` 和 `start_turn.skills`，不要把它们的 ID 填进 `capability`。
+
+**当前没有面向第三方 Agent 发布的选项发现接口。** 若需选择知识库或 Skill，请向部署方取得**当前用户有权使用的真实 ID**及其更新方式。部署方未提供时，省略对应字段或传空数组；不要猜测 ID 或从其他用户的响应中复制。ID 的有效性与权限仍以本次 `start_turn` 的服务端校验为准。
+
+## 从受权 ID 到请求
+
+1. 在当前用户的授权范围内取得部署方提供的知识库和 Skill ID；不要用展示名称替代 ID。没有受权 ID 时，省略选择字段。
+2. 将选定 ID 放入 [`start_turn`](api/ws/start_turn.mdx) 的 `knowledge_bases`／`skills` 字符串数组，可多选。当前不要提交非空 `mcp_tools`。
+3. 用 `context_policy` 决定所请求上下文不可用时如何处理；上传附件则另行传已完成上传的 `resource_ids`。
+4. 从服务端结果判断**实际使用情况**，不能把“已请求”当成“已使用”。
+
+| 用户选择 | `start_turn` 字段 | 说明 |
+| --- | --- | --- |
+| 知识库 | `knowledge_bases: string[]` | 使用部署方提供且当前用户有权引用的 ID |
+| Skills 指导技能 | `skills: string[]` | 使用部署方提供且当前用户有权引用的 ID |
+| 外部工具 | `mcp_tools: string[]` | 当前不要提交非空数组，见下方限制 |
+| 必需／非强制 | `context_policy` | 分别发送 `required`／`auto`；默认 `auto` |
+| 上传文件 | `resource_ids: string[]` | 使用已完成上传的资源 ID，不是文件 URL |
+
+请求形状示例如下。`kb-001` 和 `study-guide` 仅用于说明字段，不能直接用于真实请求；`operation_id` 应在发送前生成并保存，用于同一次启动的安全重试：
+
+<!-- ws-command -->
+```json
+{"type":"start_turn","protocol_version":"2.0","content":"根据课程材料解释这个概念","capability":"chat","operation_id":"op-123","knowledge_bases":["kb-001"],"skills":["study-guide"],"mcp_tools":[],"context_policy":"required","resource_ids":[]}
+```
+
+提交 ID 不代表预留使用权，也不保证本轮一定调用。请求被拒绝时，核对当前用户授权和部署方提供的 ID，不要改用其他用户或猜测 ID。
+
+## 同一会话的下一轮重新选择
+
+用户在一轮回答结束后改变选择时，用服务端返回的**同一个 `session_id`** 发起新的 [`start_turn`](api/ws/start_turn.mdx)，并在该请求中重新填写本轮要用的 `knowledge_bases`、`skills` 和 `context_policy`。每轮使用新的 `operation_id`；只有重试**同一次发起操作**才复用原 ID。选择按 turn 生效，不要假定上一轮的知识库或 Skill 会自动沿用。
+
+<!-- ws-command -->
+```json
+{"type":"start_turn","protocol_version":"2.0","session_id":"session-001","operation_id":"op-124","content":"这次结合课程资料继续解释","capability":"chat","knowledge_bases":["kb-001"],"skills":["study-guide"],"context_policy":"required"}
+```
+
+**不能在运行中的 turn 更改这些选择。** 同一会话已有活动 turn 时，应先等待它结束；如确需中止，使用 [`cancel_turn`](api/ws/cancel_turn.mdx)，确认结束后再发起新 turn。[`submit_user_reply`](api/ws/submit_user_reply.mdx) 只用于回答暂停中的提问，不接受知识库或 Skill 选择字段。不要把选项写进普通文本，希望模型据此改变本轮已确定的执行范围。
+
+## 选择并发送：TypeScript 示例
+
+下面的函数把**调用方已取得的受权 ID** 转换为请求字段，不调用选项发现接口。示例只发送知识库和 Skills；当前版本不应把外部工具加入 `mcp_tools`。发送前须按[快速开始](quickstart.mdx)保存完整请求和 `operation_id`，并使用已认证的 WebSocket。
+
+```ts
+function uniqueIds(ids: string[]): string[] {
+  const normalized = ids.map((id) => id.trim());
+  if (normalized.some((id) => !id)) throw new Error('知识库或 Skill ID 不能为空');
+  return [...new Set(normalized)];
+}
+
+function buildSelectedTurn(
+  selected: {knowledgeBaseIds: string[]; skillIds: string[]; sessionId?: string; resourceIds?: string[]},
+  content: string,
+) {
+  if (!content.trim()) throw new Error('请输入问题');
+  return {
+    type: 'start_turn' as const,
+    protocol_version: '2.0' as const,
+    operation_id: crypto.randomUUID(),
+    capability: 'chat',
+    content: content.trim(),
+    knowledge_bases: uniqueIds(selected.knowledgeBaseIds),
+    skills: uniqueIds(selected.skillIds),
+    mcp_tools: [],
+    context_policy: 'required' as const,
+    ...(selected.sessionId ? {session_id: selected.sessionId} : {}),
+    resource_ids: uniqueIds(selected.resourceIds ?? []),
+  };
+}
+```
+
+调用 `buildSelectedTurn()` 后，先保存返回的完整对象，再将其交给[快速开始](quickstart.mdx)中的 `openTurn()` 发送。`sessionId` 必须来自已授权会话，`resourceIds` 必须是已完成上传的资源 ID。示例中的 `uniqueIds()` 只检查空值和重复值，**不能替代服务端权限与可用性校验**。同一次启动操作断线重试时，不要再次运行 `buildSelectedTurn()` 生成新的 ID；应重发之前保存的**同一完整对象**。若选择已失效，先告知用户并向部署方核对，不要在 `required` 模式下静默删掉该 ID。
+
+## `context_policy` 的含义
+
+- `required`：所请求的上下文必须可用，否则 turn 以相应错误结束；它**不是**“模型一定会调用所选知识库或技能”的承诺。
+- `auto`：允许在不保证采用所选项的情况下继续；这不构成自动调用任何指定项的承诺。
+- `best_effort`：协议也接受该值；第三方客户端只在明确需要非强制尝试时使用。
+
+知识库不可用、Skill 不可用或上下文权限不足时，分别关注 `knowledge_base_unavailable`、`skill_unavailable`、`context_authorization_failed` 等错误码；`required_context_unavailable` 表示某项必需上下文未能满足。遇到这些错误，应核对当前用户授权与部署方提供的 ID，或让用户调整选择，而不是静默丢弃 `required` 条件。
+
+## 判断实际使用结果
+
+普通流事件可用于展示内容和进度。turn 结束时，读取 `done.metadata.capability_usage` 的能力使用摘要：`items[]` 中的 `kind`、`label`、`status`、`count` 区分启用、实际使用和不可用；`policy` 表示本次策略。`requested`（客户端请求）不等于 `used`（本轮观察到实际使用）。**不可将 `enabled` 解释为实际调用**，也不要用客户端本地的“已选列表”替代服务端结果。
+
+| `items[].status` | 第三方页面应如何展示 |
+| --- | --- |
+| `enabled` | 已作为可用项提供；尚不能断言实际调用 |
+| `used` | 本轮观察到使用；`count` 是使用次数摘要，不是计费数量 |
+| `unavailable` | 本轮未能使用；展示失败或让用户调整选择 |
+| `sent` | 如上传资源已随请求发送；不等于模型实际引用 |
+
+例如服务端在 `done` 中返回知识库已使用、Skill 仅启用时，页面应分别展示两种状态，而不是统一显示“已使用”：
+
+```json
+{"type":"done","source":"chat","stage":"responding","content":"","metadata":{"capability_usage":{"version":1,"policy":"required","items":[{"kind":"knowledge_base","label":"kb-001","status":"used","count":1},{"kind":"skill","label":"study-guide","status":"enabled","count":0}]}},"session_id":"session-001","turn_id":"turn-001","seq":7,"timestamp":1789999000.0,"protocol_version":"2.0"}
+```
+
+若没有得到完整的 `done`，先按 [`turn_id` 与 `seq` 恢复订阅](api/ws/resume_from.mdx)，不要猜测执行结果。不同能力不一定产生同样的使用事件，展示时应允许缺少某类统计。
+
+## 当前外部工具限制
+
+**当前企业 turn 不承诺执行第三方指定的外部工具。** 发送非空 `mcp_tools` 并使用 `required` 会得到 `mcp_tool_unavailable`；使用 `auto` 或 `best_effort` 也不能据此宣称工具已执行。第三方 Agent 不应在生产流程中依赖此字段，须等待部署方明确发布可调用契约。不要通过关闭必需策略或忽略错误来掩盖不可用状态。

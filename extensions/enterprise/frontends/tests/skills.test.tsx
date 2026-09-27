@@ -17,6 +17,7 @@ describe("共享 Skill 安全契约", () => {
     expect(JSON.stringify(view)).not.toContain("north");
     render(<SkillList skills={[view]} onOpen={() => {}}/>);
     expect(screen.getByText("pdf")).toBeInTheDocument();
+    expect(screen.getByText("基座内置")).toBeInTheDocument();
   });
   it("本学校已发布 Skill 优先；不可用时也不回退 global", () => {
     const rows = [
@@ -32,10 +33,14 @@ describe("共享 Skill 安全契约", () => {
 describe("OMS Skills", () => {
   it("builtin 只读、默认零授权，并显示运行条件", () => {
     render(<OmsPrototype/>);
-    fireEvent.click(screen.getByRole("button", { name: "查看xlsx详情" }));
+    const row = screen.getByText("xlsx").closest("tr")!;
+    fireEvent.click(within(row).getByRole("button", { name: "学校授权" }));
     expect(screen.getByText(/尚无学校授权/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭抽屉" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Skill 资料" }));
     expect(screen.getAllByText(/运行条件/).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("button", { name: "编辑 Skill" })).not.toBeInTheDocument();
+    expect(screen.getByText("基座内置 · 只读")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "上传新包版本" })).not.toBeInTheDocument();
   });
   it("管理员只能用 ZIP 新增 global 草稿，内容元数据从 SKILL.md 读取", async () => {
     render(<OmsPrototype/>);
@@ -47,14 +52,14 @@ describe("OMS Skills", () => {
     expect(await within(modal).findByText("课程资料整理")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     expect(screen.getByText("course-helper")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看course-helper详情" }));
+    fireEvent.click(within(screen.getByText("course-helper").closest("tr")!).getByRole("button", { name: "包与版本" }));
     expect(screen.getByText("帮助整理课程资料")).toBeInTheDocument();
   });
   it("审计角色不可新增或授权 builtin", () => {
     render(<OmsPrototype/>);
     fireEvent.change(screen.getByRole("combobox", { name: "演示角色" }), { target: { value: "auditor" } });
     expect(screen.queryByRole("button", { name: "新增平台 Skill" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看pdf详情" }));
+    fireEvent.click(within(screen.getByText("pdf").closest("tr")!).getByRole("button", { name: "学校授权" }));
     expect(screen.queryByRole("button", { name: "管理学校授权" })).not.toBeInTheDocument();
   });
   it("Hub 不能只凭地址登记，且新版本必须保持同名", async () => {
@@ -70,9 +75,9 @@ describe("OMS Skills", () => {
     fireEvent.change(within(create).getByLabelText("Skill ZIP 包"), { target: { files: [skillZip("course-helper", "课程助手", "内容")] } });
     expect(await within(create).findByText("课程助手")).toBeInTheDocument();
     fireEvent.click(within(create).getByRole("button", { name: "保存草稿" }));
-    fireEvent.click(screen.getByRole("button", { name: "查看course-helper详情" }));
-    fireEvent.click(screen.getByRole("button", { name: "编辑 Skill" }));
-    const edit = screen.getByRole("dialog", { name: "编辑 Skill" });
+    fireEvent.click(within(screen.getByText("course-helper").closest("tr")!).getByRole("button", { name: "包与版本" }));
+    fireEvent.click(screen.getByRole("button", { name: "上传新包版本" }));
+    const edit = screen.getByRole("dialog", { name: "上传新包版本" });
     fireEvent.change(within(edit).getByLabelText("Skill ZIP 包"), { target: { files: [skillZip("other-skill", "另一个技能", "内容")] } });
     expect(await within(edit).findByText("另一个技能")).toBeInTheDocument();
     fireEvent.click(within(edit).getByRole("button", { name: "保存草稿" }));
@@ -97,8 +102,8 @@ describe("OMS Skills", () => {
   });
   it("OMS 后授权同名平台 Skill 时告知学校版本仍优先", () => {
     render(<OmsPrototype/>);
-    fireEvent.click(screen.getByRole("button", { name: "查看pdf详情" }));
-    fireEvent.click(screen.getByRole("button", { name: /星河实验学校 · 撤销/ }));
+    fireEvent.click(within(screen.getByText("pdf").closest("tr")!).getByRole("button", { name: "学校授权" }));
+    fireEvent.click(within(screen.getByText("星河实验学校").closest("tr")!).getByRole("button", { name: "撤销授权" }));
     fireEvent.click(within(screen.getByRole("alertdialog", { name: "撤销 Skill 授权" })).getByRole("button", { name: "确认" }));
     fireEvent.click(screen.getByRole("button", { name: "管理学校授权" }));
     fireEvent.click(within(screen.getByRole("dialog", { name: "管理学校授权" })).getByRole("button", { name: "提交授权" }));
@@ -115,15 +120,16 @@ describe("TMS Skills", () => {
     expect(within(main).queryByText("xlsx")).not.toBeInTheDocument();
     expect(within(main).queryByRole("button", { name: /授权学校|修改平台 Skill/ })).not.toBeInTheDocument();
     expect(within(main).getByText("已授权 · 暂不可用")).toHaveClass("status-warn");
-    fireEvent.click(within(main).getByRole("button", { name: "查看pdf详情" }));
-    expect(screen.queryByRole("button", { name: "编辑 Skill" })).not.toBeInTheDocument();
+    fireEvent.click(within(within(main).getByText("pdf").closest("tr")!).getByRole("button", { name: "Skill 资料" }));
+    expect(screen.getAllByText("基座内置").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "上传新包版本" })).not.toBeInTheDocument();
   });
   it("未授权 builtin 深链与普通成员均被拒绝；运行条件不足不可读取正文", () => {
     path = "/tms/prototype/demo-school/skills/global%3Axlsx";
     const view = render(<TmsPrototype/>);
     expect(screen.getByText("没有访问权限")).toBeInTheDocument();
     view.unmount();
-    path = "/tms/prototype/demo-school/skills/global%3Adocx";
+    path = "/tms/prototype/demo-school/skills/global%3Adocx/package";
     render(<TmsPrototype/>);
     expect(screen.getByText(/当前候选运行条件不足/)).toBeInTheDocument();
     expect(screen.queryByText("已授权 PDF 参考文件（演示）")).not.toBeInTheDocument();
@@ -202,9 +208,9 @@ describe("TMS Skills", () => {
     fireEvent.change(within(create).getByLabelText("Skill ZIP 包"), { target: { files: [skillZip("course-helper", "初始说明", "初始正文")] } });
     expect(await within(create).findByText("初始说明")).toBeInTheDocument();
     fireEvent.click(within(create).getByRole("button", { name: "保存草稿" }));
-    fireEvent.click(screen.getByRole("button", { name: "查看course-helper详情" }));
-    fireEvent.click(screen.getByRole("button", { name: "编辑 Skill" }));
-    const edit = screen.getByRole("dialog", { name: "编辑 Skill" });
+    fireEvent.click(within(screen.getByText("course-helper").closest("tr")!).getByRole("button", { name: "包与版本" }));
+    fireEvent.click(screen.getByRole("button", { name: "上传新包版本" }));
+    const edit = screen.getByRole("dialog", { name: "上传新包版本" });
     fireEvent.change(within(edit).getByLabelText("Skill ZIP 包"), { target: { files: [skillZip("course-helper", "更新说明", "更新正文")] } });
     expect(await within(edit).findByText("更新说明")).toBeInTheDocument();
     fireEvent.click(within(edit).getByRole("button", { name: "保存草稿" }));
@@ -225,7 +231,7 @@ describe("TMS Skills", () => {
     expect(within(collision).getByText(/本学校版本发布后将优先/)).toBeInTheDocument();
     fireEvent.click(within(collision).getByRole("button", { name: "确认" }));
     expect(screen.getByText("校内 PDF 规范")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("button", { name: "查看pdf详情" })[1]);
+    fireEvent.click(within(screen.getAllByText("pdf")[1].closest("tr")!).getByRole("button", { name: "审查与发布" }));
     expect(screen.getByText(/当前候选：pdf · 平台/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "提交审查" }));
     fireEvent.click(within(screen.getByRole("alertdialog", { name: "提交 Skill 审查" })).getByRole("button", { name: "确认" }));

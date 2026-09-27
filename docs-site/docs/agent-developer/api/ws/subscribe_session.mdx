@@ -1,0 +1,40 @@
+---
+title: "subscribe_session · 订阅当前活动 turn"
+description: "WebSocket 命令 subscribe_session 的请求、响应与恢复"
+slug: /api/ws/subscribe_session/
+command: subscribe_session
+---
+
+# subscribe_session
+
+## 用途与时机
+
+只知道会话 ID 而不知 turn ID 时，用于寻找**调用当时**该会话的活动 turn。
+
+## 前置条件
+
+有权访问 `session_id`；已保存对应活动 turn 的事件游标。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"subscribe_session"`。
+
+| 字段 | 必填／默认 | 说明 |
+| --- | --- | --- |
+| `session_id` | 必填 | 已授权会话 ID |
+| `after_seq` | `0` | 被找到的活动 turn 的最后已处理序号 |
+
+<!-- ws-command -->
+```json
+{"type":"subscribe_session","protocol_version":"2.0","session_id":"session-001","after_seq":18}
+```
+
+## 响应与事件
+
+找到活动 turn 时返回其流事件；无活动 turn 时本次订阅结束。**不会自动订阅未来**在该会话创建的 turn；`after_seq` 不是跨 turn 全局游标。
+
+## 错误与恢复
+
+无事件时先用 `check_active_turn` 核对状态，不要无限等待。后续新 turn 应根据新的 `turn_id` 单独订阅。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

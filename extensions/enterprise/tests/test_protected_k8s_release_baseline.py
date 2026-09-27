@@ -1256,6 +1256,9 @@ def test_protected_k8s_deploy_script_rejects_replicas_without_redis_before_kubec
             "DEEPTUTOR_RELEASE_ID": "test-cn-v1.4.0",
             "DEEPTUTOR_RUNTIME_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/runtime@sha256:"
             + "1" * 64,
+            "DEEPTUTOR_DOCS_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/docs@sha256:"
+            + "2" * 64,
+            "DEEPTUTOR_REGISTRY_REPOSITORY": "registry.example/deeptutor/test-cn",
             "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
             "DEEPTUTOR_INGRESS_HOST": "llm-agent-test.f123.pub",
             "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
@@ -1341,6 +1344,9 @@ exit 0
             "DEEPTUTOR_RELEASE_ID": "test-cn-v1-4-0",
             "DEEPTUTOR_RUNTIME_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/runtime@sha256:"
             + "1" * 64,
+            "DEEPTUTOR_DOCS_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/docs@sha256:"
+            + "2" * 64,
+            "DEEPTUTOR_REGISTRY_REPOSITORY": "registry.example/deeptutor/test-cn",
             "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
             "DEEPTUTOR_INGRESS_HOST": "llm-agent-test.f123.pub",
             "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",
@@ -1509,6 +1515,9 @@ exit 0
             "DEEPTUTOR_RELEASE_ID": "test-cn-v1-4-0",
             "DEEPTUTOR_RUNTIME_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/runtime@sha256:"
             + "1" * 64,
+            "DEEPTUTOR_DOCS_IMAGE_DIGEST": "registry.example/deeptutor/test-cn/docs@sha256:"
+            + "2" * 64,
+            "DEEPTUTOR_REGISTRY_REPOSITORY": "registry.example/deeptutor/test-cn",
             "DEEPTUTOR_K8S_NAMESPACE": "deeptutor-test-cn",
             "DEEPTUTOR_INGRESS_HOST": "llm-agent-test.f123.pub",
             "DEEPTUTOR_TLS_SECRET_NAME": "deeptutor-test-cn-tls",

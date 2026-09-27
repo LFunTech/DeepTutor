@@ -1,0 +1,44 @@
+---
+title: "POST 交换用户令牌"
+description: "把已验证的 EduPlus2 用户 JWT 交换为短期 dt_token。"
+slug: /api/http/exchange/
+method: POST
+path: "/api/v1/auth/eduplus2/exchange"
+---
+
+# POST `/api/v1/auth/eduplus2/exchange`
+
+## 用途与时机
+
+在代表已登录用户访问基座前调用。它不是机器身份登录接口。
+
+## 前置条件
+
+由获授权的前置应用取得新的 EduPlus2 用户 JWT；无需已有 dt_token。
+
+## 请求
+
+**POST `/api/v1/auth/eduplus2/exchange`**
+
+| Header | 必填 | 说明 |
+| --- | --- | --- |
+| `Authorization: Bearer <user JWT>` | 是 | 必须是用户 JWT，不是 dt_token |
+| `X-Request-ID` | 否 | 用于请求关联；不得携带秘密 |
+
+无请求体。
+
+```bash
+curl --fail-with-body -X POST "$BASE_URL/api/v1/auth/eduplus2/exchange" \
+  -H "Authorization: Bearer $EDUPLUS2_USER_JWT" \
+  -H "X-Request-ID: $REQUEST_ID"
+```
+
+## 响应
+
+`200` JSON：`dt_token`（后续请求使用的短期凭证）、`token_type`（`Bearer`）、`expires_in`（秒）、`expires_at`（Unix 秒时间戳）、`tenant_id`（学校技术 ID）、`user_id`、`client_registration_id`。这些 ID 由响应给出，不可由调用方自行指定。
+
+## 错误与恢复
+
+`401` 表示凭证缺失、失效或重复使用；取得**新的**用户 JWT 再交换，不要并发重放同一 JWT。`403` 表示应用或用户未获准，`409` 表示绑定冲突，`429` 需限速，`503` 可有限退避并保留请求关联 ID。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

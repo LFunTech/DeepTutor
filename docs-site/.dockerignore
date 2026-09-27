@@ -1,0 +1,8 @@
+node_modules/
+build/
+.docusaurus/
+*.log
+__pycache__/
+*.pyc
+.gitignore
+README.md

@@ -1,6 +1,6 @@
 # 云端 OMS 全服务 Provider 设置与执行者确认
 
-> **实施已获批准（2026-09-26）**：本版替换旧“云端 DeepTutor 设置写、OMS 只读”方案，用户已单独批准按现版实施；不得以 artifact 齐备或 strict validation 视为运行实现。平台权限与 OMS attempt 准入未就绪前不开放云端写路由。
+> **2026-09-27 权威边界修订，待重新审阅**：全服务配置和 OMS 独占写入目标不变；平台操作者使用 EduPlus2 既存身份，`ops.*` 配置权限由 DeepTutor 自有 OMS 权限管理。2026-09-26 旧版批准不自动覆盖新权限模型；本地权限与 OMS attempt 准入未就绪前不开放云端写路由。
 
 ## Why
 核心 `/settings` 具有多个服务的配置与测试能力，但企业外壳只暴露 public settings，企业 PG 模型适配主要读取 LLM。仅在 OMS 增加 LLM 表单会遗漏其他执行者、复制目录并使 upstream merge 脆弱。
@@ -20,4 +20,4 @@
 无；核心正式 runtime-settings spec 若行为变化，实施前另补 delta。
 
 ## Impact
-优先影响 `extensions/enterprise/` 的 PG 迁移、Secret/runtime adapter、OMS 管理 API 和独立前端；核心只在实证缺口且经 upstream-neutral seam 审阅后改动，本地 Web 设置回归。依赖 EduPlus2 可信平台身份/动作权限与 OMS 服务供给/attempt 准入；依赖未就绪前不开放云端写路由。外部 SecretStore/LightRAG 仅经受控服务接口，不直连内部 DB/图。
+优先影响 `extensions/enterprise/` 的 PG 迁移、Secret/runtime adapter、OMS 管理 API 和独立前端；核心只在实证缺口且经 upstream-neutral seam 审阅后改动，本地 Web 设置回归。依赖 EduPlus2 **既存可信身份/在线账号状态**、DeepTutor 自有 OMS 逐动作权限与服务供给/attempt 准入；依赖未就绪前不开放云端写路由。不修改 EduPlus2 或外部权限 provider。外部 SecretStore/LightRAG 仅经受控服务接口，不直连内部 DB/图。

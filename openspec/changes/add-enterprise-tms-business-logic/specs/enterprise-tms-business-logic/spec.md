@@ -14,7 +14,7 @@ TMS SHALL 由服务端已验证的身份和租户绑定确定唯一当前 tenant
 
 ### Requirement: 学校 code 路由必须与 EduPlus2 管理员学校绑定一致
 
-TMS SHALL 保留技术缩写及 `/tms` 入口，并以“学校智能体管理后台”为对外名称。一个技术 tenant SHALL 在 EduPlus2 教育业务中对应一所学校，`school_code` SHALL 作为学校 tenant code 构成 `/tms/{schoolCode}` 规范路由；`tenant_id`、`tenant.*` 和 Skill `owner=tenant` 技术契约 SHALL 保留。`/tms` SHALL 在验证管理员账号的唯一学校绑定后跳转至其规范学校路径，不提供任意学校选择器。路径 code MUST 仅作为学校定位线索：所有页面、API、品牌与资源查询 MUST 先由已认证主体解析可信稳定学校 ID 与规范 code，再核对路径 code、具体权限和资源归属。列表及详情深链 SHALL 保留学校 code 与筛选上下文，详情通过可直达/刷新恢复的列表背景抽屉展示；维护动作使用模态框，不以 URL 中的 `/edit` 自动授予写权限。
+TMS SHALL 保留技术缩写及 `/tms` 入口，并以“学校智能体管理后台”为对外名称。一个技术 tenant SHALL 在 EduPlus2 教育业务中对应一所学校，`school_code` SHALL 作为学校 tenant code 构成 `/tms/{schoolCode}` 规范路由；`tenant_id`、`tenant.*` 和 Skill `owner=tenant` 技术契约 SHALL 保留。`/tms` SHALL 在验证登录主体的唯一学校绑定后跳转至其规范学校路径；若尚无本产品管理授权，仅显示待开通状态，不展示学校业务数据，不提供任意学校选择器。路径 code MUST 仅作为学校定位线索：所有页面、API、品牌与资源查询 MUST 先由已认证主体解析可信稳定学校 ID 与规范 code，再核对路径 code、具体权限和资源归属。列表及详情深链 SHALL 保留学校 code 与筛选上下文，详情通过可直达/刷新恢复的列表背景抽屉展示；维护动作使用模态框，不以 URL 中的 `/edit` 自动授予写权限。
 
 #### Scenario: 管理员打开其学校的详情深链
 - **WHEN** 学校 `jygjzx` 的管理员直接打开 `/tms/jygjzx/quotas/{id}` 或刷新页面
@@ -24,17 +24,17 @@ TMS SHALL 保留技术缩写及 `/tms` 入口，并以“学校智能体管理�
 - **WHEN** 学校 A 的管理员改写路径为学校 B 的 code 或猜测学校 B 的资源 ID
 - **THEN** 页面、API 与导出均不得泄露 B 的管理内容，品牌不能冒充当前已验证学校的主题；前端隐藏链接不能替代服务端拒绝
 
-### Requirement: 学校管理员账号须由 EduPlus2 权威事件同步且独立验证登录
+### Requirement: 学校管理员必须由本产品权限受控开通并独立验证外部身份
 
-TMS 的学校管理员账号及学校/角色关联 SHALL 由 EduPlus2 权威的经签名 webhook 事件同步、更新和撤销；各学校账号 SHALL 隔离，不能以同名账号跨学校合并。登录凭证 SHALL 继续由 EduPlus2 掌管，收到 webhook 事件不得直接代表管理员已登录或已获得 TMS 动作权限。事件接收 MUST 验签、防重放、按稳定学校 ID + 用户 ID 幂等映射、处理乱序/撤权并可与权威快照对账；登录与每次管理操作 MUST 验证当前学校绑定、管理资格及对应 `tenant.*` 能力。发送端事件 schema、版本和对账能力尚待 EduPlus2 确认；在契约缺失或绑定不可信时，正式学校管理入口 MUST 保持未启用。既有学校生命周期 webhook 只处理开停事件，不能作为管理员账号同步已交付的证据。
+TMS SHALL 在 EduPlus2 既存认证/稳定学校身份核验后，由 DeepTutor Enterprise 程序读取 PG 中 `(issuer,sub,school)` 与当前 `tenant.*` 授权事实判定本产品管理能力；PG 用户/GRANT/RLS 不代替程序鉴权，首次登录默认零权，登录凭证仍归 EduPlus2。首位学校管理员 SHALL 按 `enterprise-management-authorization` 的已验签真实 `subscription.created.actor.user_id` 一次性身份引导与本人登录匹配流程激活；之后仅由本校 `tenant.permissions.manage` 管理后续角色与成员授权。旧 `tenant_admin`、`eit=adm`、一般学校生命周期事件或 mock MUST NOT 自动赋予 TMS 权限。管理员账号在学校之间隔离，不按同名账号合并；身份/学校绑定或本地授权失效时旧会话不得继续写入。真实事件 actor/身份合同缺失时正式管理写入 MUST 失败关闭，不得要求本代理在 EduPlus2 新增管理员权限事件。
 
-#### Scenario: 撤销学校管理员资格
-- **WHEN** EduPlus2 撤销某学校账号的管理员资格并通过权威事件或对账反映到 TMS
-- **THEN** 该账号不能继续访问学校管理页面、API 或使用旧会话写入；学校生命周期状态和其他账号不被错误改写
+#### Scenario: 撤销本产品学校管理员资格
+- **WHEN** TMS 撤销某学校管理员的本地角色，或其外部账号/学校状态失效
+- **THEN** 该账号不能继续使用旧会话进入学校管理页面或写 API；学校生命周期状态和其他账号不被错误改写
 
-#### Scenario: 学校身份事件缺少可信绑定
-- **WHEN** 管理员事件没有可验证的学校或用户稳定 ID，或登录学校 ID 与同步绑定冲突
-- **THEN** TMS 拒绝建立或使用管理员映射，不用 `school_code`、同名账号或页面路径补齐授权
+#### Scenario: 首次登录没有可信学校绑定
+- **WHEN** 主体的学校 ID 与权威绑定冲突，或仅有 `school_code`、同名账号、URL 路径
+- **THEN** TMS 不建立管理员映射、不显示学校业务数据，等待受控核验而不自动赋权
 
 ### Requirement: EduPlus2 必须保留租户、身份和组织权威
 
@@ -147,7 +147,7 @@ TMS SHALL 在已获授权的当前租户范围内按服务→成员/应用→单
 
 ### Requirement: TMS 必须独立交付并安全复用业务组件
 
-TMS SHALL 作为独立构建/部署的云端前端使用与 OMS 同源、兼容版本的服务列表/详情业务组件；共同列、状态、搜索、分页和详情交互保持一致，各端由自己的 API、权限和动作适配器提供数据。TMS 服务端 MUST 只返回本租户安全字段，不能将 OMS 的成本、Secret、采购和跨租户字段传到前端再隐藏。正式入口须在真实身份、权限、数据和隔离验证前保持不可用；开发原型数据不可进入生产路径，生产原型 URL 返回真实 HTTP 404。
+TMS SHALL 作为独立构建/部署的云端前端使用与 OMS 同源、兼容版本的服务列表/详情业务组件；共同列、状态、搜索、分页和详情交互保持一致，各端由自己的 API、权限和动作适配器提供数据。TMS 服务端 MUST 只返回本租户安全字段，不能将 OMS 的成本、Secret、采购、跨租户字段或 DeepTutor OMS 自有 `ops.*` 权限/学校范围传到前端再隐藏。OMS 平台主体/session 不赋予 TMS 当前学校管理权，TMS 学校管理员/session 也不赋予 OMS 平台权限。正式入口须在真实身份、权限、数据和隔离验证前保持不可用；开发原型数据不可进入生产路径，生产原型 URL 返回真实 HTTP 404。
 
 #### Scenario: 两端复用 OCR 服务列表
 - **WHEN** OMS 平台人员和 TMS 租户管理员分别查看 OCR 服务列表

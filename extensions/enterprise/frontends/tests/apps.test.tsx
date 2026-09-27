@@ -13,9 +13,12 @@ afterEach(() => vi.restoreAllMocks());
 describe("OMS 原型边界", () => {
   it("学校详情只读生命周期，但可本地演示授予；供给不足被拒绝", () => {
     path = "/oms/prototype/tenants/aurora";
-    render(<OmsPrototype/>);
+    const view = render(<OmsPrototype/>);
     expect(screen.getByText(/只能由 EduPlus2 生命周期事件触发/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /暂停学校/ })).not.toBeInTheDocument();
+    view.unmount();
+    path = "/oms/prototype/tenants/aurora/grants";
+    render(<OmsPrototype/>);
     fireEvent.click(screen.getByRole("button", { name: "授予额度（演示）" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: /授予数量/ }), { target: { value: "999999999" } });
     fireEvent.click(screen.getByRole("button", { name: "确认演示授予" }));
@@ -30,20 +33,20 @@ describe("OMS 原型边界", () => {
   });
 
   it("文档 OCR 配置沿用解析引擎语义，不伪造独立 OCR 模型", () => {
-    path = "/oms/prototype/services/ocr";
+    path = "/oms/prototype/services/ocr/config";
     render(<OmsPrototype/>);
     fireEvent.click(screen.getByRole("button", { name: "编辑配置草稿" }));
     expect(screen.getByRole("combobox", { name: "解析引擎" })).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "OCR 识别" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "OCR 识别" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "解析引擎" }), { target: { value: "docling" } });
-    expect(screen.getByRole("combobox", { name: "OCR 识别" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "OCR 识别" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "模型标识" })).not.toBeInTheDocument();
   });
 
   it("演示写动作不发起网络请求", () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
-    path = "/oms/prototype/tenants/aurora";
+    path = "/oms/prototype/tenants/aurora/grants";
     render(<OmsPrototype/>);
     fireEvent.click(screen.getByRole("button", { name: "授予额度（演示）" }));
     fireEvent.click(screen.getByRole("button", { name: "确认演示授予" }));
@@ -103,11 +106,13 @@ describe("TMS 原型边界", () => {
   });
 
   it("知识库详情有文档和处理任务元数据，不暴露正文", () => {
-    path = "/tms/prototype/demo-school/knowledge/kb-03";
-    render(<TmsPrototype/>);
+    path = "/tms/prototype/demo-school/knowledge/kb-03/documents";
+    const view = render(<TmsPrototype/>);
     expect(screen.getByText("历史试题扫描件.pdf")).toBeInTheDocument();
     expect(screen.getByText(/不加载私有文件正文/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "处理任务" }));
+    view.unmount();
+    path = "/tms/prototype/demo-school/knowledge/kb-03/tasks";
+    render(<TmsPrototype/>);
     expect(screen.getByText("扫描件索引")).toBeInTheDocument();
   });
 

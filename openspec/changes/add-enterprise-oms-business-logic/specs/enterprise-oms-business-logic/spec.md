@@ -148,11 +148,23 @@ OMS SHALL 只读展示 EduPlus2 签名事件形成的租户外部资格、本地
 
 ### Requirement: OMS 动作权限、审计和数据投影必须贯穿后端
 
-OMS SHALL 按 **EduPlus2 独立平台身份与权限**、动作能力、显式目标租户及数据范围鉴权；该平台主体不得由现有租户用户换票、`tenant_admin` 身份或客户端 header/任意 claim 推导，发送端 issuer/audience、权限/撤权版本与默认/自定义角色须有受控契约和迁移。平台配置、Secret、供给采购、租户授权/配额、用量核对、成本、审计与导出须分别授权。`tenant_admin`、普通用户、auditor 或仅有只读权限的 operator 不得通过直接 API、导出、旧管理入口、共享组件或伪造 header 扩权。配置/授予/采购/核对写入 SHALL 记录操作者、对象、版本、原因、结果和关联 ID；状态展示 SHALL 区分待生效、待核对、供给不足、租户额度不足、同步延迟与无权限。发送端契约和合成负例通过前，跨租户写 router MUST NOT 装配。
+OMS SHALL 验证 **EduPlus2 既存 OIDC 身份**，并由 **DeepTutor Enterprise 程序**按本地 PG 事实独立判定仅限本产品的 `ops.*` 动作、显式 `platform`/目标 `school` 范围和本应用撤权版本；该平台主体不得由现有租户用户换票、`tenant_admin` 身份、JWT role 或客户端 header/任意 claim 推导。平台配置、Secret、供给采购、租户授权/配额、用量核对、成本、审计与导出须分别授权。全局配置/Secret 和未定向采购须 `platform` 范围；学校权益/额度与定向供给须经权威绑定的目标 `school` 范围；同时涉及两类范围时均须通过。`tenant_admin`、普通用户、auditor 或仅有只读权限的 operator 不得通过直接 API、导出、旧管理入口、共享组件或伪造 header 扩权。配置/授予/采购/核对写入 SHALL 记录操作者、对象、版本、原因、结果和关联 ID；状态展示 SHALL 区分待生效、待核对、供给不足、租户额度不足、同步延迟与无权限。现有受信 OIDC client/audience 和在线账号有效性校验、受控本地权限迁移、目标绑定及合成负例通过前，跨学校写 router MUST NOT 装配；不得修改或代替 EduPlus2 的角色/权限系统。
+
+DeepTutor 内部 UUID 租户与 EduPlus2 权威学校 ID MUST 使用一对一、已核验且可撤权的版本化绑定；外部 ID 类型以正式现有接口为准，`external_tid` 文本、学校码、JWT/header 或客户端传入目标均不得单独构成映射依据。每次管理写入 MUST 在线核验外部账号当前有效，并在业务账务 PG 事务内锁定、复核本地动作/所需范围授权的当前版本；涉及学校时还须复核学校绑定版本；本地撤权与写入必须串行化。账号状态接口不可用、版本失效/冲突或学校权威核验失败 SHALL 失败关闭，不得把 webhook secret 当成操作权限。
 
 #### Scenario: 租户管理员直调 OMS 配额接口
 - **WHEN** 租户管理员伪造目标 tenant 或平台角色调用 OMS 授予接口
 - **THEN** 后端拒绝且不泄露其他租户是否存在，审计安全事件
+
+#### Scenario: 内部租户与权威学校目标绑定漂移
+- **GIVEN** 平台操作者在 DeepTutor 有某学校的本地动作授权，但对应内部 UUID 绑定仍待核验、已撤权或版本在写事务前改变
+- **WHEN** 其请求 OMS 授予或调整该学校额度
+- **THEN** OMS 不凭学校码、`external_tid` 或旧授权快照改写任何租户总账，并记录失败关闭的安全审计
+
+#### Scenario: 外部账号停用或本地权限撤销
+- **GIVEN** 已绑定的平台主体曾被授予某学校的配额管理权
+- **WHEN** EduPlus2 现有在线账号状态表明账号已停用，或 DeepTutor 内的动作/学校授权在写事务前撤销或升版
+- **THEN** OMS 拒绝本次及后续写入；不能用尚未过期的旧 JWT、前端菜单或缓存权限绕过
 
 #### Scenario: 无成本权限的运营人员查询用量
 - **WHEN** 有用量读取权但没有成本读取权的运营人员打开调用详情或导出

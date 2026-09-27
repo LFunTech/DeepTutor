@@ -1,4 +1,4 @@
-> 本 change 是正式 TMS 业务逻辑的**未来实施清单**。当前仅完成 proposal/design/specs 规划；以下任务全部未实施、未批准。TMS 原型交互仍由 `add-b2-tms-management-prototype` 承担，OMS 配额写入和真实用量由 OMS/DeepTutor 业务 change 承担。
+> **2026-09-27 双应用域权限修订，待重新审阅批准。** 本 change 是正式 TMS 业务逻辑的未来实施清单；以下任务全部未实施。TMS 原型交互仍由 `add-b2-tms-management-prototype` 承担，OMS 配额写入和真实用量由 OMS/DeepTutor 业务 change 承担。
 
 ## 1. A1：租户与资源归属基线
 
@@ -21,11 +21,11 @@
 - [ ] 4.1 对接可信身份绑定的当前 `internal_tenant_id/external_tenant_id` 与 EduPlus2 lifecycle 只读投影；验证任意 URL/body/header tenant 覆盖被拒，未知/延迟状态不伪装 active。
 - [ ] 4.2 实施 client/app 注册前 EduPlus2 权威 resolve、租户完全匹配及 active 唯一性，附带 PG 迁移和 403/409/外部失败/并发注册测试；不接收人工名称作为身份凭据。
 - [ ] 4.3 实施 client 注销/retire 和历史审计、换 client 流程；验证 token exchange/撤权仍依赖签名 JWT 和真实注册状态，不能凭 TMS 列表自动放行。
-- [ ] 4.4 与 EduPlus2 确认学校管理员账号创建/变更/撤销的签名 webhook 事件 schema、学校 ID/`school_code`/用户 ID/角色、来源版本和对账接口；实施独立于学校 lifecycle 的账号映射/inbox 与 PG 迁移、撤权及登录时验证。验证双学校同名账号隔离、缺字段、签名错误、重复/乱序、改码、对账、旧会话失权及缺权威契约时正式入口 fail closed；按实际关系/claim 变化判定 OpenFGA/Keycloak 迁移。
+- [ ] 4.4 对接 `add-enterprise-management-authorization` 的 Enterprise 应用授权服务、PG 主体/角色/学校范围事实迁移与签名真实 `subscription.created.actor.user_id` 一次性首位引导/本人激活；不要求新增发送端管理员权限 webhook。验证双学校同名账号隔离、学校改码/解绑、身份失效、真实事件与候选本人登录匹配、mock/system/null/重放拒绝、撤权后旧会话失权及身份合同缺失时写入口 fail closed；本仓库 PG dry-run/apply/verify，不修改外部 OpenFGA/Keycloak。
 
 ## 5. B2：租户自管理、只读配额和真实用量
 
-- [ ] 5.1 审阅并批准 TMS 的 `tenant.*` 默认/自定义角色、菜单/按钮/API 映射和必要 PG/OpenFGA/Keycloak 迁移，验证普通成员、他人私有内容和跨租户负例。
+- [ ] 5.1 审阅并批准 TMS 的 `tenant.*` 默认/自定义角色、菜单/按钮/API 映射、Enterprise 程序决策与 DeepTutor PG 事实迁移；OMS/TMS 同一授权内核但应用域与 session 隔离，验证普通成员、旧 `tenant_admin`、他人私有内容和跨学校负例；不做外部 OpenFGA/Keycloak 迁移。
 - [ ] 5.2 实施当前租户成员、应用、后台主体与资源访问 grant 的授权、撤销和审计；服务访问 grant 绑定 OMS 授权代际且不含数量/余额/上限，验证撤权后及同服务重新授权后旧 grant 均不自动放行。
 - [ ] 5.3 实施本租户 KB/文档及业务任务的真实管理与 owner/grant 检查；验证索引失败、重试、非托管解绑、私有引用下载和取消待确认状态。
 - [ ] 5.4 接入 OMS 同一赠送/充值配额列表和 DeepTutor 真实用量的当前租户只读投影；验证筛选、详情、同一 attempt 跨赠送/充值两笔额度但用量只计一次、待核对、耗尽、同步延迟，以及所有配额/用量写请求拒绝。

@@ -1,0 +1,43 @@
+---
+title: 错误与排障
+description: HTTP 与 WebSocket 错误处理原则
+slug: /errors/
+---
+
+# 错误与排障
+
+先判断失败发生在 **HTTP 换票／业务调用**、**WS 握手**，还是**已连接后的 WS 命令／turn 流**。不要把所有错误都视为“刷新 token 再重试”；某些失败反映权限或配置边界，重复请求只会触发更多拒绝和限流。
+
+## HTTP 决策表
+
+| 状态 | 常见原因／判读 | 第三方 Agent 应做什么 |
+| --- | --- | --- |
+| `400`／`422` | 请求字段或格式不合法；语音空文件等 | 修正请求，不原样重试；检查必填字段、Content-Type、大小与摘要 |
+| `401` | 外部 JWT／`dt_token` 缺失、过期或不被接受；`exchange` 也可能因同一 user JWT 重放被拒绝 | 先确认用对了凭证类型；由前置应用取得**新的**合法 user JWT；不能重复 exchange 同一 JWT |
+| `403` | Origin／Cookie CSRF 校验失败，或当前身份没有操作／资源权限 | 检查部署方 Origin、CSRF 载体和用户授权；不得换学校 ID、猜资源 ID 或无限刷新绕过 |
+| `404` | 资源不存在或不可见 | 不枚举其他 ID；核对本用户已有的 `session_id`／`resource_id`，必要时向部署方报障 |
+| `409` | 学校／应用绑定等状态冲突，或乐观并发版本冲突 | 读取当前状态并核对配置／版本；不是简单网络重试 |
+| `413` | STT 文件超过上限 | 缩小或分割音频后再提交 |
+| `429` | 身份交换／登录限流 | 对可重试操作做有上限的指数退避与抖动；合并并发换票，绝不并发重放同一 JWT |
+| `503` | 依赖服务暂不可用 | 有上限退避并保留 `X-Request-ID`；非幂等操作先查状态再判断是否重试 |
+
+实际响应 `detail` 可能是刻意脱敏的通用文案，不要依赖它区分学校或用户是否存在。未经认证时可能先收到 `401`，不应用状态码推断未列出的接口是否开放；以 [企业目录](http-api.mdx) 为准，不用状态码反推“接口已开放”。
+
+## WebSocket 决策表
+
+| 现象 | 处理 |
+| --- | --- |
+| 握手失败／1008 | 检查 `dt_token`、必须存在且已允许的 Origin、撤权状态。浏览器不能自设 Authorization，需用 `deeptutor-token` 子协议载体；不要把 token 改放 query。 |
+| `protocol_error` 且 `error_code=unsupported_protocol_version`／`invalid_json`／`invalid_command` | 修正 JSON 对象、字段和字符串版本 `"2.0"`；原样重发不会成功。 |
+| `protocol_error` 且 `error_code=start_turn_rejected`／`operation_deleted` | 核对会话归属、资源引用、操作状态及权限；不要自动生成新 `operation_id` 重发。 |
+| turn 错误码 `knowledge_base_unavailable`／`skill_unavailable`／`mcp_tool_unavailable`／`required_context_unavailable` | 所请求的上下文未满足；核对当前用户授权与部署方提供的 ID，再让用户调整选择。`required` 不应被悄悄降为 `auto`。见[对话能力选择](capability-selection.mdx)。 |
+| `protocol_error` 且 `error_code=subscription_failed` | 保留已有 `turn_id`、最后已处理 `seq`，在有效身份下重建连接并订阅；限定退避次数。 |
+| `command_ack.accepted=false` | 根据 `error_code` 判断 turn 是否仍活动或是否等待回复；不要把拒绝当成功。 |
+| `auth_revoked` 后关闭 1008 | 停止向旧连接发命令；前置应用重新核验同一用户并换票，合法后重连并 `resume_from`。 |
+| turn 流 `error`，或 `done` 后结果不完整 | 保留 `turn_id` 和游标；查已持久化事件／会话状态，区分能力失败与传输中断，不盲目新建 turn。 |
+
+`protocol_error.retryable` 是服务端提示，**不是对重复写入安全的承诺**。特别是 `start_turn`：若首事件前断线，重新认证后只在幂等记录保留期内原样重发预先保存的完整请求与同一 `operation_id`；不能更改请求字段，也不能在保留期过后自动重发。已知 `turn_id` 时直接用 `subscribe_turn.after_seq` 或 `resume_from.seq` 恢复，且按 `(turn_id, seq)` 去重。`cancel_turn`、`submit_user_reply` 用 `command_id` 关联确认；其重发也应保留同一个 ID。
+
+## 排障所需关联信息
+
+联调时记录**不含秘密**的 `X-Request-ID`、接口方法与路径、HTTP 状态、时间、WS `command_id`／`operation_id`、已获授权的 `session_id`／`turn_id`、最后 `seq` 和脱敏错误码。**不要**记录 user JWT、`dt_token`、预签名 URL、原始用户消息或包含隐私的完整事件。把脱敏信息交给部署方定位。

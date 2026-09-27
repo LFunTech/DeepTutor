@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager, nullcontext
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import time
@@ -497,12 +498,18 @@ def create_application(enterprise):
             return JSONResponse({"detail": "Invalid request"}, status_code=422)
         if not re.fullmatch(r"sha256=[0-9a-f]{64}", signature):
             return JSONResponse({"detail": "Authentication required"}, status_code=401)
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            timestamp.encode("ascii") + b"." + event_type.encode("ascii") + b"." + raw,
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac.compare_digest(expected, signature[7:]):
+        signed_bytes = timestamp.encode("ascii") + b"." + event_type.encode("ascii") + b"." + raw
+        expected = hmac.new(secret.encode("utf-8"), signed_bytes, hashlib.sha256).hexdigest()
+        current_matches = hmac.compare_digest(expected, signature[7:])
+        previous_secret = str(getattr(enterprise, "eduplus2_webhook_previous_secret", "") or "")
+        previous_until = int(getattr(enterprise, "eduplus2_webhook_previous_until", 0) or 0)
+        previous_matches = False
+        if previous_secret and int(time.time()) <= previous_until:
+            previous_expected = hmac.new(
+                previous_secret.encode("utf-8"), signed_bytes, hashlib.sha256
+            ).hexdigest()
+            previous_matches = hmac.compare_digest(previous_expected, signature[7:])
+        if not (current_matches or previous_matches):
             return JSONResponse({"detail": "Authentication required"}, status_code=401)
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -518,8 +525,38 @@ def create_application(enterprise):
             and len(event_id) <= 128
         ):
             return Response(status_code=204)
-        # 未有单调权威版本/状态对账时，绝不 2xx 确认真实事件或写入租户开停。
-        return JSONResponse({"detail": "Lifecycle receiver unavailable"}, status_code=503)
+        if not getattr(enterprise, "eduplus2_lifecycle_receiver_enabled", False):
+            return JSONResponse({"detail": "Lifecycle receiver unavailable"}, status_code=503)
+        from ..eduplus2.lifecycle import (
+            LifecycleConflict,
+            LifecycleInvalid,
+            LifecycleWrongApp,
+            ingest_lifecycle_event,
+            parse_lifecycle_event,
+        )
+
+        try:
+            event = parse_lifecycle_event(
+                payload,
+                event_type,
+                app_id=getattr(enterprise, "eduplus2_webhook_app_id", 0),
+                digest_key=getattr(enterprise, "eduplus2_webhook_inbox_digest_key", ""),
+            )
+            await ingest_lifecycle_event(
+                enterprise, event, delivery_timestamp=int(timestamp)
+            )
+        except LifecycleWrongApp:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+        except LifecycleConflict:
+            logging.getLogger(__name__).warning(
+                "lifecycle webhook conflict; no business state changed"
+            )
+            return JSONResponse({"detail": "Event conflict"}, status_code=409)
+        except LifecycleInvalid:
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        except (RuntimeError, TimeoutError, psycopg.Error):
+            return JSONResponse({"detail": "Lifecycle receiver unavailable"}, status_code=503)
+        return Response(status_code=204)
 
     @eduplus2_auth.get("/auth/eduplus2/demo/start", name="eduplus2_demo_start")
     async def eduplus2_demo_start(request: Request):

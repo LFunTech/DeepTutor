@@ -104,6 +104,32 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
+  - name: compile-docs-test-cn
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/test-cn/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DOCKER_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DOCKER_PASSWORD
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
+      - |
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        /kaniko/executor --context=dir:///woodpecker/src/docs-site --dockerfile=/woodpecker/src/docs-site/Dockerfile --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/docs:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NGINX_IMAGE="$${registry_host}/base/nginx:1.27-alpine" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --build-arg DOCS_SITE_URL="https://$${DEEPTUTOR_INGRESS_HOST}" --build-arg DOCS_BASE_URL=/docs/ --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+
+
   - name: compile-python-deps-test-cn
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
     depends_on: [prepare-release-metadata]
@@ -183,7 +209,7 @@ steps:
 
   - name: pre-deploy-check-test-cn
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
-    depends_on: [build-runtime-image-test-cn]
+    depends_on: [build-runtime-image-test-cn, compile-docs-test-cn]
     when:
       - event: tag
         ref: refs/tags/deploy/test-cn/**
@@ -207,6 +233,13 @@ steps:
         test -n "$${digest}"
         case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
         printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > .deeptutor-image.env
+        manifest_url="https://$${registry_host}/v2/$${registry_path}/docs/manifests/$${DEEPTUTOR_IMAGE_TAG}"
+        curl --fail --silent --show-error --head --user "$${REGISTRY_PUSH_USERNAME}:$${REGISTRY_PUSH_TOKEN}" -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' "$${manifest_url}" > "$${headers}"
+        docs_digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
+        printf '%s\n' "$${docs_digest}" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "invalid docs image digest" >&2; exit 2; }
+        printf "export DEEPTUTOR_DOCS_IMAGE_DIGEST='%s/docs@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${docs_digest}" >> .deeptutor-image.env
+        mkdir -p "$${DEEPTUTOR_EVIDENCE_DIR}/build"
+        printf '{"runtime_image_digest":"%s/runtime@%s","docs_image_digest":"%s/docs@%s"}\n' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${docs_digest}" > "$${DEEPTUTOR_EVIDENCE_DIR}/build/docs-image-digest.json"
         test -s .deeptutor-image.env
 
 
@@ -281,6 +314,7 @@ steps:
       - python scripts/protected-k8s-release/sync-test-webhook-secret.py
       - deploy/kubernetes/protected-k8s-release/deploy.sh
       - deploy/kubernetes/protected-k8s-release/status.sh "$${DEEPTUTOR_K8S_NAMESPACE}" | tee "$${DEEPTUTOR_EVIDENCE_DIR}/deploy-status.txt"
+      - python scripts/protected-k8s-release/check-docs-site.py --origin "https://$${DEEPTUTOR_INGRESS_HOST}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/docs-smoke.json"
       - PYTHONPATH=extensions/enterprise/src python -m deeptutor_enterprise.protected_k8s_release_cli scan-evidence --path "$${DEEPTUTOR_EVIDENCE_DIR}" --output "$${DEEPTUTOR_EVIDENCE_DIR}/scan"
       - test "$$(python -c 'import json, os; print(json.load(open(os.environ["DEEPTUTOR_EVIDENCE_DIR"] + "/scan/secret-leakage-scan.json"))["ready"])')" = "True"
 

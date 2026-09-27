@@ -1,0 +1,43 @@
+---
+title: "auth_refresh · 刷新连接身份"
+description: "WebSocket 命令 auth_refresh 的请求、响应与恢复"
+slug: /api/ws/auth_refresh/
+command: auth_refresh
+---
+
+# auth_refresh
+
+## 用途与时机
+
+当前 WS 连接即将到期时，用同一用户的新凭证延续连接。不要等待必然收到到期提醒。
+
+## 前置条件
+
+由可信前置应用取得新的 EduPlus2 用户 JWT，或已换得同一用户的新 `dt_token`；身份与原连接必须一致。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"auth_refresh"`。
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `command_id` | 是 | 非空刷新确认关联 ID |
+| `external_token` | 与 `dt_token` 二选一 | 新的 EduPlus2 用户 JWT |
+| `dt_token` | 与 `external_token` 二选一 | 同一用户重新交换得到的短期凭证 |
+
+不要把凭证写入 URL、日志或持久化浏览器存储。
+
+<!-- ws-command -->
+```json
+{"type":"auth_refresh","protocol_version":"2.0","command_id":"refresh-001","external_token":"<新的 EduPlus2 用户 JWT>"}
+```
+
+## 响应与事件
+
+成功返回 `auth_ack`：`command_id`、`accepted`、`expires_at`、`refresh_deadline`。按新的到期时间安排下一次刷新。
+
+## 错误与恢复
+
+刷新失败可能返回 `auth_revoked` 并以 1008 关闭；不能继续在旧连接发命令。重新核验用户，合法后重连并用已保存游标恢复。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

@@ -12,6 +12,11 @@ class StaticEduPlus2Resolver:
 
     def __init__(self, clients: dict[str, dict]):
         self._clients = copy.deepcopy(clients)
+        # 旧合成 fixture 只有扁平 status；显式补足测试替身的两项状态。
+        # 生产 resolver 不经过此类，必须从外部响应读取实际字段。
+        for value in self._clients.values():
+            value.setdefault("tenant_status", "active")
+            value.setdefault("app_status", "active")
 
     async def resolve_client(self, client_id: str) -> dict:
         if client_id not in self._clients:

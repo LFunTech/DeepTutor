@@ -44,9 +44,9 @@ async def _ledger(pg_dsn):
         await c.execute(
             "INSERT INTO oms.supply_lots"
             "(id,service_id,provider_id,provider_account_id,pool_id,unit_code,evidence_ref,"
-            "hard_ceiling,starts_at,expires_at) "
+            "hard_ceiling,starts_at,expires_at,supply_basis,verified_at) "
             "VALUES(%s,'llm','provider-a','account-a','pool-a','token',"
-            "'contract://synthetic/llm',100,%s,%s)",
+            "'contract://synthetic/llm',100,%s,%s,'native_units',now())",
             (lot_id, now - timedelta(days=1), now + timedelta(days=3)),
         )
 
@@ -523,6 +523,120 @@ async def test_revoke_grant_releases_only_unspent_and_preserves_inflight(pg_dsn)
             )
         with pytest.raises(GrantRejected, match="idempotency"):
             await grants_ledger.revoke(operator_scope, replace(revoke, reason="different reason"))
+    finally:
+        await db.__aexit__(None, None, None)
+
+
+async def test_expire_grant_releases_only_unspent_and_keeps_unknown_attempt(pg_dsn):
+    from deeptutor_enterprise.oms.attempts import OmsAttemptLedger
+    from deeptutor_enterprise.oms.ledger import (
+        ExpireRequest,
+        GrantRejected,
+        OmsGrantLedger,
+    )
+
+    db, tenant_id, lot_id, grants = await _ledger(pg_dsn)
+    learner_scope = TenantScope(str(tenant_id), "learner-1")
+    worker_scope = TenantScope(str(tenant_id), "oms-expiry-worker")
+    request = _request(units=20)
+    try:
+        attempts = OmsAttemptLedger(db)
+        ledger = OmsGrantLedger(db)
+        await attempts.reserve(learner_scope, request)
+        await attempts.mark_dispatched(learner_scope, request.attempt_id)
+        await attempts.mark_remote_unknown(
+            learner_scope, request.attempt_id, evidence_ref="timeout://expiry-test"
+        )
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(tenant_id),))
+            await c.execute(
+                "UPDATE oms.quota_grants SET starts_at=now()-interval '2 days',"
+                "expires_at=now()-interval '1 second' "
+                "WHERE tenant_id=%s AND id=%s",
+                (tenant_id, grants[0]),
+            )
+        expire = ExpireRequest(
+            grant_id=grants[0],
+            expected_version=1,
+            actor_subject="oms-expiry-worker",
+            request_id="expiry-1",
+            idempotency_key="expiry-1",
+            reason="validity elapsed",
+        )
+        result = await ledger.expire(worker_scope, expire)
+        assert result.version == 2
+        assert result.released_units == Decimal("10")
+        assert await ledger.expire(worker_scope, expire) == result
+        assert await _balances(pg_dsn, tenant_id, lot_id) == (
+            (0, 50, 20),
+            {"gift": (0, 20, 0, 10), "recharge": (50, 0, 0, 0)},
+        )
+        await attempts.settle(
+            learner_scope,
+            request.attempt_id,
+            units=Decimal("12"),
+            source="provider_usage",
+            evidence_ref="usage://after-expiry",
+            provider_request_id="provider-after-expiry",
+        )
+        assert await _balances(pg_dsn, tenant_id, lot_id) == (
+            (12, 50, 0),
+            {"gift": (0, 0, 12, 18), "recharge": (50, 0, 0, 0)},
+        )
+        with pytest.raises(GrantRejected, match="version"):
+            await ledger.expire(worker_scope, replace(expire, idempotency_key="expiry-2"))
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(tenant_id),))
+            state = await (
+                await c.execute(
+                    "SELECT status,version FROM oms.quota_grants WHERE tenant_id=%s AND id=%s",
+                    (tenant_id, grants[0]),
+                )
+            ).fetchone()
+            audit = await (
+                await c.execute(
+                    "SELECT action,result FROM oms.audit_events WHERE object_id=%s "
+                    "AND action='quota.expire'",
+                    (str(grants[0]),),
+                )
+            ).fetchall()
+        assert state == ("expired", 2)
+        assert audit == [("quota.expire", "success")]
+    finally:
+        await db.__aexit__(None, None, None)
+
+
+async def test_grant_cannot_expire_before_its_deadline(pg_dsn):
+    from deeptutor_enterprise.oms.ledger import ExpireRequest, GrantRejected, OmsGrantLedger
+
+    db, tenant_id, lot_id, grants = await _ledger(pg_dsn)
+    request = ExpireRequest(
+        grant_id=grants[0],
+        expected_version=1,
+        actor_subject="oms-expiry-worker",
+        request_id="early-expiry",
+        idempotency_key="early-expiry",
+        reason="scheduled expiry",
+    )
+    try:
+        with pytest.raises(GrantRejected, match="not expired"):
+            await OmsGrantLedger(db).expire(
+                TenantScope(str(tenant_id), "oms-expiry-worker"), request
+            )
+        assert await _balances(pg_dsn, tenant_id, lot_id) == (
+            (0, 80, 0),
+            {"gift": (30, 0, 0, 0), "recharge": (50, 0, 0, 0)},
+        )
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(tenant_id),))
+            commands = await (
+                await c.execute(
+                    "SELECT action FROM oms.grant_commands WHERE grant_id=%s "
+                    "AND action='quota.expire'",
+                    (grants[0],),
+                )
+            ).fetchall()
+        assert commands == []
     finally:
         await db.__aexit__(None, None, None)
 

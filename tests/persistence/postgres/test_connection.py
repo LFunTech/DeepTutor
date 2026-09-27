@@ -55,6 +55,30 @@ def test_scope_sql_falls_back_when_transaction_timeout_is_unavailable(restricted
     assert "transaction_timeout" not in db._scope_sql()
 
 
+@pytest.mark.asyncio
+async def test_global_scope_cannot_read_tenant_rls_and_does_not_leak_on_pool_reuse(restricted_dsn):
+    from deeptutor.persistence.postgres.scope import GlobalScope
+
+    tenant = scope()
+    async with core().Database(restricted_dsn, resource="global-scope", max_size=1) as db:
+        async with db.transaction(tenant) as c:
+            await c.execute(
+                "INSERT INTO core_test.items VALUES (%s,%s,'tenant-only')",
+                (tenant.tenant_id, tenant.user_id),
+            )
+        async with db.transaction(GlobalScope("platform-operator")) as c:
+            assert (await (await c.execute("SELECT * FROM core_test.items")).fetchall()) == []
+            row = await (
+                await c.execute(
+                    "SELECT current_setting('app.tenant_id',true) AS tenant_id,"
+                    "current_setting('app.user_id',true) AS user_id"
+                )
+            ).fetchone()
+            assert row == {"tenant_id": "", "user_id": "platform-operator"}
+        async with db.transaction(tenant) as c:
+            assert len(await (await c.execute("SELECT * FROM core_test.items")).fetchall()) == 1
+
+
 def test_sync_scope_reuse_rls_rollback_and_scope_validation(restricted_dsn, pg_dsn):
     a, b = scope(), scope("bob")
     with core().SyncDatabase(restricted_dsn, resource="core", max_size=1) as db:

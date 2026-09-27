@@ -1,0 +1,40 @@
+---
+title: "cancel_turn · 取消 turn"
+description: "WebSocket 命令 cancel_turn 的请求、响应与恢复"
+slug: /api/ws/cancel_turn/
+command: cancel_turn
+---
+
+# cancel_turn
+
+## 用途与时机
+
+用户要求停止当前 turn 时调用。
+
+## 前置条件
+
+有权操作该 `turn_id`；为本次命令分配稳定 `command_id`。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"cancel_turn"`。
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `turn_id` | 是 | 目标 turn |
+| `command_id` | 是 | 关联确认的非空 ID；重试保持不变 |
+
+<!-- ws-command -->
+```json
+{"type":"cancel_turn","protocol_version":"2.0","turn_id":"turn-001","command_id":"cancel-001"}
+```
+
+## 响应与事件
+
+收到 `command_ack`：`command_id`、`command_type:"cancel_turn"`、`accepted`、`turn_id`、`error_code`、`message`。接受取消后仍应继续处理该 turn 的终态事件。
+
+## 错误与恢复
+
+`accepted:false` 且 `turn_not_active` 表示目标不再处于可取消状态；检查当前状态，不要无限重复取消。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

@@ -164,6 +164,12 @@ Pipeline MUST 从受信提交构建一次，并将 frontend/backend 镜像推送
 
 Woodpecker 构建把前端 bundle、Python dependency tree 和 runtime OS/base layer 拆成同一 tag run 内的并行 artifact-image steps。各 step 使用语义化命名和 Kaniko 构建受信提交中的固定 Dockerfile/target，并推送不可变中间镜像：`frontend-builder` 产出 `frontend-build:<tag>`，`python-base` 产出 `python-deps:<tag>`（使用 `--skip-unused-stages` 避免构建无关 stage），`Dockerfile.protected-runtime-base` 产出 `runtime-base:<tag>`。最终 `Dockerfile.protected-runtime` 只从这些 artifact images 复制 `/app/web/.next/standalone`、`/app/web/.next/static`、`/app/web/public`、`/usr/local` Python 依赖、enterprise extension source 和 runtime base，再装配 runtime image、推送并解析 digest；不在最终阶段执行 apt、npm、pip、rustup 或 cargo。runtime 进程配置与启动脚本作为 `deploy/docker-runtime/` 下的受版本控制文件复制进入镜像，避免 Kaniko 在复制大体积 artifact 之后为多个 heredoc/sed/chmod 小步骤反复做全文件系统 snapshot。这样仍满足“同一受信提交构建一次并部署 digest”的契约，同时允许前端、Python 依赖和 runtime base 真正并行，并避免 workspace artifact 在 Woodpecker command 容器与 Kaniko context 间复制造成的不一致。CI 中 apt 使用 Tsinghua Debian mirror，npm/PyPI/Cargo 使用目标网络可达的内部 mirror；PyPI 必须指向 PEP 503 simple endpoint（例如 `.../pypi/simple/`）。
 
+## 决策 2a：第三方文档只在 test-cn 独立发布
+
+`docs-site/` 是独立 Docusaurus 构建上下文，不并入 DeepTutor runtime 镜像。`compile-docs-test-cn` 与 `compile-frontend-test-cn` 同样只依赖 `prepare-release-metadata`，以 test-cn registry 凭证推送 `docs:<tag>`。预部署门禁同时等待 runtime 与 docs 镜像构建，解析两者不可变 digest；缺失或环境仓库不匹配时不得进入部署。文档镜像以构建时 `https://<test-cn ingress host>` 和 `/docs/` 生成站点链接，不包含凭证或演示身份。
+
+test-cn 使用独立的静态 Deployment、Service 与最小化 NetworkPolicy。`deploy.sh` 在执行任何 `kubectl` 前校验 test-cn docs digest，并在 migration 成功后部署 docs 服务；同名 Ingress 使用 test-cn 专用清单明确包含 `/docs` 和 `/` 两条 Prefix 路径，避免依赖控制器对多个同域名 Ingress 的合并行为。pre/prod 沿用只有 `/` 的基础 Ingress，不创建 docs 服务或路径。部署步骤等待 docs rollout，经真实 HTTPS 校验 `/docs/` 首页和其引用的一项静态资源；失败即阻断发布，不得把静态文件构建成功等同于发布成功。文档构建和路由结果写入 test-cn 脱敏 evidence。正式触发仍依赖受保护 tag、环境审批和实际入库的 `docs-site/` 文件，本次源码改动不代表已部署。
+
 ## 决策 3：迁移和 rollout 由发布步骤编排
 
 应用 PG migration、固定租户 bootstrap、默认 policy/profile 初始化由独立 Job 或等价发布步骤执行：

@@ -11,7 +11,19 @@
 - **THEN** 页面显示真实待处理事项与可钻取对象，并明确区分配置待生效、额度/供给不足、已结算和待核对
 
 ### Requirement: OMS 路由和动作必须按平台能力授权
-系统 SHALL 在前端按能力控制菜单及动作，在后端对每次查询/变更验证 EduPlus2 平台身份、目标租户和对应 `ops.*` 动作权限。`tenant_admin`、普通用户或伪造能力 MUST NOT 读取跨租户 OMS 数据；仅有读权限的运营或审计人员 MUST NOT 修改配置/Secret、供给、额度或核对，也不能读取成本。TMS 只复用安全 DTO/组件，不复用 OMS 专有 API client。
+系统 SHALL 在前端按能力控制菜单及动作，在后端对每次查询/变更验证 EduPlus2 既存 OIDC 身份、DeepTutor OMS 当前 `ops.*` 动作权限及经核验的目标学校范围。`tenant_admin`、普通用户或伪造能力 MUST NOT 读取跨租户 OMS 数据；仅有读权限的运营或审计人员 MUST NOT 修改配置/Secret、供给、额度或核对，也不能读取成本。TMS 只复用安全 DTO/组件，不复用 OMS 专有 API client 或权限会话。
+
+#### Scenario: 本产品平台授权已撤销
+- **WHEN** 已登录 OMS 的运营人员被撤销某动作或学校范围
+- **THEN** 菜单/按钮按刷新后的权限隐藏，直接 API 调用立即由后端拒绝，旧页面数据不继续显示该学校敏感内容
+
+#### Scenario: 应用权限管理与外部身份边界
+- **WHEN** 有 `ops.permissions.manage` 的平台管理员维护 OMS 应用角色和目标学校授权
+- **THEN** 仅写 DeepTutor 审计化权限记录；不创建、停用或改写 EduPlus2 账号、学校、OpenFGA 或 Keycloak
+
+#### Scenario: 学校账号管理入口被拒绝
+- **WHEN** OMS 主体访问旧首位学校管理员开通路径或提交学校候选主体
+- **THEN** 页面与 API 均不提供该能力，学校侧开通由 TMS 独立负责
 
 #### Scenario: 租户管理员直接请求隐藏页面 API
 - **WHEN** tenant_admin 绕过页面直接调用 OMS 跨租户 API
@@ -25,7 +37,7 @@ OMS SHALL 支持租户→用户/应用→service/provider/model→operation/atte
 - **THEN** 页面分别显示已结算原生单位与待核对 attempt 数，并能钻取待核对原因，不推算租户费用
 
 ### Requirement: OMS 负责平台资源/权益而不接管租户生命周期
-OMS SHALL 作为云端平台配置、Secret 引用、供给、服务授权/额度及核对的获授权写入口；MUST NOT 提供 EduPlus2 租户开停/恢复、TMS client/成员或租户私有正文管理入口。OMS SHALL 分别呈现租户 lifecycle、服务额度、平台供给和配置 readiness，不得把单服务额度不足误报为整个租户停用，并应提示登录、管理和其他服务是否仍可用。本地 DeepTutor Web 设置 SHALL 保持原有功能。
+OMS SHALL 作为云端平台配置、Secret 引用、供给、服务授权/额度及核对的获授权写入口；MUST NOT 提供 EduPlus2 租户开停/恢复、TMS client/任何学校账号或租户私有正文管理入口；首位 TMS 管理员仅由 TMS／学校侧受控开通。OMS SHALL 分别呈现租户 lifecycle、服务额度、平台供给和配置 readiness，不得把单服务额度不足误报为整个租户停用，并应提示登录、管理和其他服务是否仍可用。本地 DeepTutor Web 设置 SHALL 保持原有功能。
 
 #### Scenario: 配置部分确认
 - **WHEN** OMS 发布配置但部分目标执行者尚未确认

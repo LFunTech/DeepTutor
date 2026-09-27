@@ -1,0 +1,63 @@
+---
+title: "start_turn · 发起对话"
+description: "WebSocket 命令 start_turn 的请求、响应与恢复"
+slug: /api/ws/start_turn/
+command: start_turn
+---
+
+# start_turn
+
+## 用途与时机
+
+用户提出新问题或在已有会话追问时调用。成功后自动订阅新 turn；兼容命令名 `message`，新客户端使用 `start_turn`。**当前企业入口仅支持 `chat`**，其他顶层能力名不属于此入口的第三方调用契约。
+
+同一会话可以在**下一轮**重新指定 `knowledge_bases`、`skills` 和 `context_policy`：传入已授权的 `session_id`，使用新的 `operation_id`。这些字段按本次 turn 生效，不能在该 turn 运行中修改；不要假定省略时自动沿用上一轮的选择。详见[对话能力选择](../../capability-selection.mdx#同一会话的下一轮重新选择)。
+
+## 前置条件
+
+已建立带有效 `dt_token` 和允许 Origin 的 WS；发送前保存完整请求及 `operation_id`。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"start_turn"`。
+
+| 字段 | 必填／默认 | 说明 |
+| --- | --- | --- |
+| `content` | 必填 | 用户输入文本 |
+| `operation_id` | 强烈建议 | 1～128 字符；同一次启动重试必须保持不变 |
+| `session_id` | 否 | 追问时使用服务端给出的已授权会话 ID |
+| `capability` | `chat` | 当前仅支持 `chat`；可省略或显式传 `chat` |
+| `knowledge_bases` | 否 | 字符串数组，使用部署方提供且当前用户有权引用的知识库 ID |
+| `skills` | 否 | 字符串数组，使用部署方提供且当前用户有权引用的 Skill ID |
+| `mcp_tools` | 否 | 字符串数组；当前外部工具选项不构成可执行承诺，见下文 |
+| `tools` | 否 | 不是知识库／Skills／外部工具选择器。通常省略；如需显式控制，当前仅接受空数组或 `ask_user`（仍须部署允许） |
+| `resource_ids` | 否 | 已完成上传且有权引用的资源 ID |
+| `context_policy` | `auto` | `required` 要求所请求上下文可用，否则失败；`auto`／`best_effort` 不保证采用。不是“必定调用”开关 |
+| `language` | 否 | 响应语言提示，例如 `zh`；省略时使用部署默认值 |
+| `config` | `{}` | 当前不支持非空 `config`；请省略或传空对象 |
+
+生产企业入口不接受直接 `attachments`；先完成资源上传。`tools` 不是知识库、Skills 或外部工具选择器。知识库／Skill 选择分别写入 `knowledge_bases`／`skills`，而不是改写 `capability`。当前没有面向第三方 Agent 发布的选项发现接口；ID 获取与调用边界见 [对话能力选择](../../capability-selection.mdx)。非空 `mcp_tools` 配合 `required` 会返回 `mcp_tool_unavailable`。上表是本站承诺的第三方调用字段；不要依赖未在本站公布的其他输入字段。
+
+<!-- ws-command -->
+```json
+{"type":"start_turn","protocol_version":"2.0","content":"解释傅里叶变换","capability":"chat","operation_id":"op-001"}
+```
+
+选择一个知识库和一个 Skill 时，请使用部署方提供的受权真实 ID，并在需要严格校验可用性时显式传 `required`：
+
+<!-- ws-command -->
+```json
+{"type":"start_turn","protocol_version":"2.0","content":"结合课程材料解释这个概念","capability":"chat","operation_id":"op-002","knowledge_bases":["kb-001"],"skills":["study-guide"],"mcp_tools":[],"context_policy":"required"}
+```
+
+以上 ID 仅说明字段形状；不要将示例 ID 直接用于真实请求。若在已有会话追问，还须加入服务端返回的 `session_id`。
+
+## 响应与事件
+
+没有独立的“创建成功”确认；随后收到的流事件包含 `turn_id`、`session_id` 和 `seq`。`content` 用于增量展示，`result` 给出最终结果，`done` 标示执行结束。需要判断所选项是否真正使用时，读取 `done.metadata.capability_usage`，不要把“已请求”直接显示为“已使用”。
+
+## 错误与恢复
+
+`protocol_error`／`error` 中的 `start_turn_rejected` 应按权限与字段纠正。所选上下文无法使用时可能出现 `knowledge_base_unavailable`、`skill_unavailable`、`mcp_tool_unavailable`、`required_context_unavailable` 或 `context_authorization_failed`；核对用户授权和部署方提供的 ID，再让用户调整选择，不能悄悄降低 `required` 策略。首事件前断线且仍在幂等保留期内，重连后原样重发已保存的请求；已获得 `turn_id` 时改用 `resume_from`，不可再启动新 turn。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

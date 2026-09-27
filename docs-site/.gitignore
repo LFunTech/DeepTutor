@@ -1,0 +1,7 @@
+node_modules/
+build/
+.docusaurus/
+__pycache__/
+*.pyc
+!src/data/
+!src/data/enterprise-routes.json

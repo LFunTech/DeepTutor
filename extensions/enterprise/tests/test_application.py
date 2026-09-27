@@ -274,6 +274,250 @@ async def test_eduplus2_signed_webhook_demo_only_checks_delivery_without_state_c
     assert event_count["event_count"] == 0
 
 
+async def test_eduplus2_real_webhook_persists_only_safe_pending_fact_before_ack(app, caplog):
+    """真实事件 2xx 仅代表安全入队，不代表学校或管理员已开通。"""
+
+    from deeptutor_enterprise.scope import TenantScope
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_app_id = 51
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    ts = str(int(time.time()))
+    event_id = str(uuid.uuid4())
+    body = json.dumps(
+        {
+            "event": "subscription.created",
+            "event_id": event_id,
+            "timestamp": int(ts),
+            "tenant": {"id": 10001, "code": "synthetic-school"},
+            "app": {"id": 51, "client_id": "synthetic-school-client"},
+            "subscription": {"id": 20001, "status": "active"},
+            "oauth_client": {
+                "client_id": "synthetic-school-client",
+                "client_secret": "must-not-persist-this-secret",
+            },
+            "actor": {"type": "user", "user_id": "synthetic-keycloak-sub"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        b"synthetic-webhook-secret",
+        ts.encode() + b".subscription.created." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        response = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=body,
+            headers={
+                "X-EduPlus-Signature": "sha256=" + signature,
+                "X-EduPlus-Timestamp": ts,
+                "X-EduPlus-Event": "subscription.created",
+            },
+        )
+    assert response.status_code == 204, response.text
+    retry_ts = str(int(ts) + 1)
+    retry_signature = hmac.new(
+        b"synthetic-webhook-secret",
+        retry_ts.encode() + b".subscription.created." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    changed = body.replace(b'"status":"active"', b'"status":"suspended"')
+    changed_signature = hmac.new(
+        b"synthetic-webhook-secret",
+        ts.encode() + b".subscription.created." + changed,
+        hashlib.sha256,
+    ).hexdigest()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        duplicate = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=body,
+            headers={
+                "X-EduPlus-Signature": "sha256=" + retry_signature,
+                "X-EduPlus-Timestamp": retry_ts,
+                "X-EduPlus-Event": "subscription.created",
+            },
+        )
+        conflict = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=changed,
+            headers={
+                "X-EduPlus-Signature": "sha256=" + changed_signature,
+                "X-EduPlus-Timestamp": ts,
+                "X-EduPlus-Event": "subscription.created",
+            },
+        )
+    assert duplicate.status_code == 204
+    assert conflict.status_code == 409
+    assert any(
+        "lifecycle webhook conflict" in record.message for record in caplog.records
+    )
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-audit")
+    async with enterprise.db.transaction(scope) as c:
+        event = await (
+            await c.execute(
+                "SELECT event_type,external_tenant_id,external_app_id,external_subscription_id,"
+                "actor_subject,processing_status FROM eduplus2.lifecycle_inbox "
+                "WHERE tenant_id=%s AND event_id=%s",
+                (enterprise.deployment.tenant_id, event_id),
+            )
+        ).fetchone()
+        tenant = await (
+            await c.execute(
+                "SELECT external_eligibility FROM enterprise.tenants WHERE id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+        count = await (
+            await c.execute(
+                "SELECT count(*) AS n FROM eduplus2.lifecycle_inbox "
+                "WHERE tenant_id=%s AND event_id=%s",
+                (enterprise.deployment.tenant_id, event_id),
+            )
+        ).fetchone()
+        target = await (
+            await c.execute(
+                "SELECT generation,eligibility,proof_expires_at "
+                "FROM eduplus2.lifecycle_targets WHERE tenant_id=%s "
+                "AND external_tenant_id=%s AND external_app_id=%s",
+                (enterprise.deployment.tenant_id, 10001, 51),
+            )
+        ).fetchone()
+    assert event == {
+        "event_type": "subscription.created",
+        "external_tenant_id": 10001,
+        "external_app_id": 51,
+        "external_subscription_id": 20001,
+        "actor_subject": "synthetic-keycloak-sub",
+        "processing_status": "pending_binding",
+    }
+    assert tenant["external_eligibility"] == "not_required"
+    assert count["n"] == 1
+    assert target == {"generation": 1, "eligibility": "unknown", "proof_expires_at": None}
+    assert "must-not-persist-this-secret" not in json.dumps(event)
+
+
+async def test_eduplus2_real_webhook_stays_closed_without_receiver_rollout_gate(app):
+    """仅配齐签名/应用密钥不能绕过正式接收器发布门禁。"""
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_app_id = 51
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    ts = str(int(time.time()))
+    body = json.dumps(
+        {
+            "event": "subscription.created",
+            "event_id": str(uuid.uuid4()),
+            "tenant": {"id": 10001},
+            "app": {"id": 51},
+            "subscription": {"id": 20001, "status": "active"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        b"synthetic-webhook-secret",
+        ts.encode() + b".subscription.created." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        response = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=body,
+            headers={
+                "X-EduPlus-Signature": "sha256=" + signature,
+                "X-EduPlus-Timestamp": ts,
+                "X-EduPlus-Event": "subscription.created",
+            },
+        )
+    assert response.status_code == 503
+
+
+async def test_eduplus2_real_webhook_does_not_ack_failed_inbox_transaction(app, monkeypatch):
+    from deeptutor_enterprise.eduplus2 import lifecycle
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_app_id = 51
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+
+    async def failed_ingest(*args, **kwargs):
+        raise RuntimeError("synthetic storage unavailable")
+
+    monkeypatch.setattr(lifecycle, "ingest_lifecycle_event", failed_ingest)
+    ts = str(int(time.time()))
+    body = json.dumps(
+        {
+            "event": "subscription.created",
+            "event_id": "synthetic-failed-inbox-event",
+            "tenant": {"id": 10001},
+            "app": {"id": 51},
+            "subscription": {"id": 20001, "status": "active"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        b"synthetic-webhook-secret",
+        ts.encode() + b".subscription.created." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        response = await client.post(
+            "/api/v1/eduplus2/webhooks",
+            content=body,
+            headers={
+                "X-EduPlus-Signature": "sha256=" + signature,
+                "X-EduPlus-Timestamp": ts,
+                "X-EduPlus-Event": "subscription.created",
+            },
+        )
+    assert response.status_code == 503
+
+
+async def test_eduplus2_webhook_previous_secret_has_bounded_overlap(app):
+    """轮换期允许旧密钥验签，到期后立即拒绝。"""
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "new-synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_previous_secret = "old-synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_previous_until = int(time.time()) + 60
+    ts = str(int(time.time()))
+    body = json.dumps(
+        {"event": "subscription.created", "event_id": "mock_" + str(uuid.uuid4())},
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        b"old-synthetic-webhook-secret",
+        ts.encode() + b".subscription.created." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    headers = {
+        "X-EduPlus-Signature": "sha256=" + signature,
+        "X-EduPlus-Timestamp": ts,
+        "X-EduPlus-Event": "subscription.created",
+        "X-EduPlus-Mock": "true",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        accepted = await client.post("/api/v1/eduplus2/webhooks", content=body, headers=headers)
+        enterprise.eduplus2_webhook_previous_until = int(time.time()) - 1
+        expired = await client.post("/api/v1/eduplus2/webhooks", content=body, headers=headers)
+    assert accepted.status_code == 204
+    assert expired.status_code == 401
+
+
 async def test_http_auth_csrf_revoke_and_closed_routes(app):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://school.example"

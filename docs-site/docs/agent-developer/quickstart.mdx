@@ -1,0 +1,157 @@
+---
+title: 快速开始
+description: 当前企业入口的最短调用路径
+slug: /quickstart/
+---
+
+# 快速开始
+
+**前提：你的 Agent 代表一位已由 EduPlus2 验证的用户，而不是以独立机器身份访问。** 前置应用或受信任的 BFF 负责确认用户仍有权进入、取得新的 EduPlus2 **user JWT**，并由部署方配置该应用的 client／学校映射和允许的 Origin。学校的技术字段是 `tenant_id`，但不能通过 URL、请求体或自定义 header 自报来获取权限。当前没有第三方 Agent 的 client-credentials 接口。
+
+以下命令中的 `BASE_URL`、`WS_ORIGIN` 和凭证由部署方提供；这里没有公共服务地址或测试账号。请在测试环境使用真实受权身份，不要将 JWT、`dt_token`、预签名 URL 写入源码、持久化浏览器存储、日志或 URL。
+
+## 1. 交换短期令牌
+
+`POST /api/v1/auth/eduplus2/exchange` 只接收 `Authorization: Bearer` 中的 EduPlus2 **用户** JWT；无需已有 `dt_token`。同一 user JWT 可能有重放防护，因此一次交换请求不要并发发送或盲目重试。
+
+```bash
+export BASE_URL='https://<由部署方提供的基座域名>'
+export EDUPLUS2_USER_JWT='<从可信前置应用取得的短期 user JWT>'
+export REQUEST_ID='<本次请求的随机关联 ID>'
+
+curl --fail-with-body -X POST "$BASE_URL/api/v1/auth/eduplus2/exchange" \
+  -H "Authorization: Bearer $EDUPLUS2_USER_JWT" \
+  -H "X-Request-ID: $REQUEST_ID"
+```
+
+成功返回 JSON 中的 `dt_token`、`token_type`、`expires_in`、`expires_at`、`tenant_id`、`user_id`、`client_registration_id`。后面只使用 `dt_token` 调基座。生产系统应在进程内安全传递和按到期时间更新；下面为本地联调方便，将值临时放入环境变量，**不要把真实值提交或打印**。
+
+```bash
+export DT_TOKEN='<exchange 响应中的 dt_token>'
+export WS_ORIGIN='https://<部署方已允许的前置应用 Origin>'
+```
+
+## 2. 服务端 Agent 发起 turn
+
+服务端 WebSocket 客户端可设置 `Authorization` 和 `Origin` 请求头。示例使用 Python `websockets` 16.x（`python -m pip install 'websockets>=16,<17'`）；代码只覆盖本次 turn，生产客户端还应实现下面的重连游标持久化、刷新和退避。
+
+```python
+import asyncio
+import json
+import os
+import uuid
+
+from websockets.asyncio.client import connect
+
+
+async def main():
+    base = os.environ["BASE_URL"].rstrip("/")
+    ws_url = base.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + "/api/v1/ws"
+    operation_id = str(uuid.uuid4())
+    start_request = {
+        "type": "start_turn",
+        "protocol_version": "2.0",
+        "content": "解释傅里叶变换",
+        "capability": "chat",
+        "operation_id": operation_id,
+    }
+    # 生产客户端必须在发送前持久化完整 start_request，供首事件前断线时原样重发。
+    async with connect(
+        ws_url,
+        origin=os.environ["WS_ORIGIN"],
+        additional_headers={"Authorization": f"Bearer {os.environ['DT_TOKEN']}"},
+    ) as socket:
+        await socket.send(json.dumps(start_request, ensure_ascii=False))
+        async for raw in socket:
+            event = json.loads(raw)
+            if event.get("type") == "protocol_error":
+                raise RuntimeError(event)
+            if event.get("type") == "content":
+                print(event.get("content", ""), end="", flush=True)
+            if event.get("turn_id") and isinstance(event.get("seq"), int):
+                # 生产客户端应持久化 turn_id 与已处理的最大 seq。
+                last_cursor = (event["turn_id"], event["seq"])
+            if event.get("type") == "done":
+                print()
+                break
+
+
+asyncio.run(main())
+```
+
+`start_turn` 不返回单独的 `turn_started` 确认；服务端立即订阅该 turn，客户端从随后的流事件记录 `turn_id`、`session_id` 和 `seq`。若要显示稍后产生的会话标题等元数据，不要在首个 `done` 后立即断开，可继续消费 `session_meta`。同一会话的后续提问把服务端返回的 `session_id` 放进新的 `start_turn`；不要自行猜测它。
+
+若要选择知识库或 Skills，并查看本轮是否真的使用了它们，请继续阅读[对话能力选择](capability-selection.mdx)。当前没有面向第三方 Agent 发布的选项发现接口，外部工具也不属于当前可执行承诺。
+
+## 3. 浏览器连接的区别
+
+浏览器 `WebSocket` 不能设置 `Authorization` 请求头。前置应用把已交换的 `dt_token` **仅保存在内存**，使用子协议列表传递；服务端只协商回 `deeptutor-token`。浏览器 Origin 必须属于部署允许列表，不能把 token 放进 URL、query、hash、Cookie 或 `localStorage`。
+
+调用下面函数前先构造、保存包含 `operation_id` 的完整 `StartTurnRequest`；重连时复用该对象，而不是在 `openTurn` 内重新生成 ID。
+
+```ts
+type TurnEvent = {type: string; turn_id?: string; seq?: number; content?: string};
+type StartTurnRequest = {
+  type: 'start_turn';
+  protocol_version: '2.0';
+  content: string;
+  operation_id: string;
+  session_id?: string;
+};
+
+export function createStartRequest(content: string, sessionId?: string): StartTurnRequest {
+  return {
+    type: 'start_turn',
+    protocol_version: '2.0',
+    content,
+    operation_id: crypto.randomUUID(),
+    ...(sessionId ? {session_id: sessionId} : {}),
+  };
+}
+
+// apiBase 与 dtToken 由受信任的前置应用/BFF 提供；请求对象由调用方先保存。
+export function openTurn(
+  apiBase: string,
+  dtToken: string,
+  startRequest: StartTurnRequest,
+  onEvent: (event: TurnEvent) => void,
+  onCursor: (cursor: {turnId: string; seq: number}) => void,
+): WebSocket {
+  const wsUrl = `${apiBase.replace(/^http/, 'ws').replace(/\/$/, '')}/api/v1/ws`;
+  const ws = new WebSocket(wsUrl, ['deeptutor-token', dtToken]);
+  let lastCursor: {turnId: string; seq: number} | null = null;
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify(startRequest));
+  });
+  ws.addEventListener('message', ({data}) => {
+    const event = JSON.parse(data) as TurnEvent;
+    onEvent(event);
+    if (event.turn_id && typeof event.seq === 'number') {
+      if (!lastCursor || event.seq > lastCursor.seq) {
+        lastCursor = {turnId: event.turn_id, seq: event.seq};
+        // 调用方安全保存游标，重连时用于 resume_from。
+        onCursor(lastCursor);
+      }
+    }
+  });
+  return ws;
+}
+```
+
+代理和网关可能记录握手头，因此部署方应对 `Sec-WebSocket-Protocol` 中的 token 做脱敏；第三方客户端也不应记录完整握手。
+
+## 4. 断线恢复，不重复创建
+
+连接断开后，先重新取得有效 `dt_token` 并建立 WS；对**已收到 `turn_id`** 的请求，从本地记录的最大已处理 `seq` 恢复。以下两种命令等价地订阅该 turn 后续事件，使用其中一种即可。游标为 0 时从头重放；客户端仍应按 `(turn_id, seq)` 去重。
+
+<!-- ws-command -->
+```json
+{"type":"subscribe_turn","protocol_version":"2.0","turn_id":"<已记录的 turn_id>","after_seq":18}
+```
+
+<!-- ws-command -->
+```json
+{"type":"resume_from","protocol_version":"2.0","turn_id":"<已记录的 turn_id>","seq":18}
+```
+
+如果断线发生在**首个事件之前**，客户端没有 `turn_id`；新会话也没有 `session_id`，无法先查它的活跃 turn。此时在重新确认同一用户身份后，于当前操作的幂等保留期内**原样重发预先保存的完整 `start_turn` 请求**（同一个 `operation_id`、`content`、`capability`、`session_id` 等字段）；服务器会识别同一操作而不是创建第二个 turn。更改请求指纹会得到冲突，不能靠换 ID 绕过。幂等有效期以部署方提供的契约为准；超过有效期后应核对历史结果，不能自动重发。若收到 `operation_deleted`，也应停止重发。已有会话 ID 时可以额外调用 `check_active_turn` 辅助核对，但它不能代替新会话首事件前的幂等重发。详见[调用链路](call-flows.mdx)、[WebSocket 协议](websocket-protocol.mdx)与[错误处理](errors.mdx)。

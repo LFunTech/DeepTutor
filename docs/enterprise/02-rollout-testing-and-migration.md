@@ -1,19 +1,19 @@
 # 02. 三个业务里程碑、七个实施工作包与发布门禁
 
-> **2026-09-26 进度提示：**当前活跃 proposal 的实际执行顺序、暂停/待审批状态和缺失提案见[企业化 proposal 执行顺序与进度](proposal-execution-progress.md)。本文下方 B2/C1/C2 的部分旧“OMS 只读、TMS 配额可写、Token 费用/欠费、单体 Web”表述尚待重订，不得覆盖新业务契约或作为旧 tasks 的实施授权。
+> **2026-09-26 契约同步：**下方 M1/M2/M3 是验收里程碑，不要求 OMS/TMS 与本地 DeepTutor Web 同构建。云端 OMS、TMS 各自部署并共享安全管理组件；实际执行顺序与阻断项见[proposal 执行进度](proposal-execution-progress.md)。旧 Token 售价、费用、欠费及独立模型资格目标已退役，不得按旧 tasks 实施。
 
 ## 执行模型
 
 2026-09-13 修订：企业特有逻辑保持独立扩展包/应用外壳；用户进一步要求取消 local/SQLite，默认 Web/CLI/SDK/后台全部使用 PG，通用 PG 与必要 provider 下沉 core 并收敛旁路。RAG 已确定 LightRAG Server，图检索必需，首发图后端采用用户 fork 的 HugeGraphStorage，A1/A2 完成生产实现与验收。保留 **M1 单租户 Kubernetes → M2 多租户及租户管理界面 → M3 统一运营后台** 三个业务里程碑，研发按 **A1/A2/A3、B1/B2、C1/C2 七个工作包** 推进。工作包是集成验收单元，不是七套系统，也不要求七次生产上线。
 
-[OpenSpec 总纲 tasks](../../openspec/changes/replace-rollout-with-three-production-stages/tasks.md) 是工作包汇总门禁的勾选记录；子提案细项与证据由各自 tasks 记录，只有原项完整范围通过才汇总。首个 [A1 身份与 PG 会话子切片](../../openspec/changes/add-enterprise-pg-identity-session-slice/proposal.md) 已完成 34 项工作区实现与隔离验证；后续[全量 PostgreSQL-only 迁移](../../openspec/changes/migrate-all-sqlite-state-to-postgresql/proposal.md)包含默认入口、全部 SQLite 领域、Matrix 间接存储和只读导入，当前为 55 项待实施任务。其余 A1/A2 仍按总纲完成；子切片或本次规划通过不等于完整工作包/生产验收。
+工作包发布门禁须逐项核对当前 [proposal 执行进度](proposal-execution-progress.md) 与各 change 的 tasks/证据；不再引用已不存在的总纲 change。首个 [A1 身份与 PG 会话子切片](../../openspec/changes/archive/2026-09-16-add-enterprise-pg-identity-session-slice/proposal.md) 和[全量 PostgreSQL-only 迁移](../../openspec/changes/archive/2026-09-16-migrate-all-sqlite-state-to-postgresql/proposal.md)已归档，归档不等于 M1/G1 的目标环境发布门禁通过。其他 A1/A2 能力仍按各自 change 与本页门禁验收；子切片或原型通过不等于完整工作包/生产验收。
 
 - 生产组件直接替换为最终实现，不建设 SQLite/PVC、文件型多租户、双写或临时认证系统。
 - 配置/现有注入/插件优先，通用 PG 在 core、企业特有实现置于 `deeptutor_enterprise` 包；[13](13-deployment-and-upstream-sync.md) 的默认 PG-only 与真实调用清单、[06](06-postgresql-native-store-plan.md) 的 LightRAG 接入验收及服务契约纳入相应工作包，不新增独立重写阶段。
 - 复用已选 LightRAG Server 引擎，固定 workspace 实例池纳入 A2 交付，不按租户复制整套 DeepTutor；A1/A2 完成上线验收，不再二选一，也不计划首发后整体迁移另一服务。
 - 一个任务覆盖适用的 **数据约束/迁移 → 服务逻辑 → 真实入口 → 权限/异常 → 测试 → 切换说明**，不是仅创建表或编写接口类。
 - A1/A2 在集成环境分批验证，A3 汇总验收后才发布 M1；未完整替换的存储状态不能作为正式生产版本。
-- B1 先用一个真实 EduPlus2 租户验证最终接入，B2 再开放多个租户；C1/C2 分批完成运营功能，不把 C2 从最终交付范围删除。
+- B1 先用一所真实 EduPlus2 学校验证最终接入，B2 再开放多学校；C1/C2 分批完成运营功能，不把 C2 从最终交付范围删除。
 - Woodpecker 流水线开发纳入 A3 必交付子环节，从 A1 并行建设；后续阶段复用，不新增业务工作包。
 - 可用性、容量和多副本由独立工作线 H 管理，不由租户数量决定，不增加第八个业务工作包。
 
@@ -46,8 +46,8 @@ A2 交付安全的取消/状态协议和不支持粒度的明确拒绝；C2 补�
 | M1 | A3：单租户生产验收 | A1/A2 完成；部署准备从 A1 起并行 | Woodpecker 真实交付链路、G1、运行模式可靠性及版本/恢复记录 | 是，M1 |
 | M2 | B1：EduPlus2 单租户闭环 | M1 作为接入验证基线；外部配置准备提前并行 | 首租户最终登录、身份绑定、权限/撤权与业务访问闭环 | 可受控发布单租户集成版本，但不标记 M2 完成 |
 | M2 | B2：多租户与租户自管理 | B1 的契约/身份/权限闭环通过 | 两租户隔离、治理后端、现有租户管理 UI、G2 | 是，M2 |
-| M3 | C1：运营管理闭环 | M2 治理 API、策略执行及租户界面 | 跨租户开停/分配/配额/角色/操作审计闭环，G3a | 可先发布运营基础版，不标记 M3 完成 |
-| M3 | C2：运营治理完善 | C1 能力/权限契约与底层用量/任务状态 | 用量分析、任务治理、同步状态、审计查询/导出及 G3 | 是，M3 完整交付 |
+| M3 | C1：运营管理闭环 | M2 可信平台权限、治理 API、策略执行及 TMS | OMS 学校查询、平台资源/Provider 配置、学校服务授权和额度的受控工作流，G3a；学校开停仍归 EduPlus2 | 可先发布有真实 API 支撑的运营基础版，不标记 M3 完成 |
+| M3 | C2：运营治理完善 | C1 能力/权限契约与可信逐调用用量/任务状态 | 供给—权益—实际消耗、原生单位明细、待核对、OMS-only 成本、审计及 G3 | 是，M3 完整交付 |
 
 ```text
 A1 存储契约 ──→ A1 业务闭环 ─┐
@@ -116,7 +116,7 @@ DEEPTUTOR_RAG_GATEWAY_URL=<internal-service-url>
 AUTH_ENABLED=true
 ```
 
-M1 不等待 EduPlus2 接入或新运营界面；现有单租户管理功能通过企业目标 `/tms` 与 `/api/v1/tms/*` 专属接口继续可用，仍限固定内部租户和已有管理能力，不提前开放平台运营；平台 Secret 不可被页面/API 导出。
+M1 不等待 EduPlus2 接入或新运营界面。固定学校管理能力须有受保护的真实入口，不能把本地 DeepTutor Web 的 `/tms` 占位 404 或独立 TMS 开发原型当成已交付；云端正式 `/tms` 与 `/api/v1/tms/*` 仍须按相应实施提案接入。平台 Secret 不可被页面/API 导出。
 
 ### G1：M1 发布门禁
 
@@ -126,7 +126,7 @@ G1 区分**发布前放行**和**发布后完成确认**：先在同构测试环
 | --- | --- |
 | Woodpecker 自动交付 | 目标 agent 实跑检查/构建/推送/迁移/部署/HTTP+WS 业务 smoke，同 digest 经批准晋级生产；证据可追溯 |
 | 流水线安全与故障 | 非可信来源/未批准/环境错误拒绝；迁移失败阻断，发布互斥/旧构建/中断恢复/兼容回退演练通过，无 Secret 泄露 |
-| 首发功能清单 | 登录、聊天、历史、KB/RAG、附件、memory/notebook、产物、`/tms` 管理设置和已启用能力均完成真实替换，菜单/深链接/专属 API 前缀一致 |
+| 首发功能清单 | 登录、聊天、历史、KB/RAG、附件、memory/notebook、产物和已启用管理能力均完成真实替换；仅已实施的正式 TMS 入口可按 `/tms` 与专属 API 验收，原型/占位页不能代替 |
 | 重建 Pod/清空 scratch | 账号、配置、历史、KB、文件可恢复；不依赖原 Pod 本地状态 |
 | PG/HugeGraph/S3/必要 RAG 服务失败 | 就绪检查或相应操作明确失败；不写 SQLite/local fallback，不切换默认检索 workspace，不返回未持久化/未索引成功 |
 | 企业扩展与调用覆盖 | 企业启动器实际安装身份/Store/RAG providers；缺 seam/版本不符拒绝启动，所有已启用 API/tool/worker 无旧写旁路 |
@@ -148,7 +148,7 @@ G1 区分**发布前放行**和**发布后完成确认**：先在同构测试环
 
 - 签名/claims/code/state 校验、身份映射、`/me/profile`、具体操作权限与会话生命周期；DeepTutor 不提供普通用户注册。
 - 显式绑定原内部 tenant/user 到外部 tid/eui，幂等可回退；不按同名合并账号，不搬 PG/S3。
-- HTTP/WS/后台任务可信上下文、权限依赖失败拒绝、用户/租户停用及撤权传播；TMS/OMS 是唯一需要 DeepTutor 交互式登录的入口。
+- HTTP/WS/后台任务可信上下文、权限依赖失败拒绝、用户/学校停用及撤权传播；云端 OMS/TMS 有各自登录管理入口，本地 DeepTutor Web 保留本地用户入口。
 - 首租户所需状态校验、受控同步与权限缓存失效路径；如启用 Webhook，必须签名校验且 PG 持久化接收后才确认。Webhook 不是每次登录或第三方 token exchange 的主链路，不能把安全依赖留到 B2。
 - 用首租户真实账号完成“工作台进入→聊天→KB/附件访问→重新登录/撤权”验证，并完成一个第三方应用传入 EduPlus2 user JWT 后静默换取 `dt_token` 的调用链。
 
@@ -159,35 +159,35 @@ G1 区分**发布前放行**和**发布后完成确认**：先在同构测试环
 B1 接入闭环通过后，使用同一底座逐项交付：
 
 - 租户初始化/失败重试，暂停和恢复各有幂等状态机、权限与审计。
-- 平台给租户分配模型/功能范围；租户 grants 不越过平台或外部权限上限。
-- 用量记录、token 额度与并发预留/释放分项验收；额度在真实 agent/tool 与受管索引任务生效，远端检索/embedding/导入用量单独记录，不默认包含在聊天 cost_summary。
+- OMS 按可信平台权限授予学校可使用的服务及赠送/充值额度；TMS 的学校内部 grants 不能越过 OMS 服务授权或外部权限上限，也不能调整额度总量。
+- 逐服务原生单位用量、OMS 授予的统一赠送/充值额度与并发预留/核对分项验收；额度在真实 Agent 底层服务与受管索引任务生效，远端检索/embedding/导入用量分别取可信证据，不以聊天 `cost_summary` 或字符估算结算。
 - PG/RLS/连接池、owner/grant、S3、向量/图检索、cache/job、SDK/M2M 全链路租户隔离。
 - 必要组织关系缓存、周期对账、多租户 Webhook 幂等/重试/撤权；不重建全部 EduPlus2 主数据平台。
-- 复用现有管理界面，在 `/tms` 微调租户标识、KB、用户授权、设置/模型选择、EduPlus2 client/app 注册及菜单/路由/按钮权限，专属管理接口使用 `/api/v1/tms/*`；不复制每租户前端或 Deployment。
+- 独立部署学校智能体管理后台 TMS，复用同仓安全管理组件而非 DeepTutor Web 应用源码；在可信 `school_code` 与学校 ID 绑定下管理本校 KB、用户/应用、EduPlus2 client/app 和已授权资源，**仅查看** OMS 配置的服务授权、额度清单与消耗。专属管理接口使用 `/api/v1/tms/*`；不为每校复制前端或 Deployment。
 
-B2 使用 `/api/v1/oms/*` 承载跨租户只读治理 API；开放前先完成可信平台身份/具体能力/目标租户绑定及默认运维授权，相关默认数据走版本化迁移并验证无权限拒绝；C1 复用运营角色和界面，不是首次补鉴权。**非计费租户生命周期**开停/恢复以 EduPlus2 签名 webhook 为权威，DeepTutor 在全入口执行其准入；欠费另用独立模型资格事件，只在实际模型调用前执行。授权、配额和 client/app 写操作仍由各自获授权的 DeepTutor/TMS/EduPlus2 流程承担，**不在 OMS 提供写入口**。治理与安全后端不等待 C1，统一运营界面不反向阻塞 M2。
+B2 可先交付受控的 `/api/v1/oms/*` 平台身份与治理数据面，以支撑学校服务授权/额度的唯一 OMS 写入权威；开放前须完成可信平台主体、逐动作权限、目标学校绑定、受控迁移及 403/200 正负例。学校开通/暂停/恢复只由 EduPlus2 签名 lifecycle webhook 驱动，OMS 查询而不直接开停；某服务额度耗尽仅拒该服务新调用，登录、管理、历史与其他服务继续可用。学校 client/app 写入归 TMS；TMS 不得设置或调整 OMS 额度。治理后端可先于完整运营 UI 交付，但不能以手工改库替代 OMS 受控写入。
 
 ### G2：M2 发布门禁
 
 - B1 首租户接入通过；集成环境新增第二租户及各自管理员/普通用户，全量正负向验证后才开放多租户生产流量。
 - 相同外部 eui、KB 名称、猜测 session/object ID、伪造 scope 均不串租；已有首租户数据和对象 key 不变。
 - 所有入口、数据库连接池、检索、缓存、对象下载与后台任务均验证租户/用户边界；所选 RAG 相同 KB 名称、错误 binding/调用凭证/远端 tenant/KB/workspace、个人私有 KB 越权、跨语料图污染与数据库跨 namespace 读写均有拒绝负例，不能先跨租户检索再过滤。
-- tenant_admin 默认通过 `/tms` 管理本租户；自定义权限角色正例及无权限 403/隐藏菜单负例通过，导航/深链接/`/api/v1/tms/*` 一致，无平台 Secret/跨租户管理入口；直接请求 `/api/v1/oms/*` 仍拒绝，不因 URL 改名自动授予 `tenant.*` / `ops.*` 能力。TMS 注册当前 tenant client 成功、其他 tenant client 被拒绝；OMS 仅按授权查询已归口 client。
+- `tenant_admin` 默认通过 `/tms/{schoolCode}` 管理本校；自定义权限角色正例及无权限 403/隐藏菜单负例通过，深链 `school_code` 与可信学校 ID/code 绑定核对，导航与 `/api/v1/tms/*` 一致，无平台 Secret/跨校管理入口；直接请求 `/api/v1/oms/*` 仍拒绝，不因 URL 改名自动授予 `tenant.*` / `ops.*` 能力。TMS 注册本校 client 成功、其他学校 client 被拒绝；OMS 仅按授权查询已归口 client。
 - 开停/撤权影响旧 token、WS、新 turn、下载授权与任务派发；短时 URL 的撤权时效明确；`dt_token` 支持 WS 静默刷新，已接受 turn 不因 token 自然到期中断，新 turn 必须重校验。
-- 模型策略、token/并发额度和失败释放真实生效，统计/审计可解释，不只是 UI 显示限制；审计包含 client/app/tenant/user/session/turn 关键字段且不记录 token/secret/完整私密正文。
+- 逐服务授权、原生单位额度及并发预留/待核对在真实调用边界生效；未知远端消耗不得按零释放。统计/审计可解释，不只是 UI 显示限制；审计包含 client/app/tenant/user/session/turn 关键字段且不记录 token/secret/完整私密正文。
 - **不要求因“第二个租户”就启用第二个 Pod。** 可接受单执行模式时记录容量与维护窗口；多副本或 HA 为发布目标时，G-H 成为本次 G2 的前置，不允许绕过。
 
 ## M3：统一运营管理后台
 
 ### C1：运营管理闭环
 
-前置是 M2 已交付。复用 B2 服务，实现平台角色与 `/oms` 入口、跨租户只读 API、全租户目录/详情、EduPlus2 权威 lifecycle 状态、client/provider/策略/任务/审计只读视图及普通运营文案。Provider 全服务维护另由 DeepTutor 平台设置交付，OMS 不承担租户开停、Secret/策略/角色/任务写入。
+前置是 M2 的可信学校绑定及平台权限数据面。独立 OMS 前端按工作台、学校与权益、资源目录、资源供给、用量与运行、审计与治理逐级进入；按权限维护五类平台资源、全服务 Provider/连接与 Secret 引用、学校服务授权和统一额度。学校 lifecycle 与 client/app 注册仅查询，不在 OMS 写入；个人/学校私有内容不进入平台页面。任何未具备真实 API/执行者确认的操作保持未启用，不用开发原型冒充。
 
-**G3a 工作包门禁**：平台只读 API 与页面按具体权限一致，状态来自真实权威源；operator/auditor 无越权能力，tenant_admin 不能进入运营 API，租户管理界面继续可用。C1 可单独发布为运营基础能力，但不能声称 M3 全部完成。
+**G3a 工作包门禁**：菜单、按钮、API 与 DeepTutor 企业 PG 当前 OMS `ops.*` 动作及目标学校授权一致；EduPlus2 仅提供已交付 OIDC 身份、在线账号状态与学校核验。operator/auditor 仅执行获授权操作，学校管理员不能进入 OMS；配置发布有执行者确认，学校授权与额度有受控事务/审计，本地 Web 设置不退化、云端旧管理旁路关闭。C1 可按真实已验收能力分批发布，但不能声称 M3 全部完成；外部既存接口不可用或本地权限迁移未验收时不得开放写入，本代理不修改 EduPlus2。
 
 ### C2：运营治理完善
 
-基于逐调用供应商真实 usage 总账，逐项完善租户→用户→调用 Token 明细、版本化每百万 Token 单价及 Decimal 费用、仅 OMS 可见的供应商成本拆分、欠费**模型资格**处理请求与 EduPlus2 独立 webhook 生效确认，并补足存储/错误/同步/Webhook/导入/turn 状态及只读审计筛选/导出。限制生效后仅拒新模型调用，登录、TMS/OMS 管理、历史查询及非模型操作继续可用。无可信 usage 不收费，任务重试/取消仍归原业务/运维入口。
+基于逐供应商 attempt 的可信总账，完善服务供给批次、可授予量、学校统一赠送/充值额度、赠送优先、预留/真实消耗/待核对及租户→用户/应用→服务→调用明细；Token 与非 Token 保留各自原生单位，复合 Agent 不重复扣底层调用。供应商采购成本仅在 OMS 有凭据且获授权时归集，不产生租户售价、费用、账单或欠费。补足运行/同步状态与审计筛选/导出；任务重试/取消仍归原业务/运维入口。
 
 C2 的查询开发可在 C1 契约稳定后并行，最终验收依赖 C1 角色和入口；不能在没有权限约束的临时后台演示。**C2 保留在本次完整范围，不因 C1 可发布而省略。** 两级管理边界见 [12](12-platform-operations-admin.md)。
 
@@ -195,9 +195,9 @@ C2 的查询开发可在 C1 契约稳定后并行，最终验收依赖 C1 角色
 
 - C1/G3a 与 C2 全部完成；覆盖完整 [12 权限矩阵](12-platform-operations-admin.md)。
 - admin/operator/auditor、tenant_admin、普通用户及自定义授权角色的入口/API 正负向一致。
-- EduPlus2 非计费租户 lifecycle webhook 的全入口准入、独立欠费模型资格 webhook 的逐模型调用限制、计费版本/Decimal 精度、重复提交及审计符合实际状态；欠费时登录/管理/历史/非模型操作正例通过，OMS 不执行 provider/Secret/任务写操作。
+- EduPlus2 学校 lifecycle webhook 的全入口准入与 OMS 逐服务额度准入分开验证；额度耗尽仅拒对应服务新调用，登录/管理/历史/其他服务正例通过；Provider/Secret 仅获授权 OMS 管理，配置测试同样走服务准入。
 - 聚合统计不默认读取私有对话/附件；导出单独授权，Secret 不回传明文，无任意 tenant override 或超级连接旁路。
-- 逐调用真实 Token 用量、待核算、成本隔离、失败处理、日志/审计脱敏及此前 M1/M2 功能回归通过；本次运行模式要求的 G-H 证据仍有效。
+- 逐 attempt 可信原生单位用量、赠送优先、供给/额度硬上界、未知用量预留与核对、OMS-only 成本隔离、失败处理、日志/审计脱敏及此前 M1/M2 功能回归通过；本次运行模式要求的 G-H 证据仍有效。
 
 ## 独立工作线 H：可用性、容量与多副本
 
@@ -259,12 +259,12 @@ M1 建成的 Woodpecker 流水线在 B1/B2/C1/C2 和官方更新中复用：构�
 1. 是否从三个阶段变成七套系统/七次生产上线？不是，三个业务里程碑下有七个集成验收工作包。
 2. 是否等 A1/A2 完成才准备 K8s？不是，部署和外部契约准备从 A1 并行，A3 才是完整生产验收。
 3. B1 是临时认证方案吗？不是，在一个真实租户验证最终实现，B2 扩大租户集合。
-4. 租户界面与运营界面何时交付？M1 `/tms` 保留固定租户既有管理功能；B2 完成多租户 TMS 和 OMS 治理 API；C1/C2 交付 `/oms` 运营界面并保留 `/tms`，完整命名见 [11](11-api-and-entrypoints.md)。
+4. 两级管理界面何时交付？固定学校能力按 M1 真实入口验收；B2 完成独立 TMS 与必要 OMS 可信数据面，C1/C2 交付独立 OMS 正式界面。DeepTutor 本地 Web 不承载云端 `/tms`/`/oms`，命名与门禁见 [11](11-api-and-entrypoints.md)。
 5. 多租户是否强制两个 Pod？不因租户数量强制；运行目标决定是否触发 G-H，多执行者未验收不得开启。
 6. C1 可发布是否表示省略 C2？不是，M3 必须完成 C1+C2。
 7. 无时间做过渡是否可以跳过验收或静默删功能？不可以；只调整研发粒度，不减小已确认完整范围。
 8. Woodpecker 是否另增一个阶段？不是，A3 内细化开发子环节，从 A1 并行，G1 前必须真实交付，后续复用。
-9. 是否已经实施？整体路线尚未交付；用户批准的首个 A1 身份/PG 会话子切片已有工作区实现与隔离验证，[执行证据](../../openspec/changes/add-enterprise-pg-identity-session-slice/execution-evidence.md) 单独记录。S3/LightRAG/流水线等未实施，完整 A1/G1 仍未通过，也未创建或触发生产流水线。
+9. 是否已经实施？整体路线尚未交付；A1 身份/PG 会话子切片已有[归档执行证据](../../openspec/changes/archive/2026-09-16-add-enterprise-pg-identity-session-slice/execution-evidence.md)。其余能力与环境发布状态以当前活跃 change 和[进度索引](proposal-execution-progress.md)核对；不得沿用早期“S3/LightRAG/流水线均未实施”的历史快照，也不能因此推断完整 G1 已通过。
 10. 是全产品零改源码吗？不是；优先配置/现有扩展点，必要通用核心改动与真实调用收敛仍需完成，不用厚壳或运行时 monkey patch 伪装低维护。
 11. 多租户能否到 B2 再设计？不能；M1 建 namespace、owner/grant、PG/图/S3 强制防线与双租户负例，M2 只是外部身份和真实多租户放量。
 12. fork 有 HugeGraphStorage 是否算已投产？不算；固定包含实现的制品及低权权限、真实图质量、容量和跨存储恢复均须重验，旧 PG 图测试不覆盖新组合。

@@ -1,0 +1,37 @@
+---
+title: "GET 读取公开界面偏好"
+description: "读取登录前也需要的界面语言和主题设置。"
+slug: /api/http/ui-settings/
+method: GET
+path: "/api/settings/ui"
+---
+
+# GET `/api/settings/ui`
+
+## 用途与时机
+
+在登录前展示基座关联界面时读取语言和主题；不应将它当作 Agent 能力或权限目录。
+
+## 前置条件
+
+无需 dt_token。
+
+## 请求
+
+**GET `/api/settings/ui`**
+
+无 query、请求体或认证 Header。
+
+```bash
+curl --fail-with-body "$BASE_URL/api/settings/ui"
+```
+
+## 响应
+
+`200` JSON：`theme`（`light`／`dark`／`glass`／`snow`）、`language` 和 `response_language`（`zh`／`en`）。只返回这些公开字段。
+
+## 错误与恢复
+
+若暂时不可用，客户端可使用自身界面默认值；不得从此响应推断用户权限或学校配置。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

@@ -1,0 +1,39 @@
+---
+title: "check_active_turn · 查询会话活动 turn"
+description: "WebSocket 命令 check_active_turn 的请求、响应与恢复"
+slug: /api/ws/check_active_turn/
+command: check_active_turn
+---
+
+# check_active_turn
+
+## 用途与时机
+
+重连后只知道 `session_id`，或在决定是否再生成前确认是否有活动 turn 时调用。
+
+## 前置条件
+
+当前用户有该会话的读取权。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"check_active_turn"`。
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `session_id` | 是 | 已授权会话 ID |
+
+<!-- ws-command -->
+```json
+{"type":"check_active_turn","protocol_version":"2.0","session_id":"session-001"}
+```
+
+## 响应与事件
+
+返回 `active_turn_info`：`turn_id`、`status`、`owner_id`、`protocol_version`。没有活动 turn 时 `status:"none"`、`turn_id:""`；其他状态可能是 `queued`、`running`、`waiting_input`、`recovering`、`completed`、`failed`、`cancelled`。
+
+## 错误与恢复
+
+这是只读查询，不会订阅流事件。若有 `turn_id`，使用 `subscribe_turn` 或 `resume_from`；不要将查询结果当作新建确认。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

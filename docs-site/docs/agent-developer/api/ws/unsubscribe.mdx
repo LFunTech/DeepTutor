@@ -1,0 +1,42 @@
+---
+title: "unsubscribe · 停止本连接订阅"
+description: "WebSocket 命令 unsubscribe 的请求、响应与恢复"
+slug: /api/ws/unsubscribe/
+command: unsubscribe
+---
+
+# unsubscribe
+
+## 用途与时机
+
+当前连接不再需要某 turn／会话的流事件时调用；它**不会取消**执行。
+
+## 前置条件
+
+已建立 WS，且本连接上存在对应订阅。 连接方式见 [WebSocket 入口](../../websocket-protocol.mdx)。
+
+## 请求字段
+
+所有命令均为单个 JSON 对象，且必须包含字符串 `"protocol_version":"2.0"` 和 `"type":"unsubscribe"`。
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `turn_id` | 二选一 | 取消本连接的 turn 订阅 |
+| `session_id` | 二选一 | 取消本连接的会话活动 turn 订阅 |
+
+可以同时传两项。
+
+<!-- ws-command -->
+```json
+{"type":"unsubscribe","protocol_version":"2.0","turn_id":"turn-001"}
+```
+
+## 响应与事件
+
+无独立确认消息。调用后不能再假定本连接收到该订阅的后续事件；turn 本身仍可能继续执行。
+
+## 错误与恢复
+
+字段均缺失会得到 `invalid_command`；若想中止执行，应调用 `cancel_turn`，不要误把 `unsubscribe` 当取消。
+
+参见 [协议错误与事件](../../websocket-protocol.mdx) 和 [通用排障](../../errors.mdx)。

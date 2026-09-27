@@ -45,6 +45,13 @@
 - [ ] D5.3 权限/异常测试：验证普通 tenant_admin、伪造 `ops.*` scope、错误 evidence path、跨环境 release id 或不同生产环境之间无法越权查看/覆盖发布证据。
 - [x] D5.4 切换证据：按环境记录 evidence path、scan 摘要、未验证项和 G1 结论边界；未跑某个真实生产环境前，不能宣称该环境生产上线或所有生产环境已完成。
 
+## D6 test-cn 第三方文档发布增量
+
+- [ ] D6.1 在 `docs-site/` 增加独立、可复现的静态镜像构建，固定 `/docs/` 基础路径与 test-cn HTTPS origin；验证产物首页、静态资源和无内部演示内容。
+- [x] D6.2 Woodpecker 增加与 `compile-frontend-test-cn` 并行的 `compile-docs-test-cn`，test-cn 预部署门禁解析并校验文档 digest；其他环境的依赖/secret/路由不变。
+- [x] D6.3 test-cn 添加独立 docs Deployment/Service/NetworkPolicy 和同一 Ingress 的 `/docs` 路由；缺失或跨环境 docs digest 在调用 `kubectl` 前失败，等待 docs rollout。
+- [ ] D6.4 test-cn 经真实 HTTPS 验证 `/docs/` 首页和静态资源，保存脱敏 evidence；未运行受保护 tag 和真实集群前保持未验证状态。
+
 ## 验证与归档准备
 
 - [x] V.1 运行 `openspec validate add-g1-woodpecker-k8s-release-baseline --strict`。

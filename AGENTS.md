@@ -7,6 +7,22 @@ around a two-layer plugin model — single-shot **Tools** invoked by the
 LLM, and multi-stage **Capabilities** that take over a turn — exposed
 through three entry points: CLI, WebSocket API, and Python SDK.
 
+## Product naming
+
+The EduPlus2-integrated cloud platform's official system name is
+**智能体基座**. Use the full name in OMS/TMS branding, page titles, navigation,
+and other prominent operator-facing text; use **基座** where a shorter reference
+is clearer. OMS remains “平台智能体运营后台” and TMS remains
+“学校智能体管理后台”. Apply the same naming to future cloud product copy and
+user-facing documentation.
+
+**DeepTutor** remains the name of the local/upstream product and the technical
+source of core execution and settings semantics. Do not present it as the
+OMS/TMS cloud platform brand. Do not rename existing packages, imports,
+modules, API fields, routes, persisted keys, or source attribution merely to
+change the displayed system name. Preserve the upstream mergeability rules
+below.
+
 ## Education-domain terminology
 
 In the EduPlus2 enterprise education integration, one technical `tenant` is
@@ -17,6 +33,36 @@ technical contracts rather than bulk-renaming DeepTutor core. EduPlus2
 `school_code` is the school's tenant code, but is not the stable tenant ID or
 an authorization credential. A code in a URL must be checked against the
 authenticated school's trusted ID/code binding before accessing data.
+
+## Enterprise management boundary
+
+OMS manages platform personnel and their `ops.*` permissions only. A `school`
+scope in OMS limits a platform operator's actions on that school; it never
+grants a school account or `tenant.*` role. OMS must not list, create, approve,
+or maintain school accounts, including the first TMS administrator. School
+accounts and first-administrator activation belong to TMS/the school side.
+DeepTutor Enterprise application code decides `ops.*`/`tenant.*` authorization
+from versioned local facts; PostgreSQL roles, grants, or RLS are persistence and
+isolation safeguards, not operator permission decisions. EduPlus2 supplies
+authentication and stable identity, not DeepTutor application permissions. The
+first TMS administrator identity may be seeded only from a verified, real
+`subscription.created.actor.user_id` for the bound school and activated after
+that same person authenticates in TMS; no prototype fixture, URL, JWT role, or
+webhook mock may substitute for this verification. OMS never creates or manages
+school accounts.
+
+## External repository and ownership boundary
+
+Agents working on DeepTutor MUST NOT modify external repositories, even when
+they are available locally or named as an OpenSpec dependency. In particular,
+EduPlus2 belongs to another team: do not edit, commit, push, migrate, configure,
+or deploy its code, CI, identity/permission systems (including Keycloak and
+OpenFGA), or other team-owned runtime resources. Implement changes only in this
+repository and explicitly authorized DeepTutor-owned resources. Read-only
+inspection of external contracts and authorized, non-destructive API tests are
+permitted; missing external capabilities must be recorded as dependencies, and
+affected DeepTutor operations must remain fail closed. Approval of a DeepTutor
+proposal does not authorize work in another team's repository or systems.
 
 ## Architecture
 

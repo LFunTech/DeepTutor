@@ -124,11 +124,15 @@ extensions/enterprise/src/deeptutor_enterprise/integrations/eduplus2/sync.py
 POST /api/v1/eduplus2/webhooks
 ```
 
-当前企业组合已提供此路径的**已验签控制台 mock 接收**：读取 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`（或本地兜底 `DT_EDUPLUS2_WEBHOOK_SECRET`），按 EduPlus2 的 `timestamp.event.raw-body` 三段式 HMAC-SHA256 校验 `X-EduPlus-*` 头；仅 `X-EduPlus-Mock: true` 且 `event_id=mock_...` 的 demo 请求返回 204，不修改租户状态。真实订阅事件在版本化 inbox、租户绑定及对账完成前返回可重试 503。2026-09-26 已在 `test-cn` HTTPS URL 由 EduPlus2 `智能体基座` 控制台实际执行 8 类订阅事件 demo，发送端投递记录均为 HTTP 204；此证据只覆盖 mock URL 联调，正式 Webhook 保持禁用。Secret 不写入本文或日志，详情见对应 OpenSpec `implementation-evidence.md`。
+当前企业组合已提供此路径的**已验签控制台 mock 接收**：读取 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`（或本地兜底 `DT_EDUPLUS2_WEBHOOK_SECRET`），按 EduPlus2 的 `timestamp.event.raw-body` 三段式 HMAC-SHA256 校验 `X-EduPlus-*` 头；仅 `X-EduPlus-Mock: true` 且 `event_id=mock_...` 的 demo 请求返回 204，不修改租户状态。2026-09-26 已在 `test-cn` HTTPS URL 由 EduPlus2 `智能体基座` 控制台实际执行 8 类订阅事件 demo，发送端投递记录均为 HTTP 204；此证据只覆盖 mock URL 联调。
+
+2026-09-27 本地工作区另实现了**默认关闭**的真实 `subscription.*` 可靠入队与在线核验切片。仅在 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true` 且配置目标应用 ID、独立 inbox 摘要密钥和 online resolve 后，真实事件才可能事务入队返回 204；学校资格仍需经已验证绑定和当前状态短时证明，首位管理员候选仍待当前订阅 ID 证明。**test-cn 尚未部署此版，实际真实事件仍 503**；不得因代码存在就启用正式 Webhook、重试首校或声称学校已接入。Secret 不写入本文或日志，详情见对应 OpenSpec `implementation-evidence.md`。
 
 `.secrets/.test-secrets` 仅是本地测试输入，不会自动同步至测试 K8s。`test-cn` 受保护 tag 发布步骤从 Woodpecker 仓库 Secret `dt_test_cn_eduplus2_webhook_secret` 注入密钥，仅同步目标命名空间运行时 Secret 的 `DT_EDUPLUS2_WEBHOOK_SECRET` 字段后才继续部署；后端通过已有 `envFrom` 和 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`/同名变量读取。应核对 Woodpecker、K8s 与 EduPlus2 对应 Webhook 使用同一密钥；不能靠本地文件存在便认定公网 URL 可验签。
 
-Webhook 用于应用安装、租户授权、client 配置变更、secret 轮换、用户/组织/权限变化等状态同步，不是 TMS/OMS 每次登录或第三方 `POST /api/v1/auth/eduplus2/exchange` 的主链路。普通第三方调用仍必须实时验签 EduPlus2 user JWT，并查 active client/app 注册状态；即使暂未接入 Webhook，也不能放松 token 校验或使用未审计的手工配置绕过注册流程。
+正式接收另需由**本系统**发布契约配置 `DT_EDUPLUS2_WEBHOOK_APP_ID`（目标数字应用 ID）、`DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF`（独立稳定密钥，不与 Webhook Secret 共用）、`DT_EDUPLUS2_LIFECYCLE_PROOF_TTL_SECONDS`（1–60 秒）及已可用的 online resolve client。轮换时可选 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF` 和 Unix 秒截止 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL`。这些配置与学校绑定/受权只读证明未验收前，`DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED` 必须保持未设置或 `false`；不能把新增键值硬编码到 Git 或仅因签名正确就开通业务。
+
+本节当前已实现的 Webhook 只处理八类应用订阅 `subscription.*` 通知；应用安装、client 配置、用户/组织/权限变化若要同步，仍需各自独立合同和提案，不能假定此入口已覆盖。它不是 TMS/OMS 每次登录或第三方 `POST /api/v1/auth/eduplus2/exchange` 的主链路。普通第三方调用仍必须实时验签 EduPlus2 user JWT，并查 active client/app 注册状态；即使暂未接入 Webhook，也不能放松 token 校验或使用未审计的手工配置绕过注册流程。
 
 安全要求：
 
@@ -140,32 +144,32 @@ Webhook 用于应用安装、租户授权、client 配置变更、secret 轮换�
 
 ## Webhook 幂等
 
-存储：PostgreSQL webhook_events 表；验证签名和事件来源后通过 registry 映射内部 tenant，事务保存事件后才返回 2xx。PG 失败返回可重试错误，不先响应后把事件放进进程内队列。
+当前订阅接收器将目标应用正确且已验签的真实事件最小业务投影保存到 `eduplus2.lifecycle_inbox`；未知学校只入待绑定队列，**不**从 `school_code` 或事件字段推断内部学校。PG 事务提交后才返回 204，失败返回可重试 5xx，不先响应后放进进程内队列。原始 body、OAuth Secret、签名不入库；稳定独立摘要密钥对不含投递时间的业务投影做 HMAC，同 ID 不同业务事实拒绝为 409。
 
 幂等 key：
 
 ```text
-tenant_id + event_id
+部署收件箱 tenant_id + event_id
 ```
 
 处理状态：
 
 ```text
-received
-processing
-succeeded
-failed
-ignored
+pending_binding
+pending_reconcile
+verified
+denied
+retry
 ```
 
 ## Webhook 处理策略
 
 | 事件类别 | 建议行为 |
 | --- | --- |
-| 租户开通/停用 | 仅更新经验证的 external_eligibility/来源版本，再重算准入；外部停用拒绝新登录/turn/派发并撤权，外部恢复不能覆盖 local_enabled=false |
+| 学校订阅八类 `subscription.*` | 事件只使旧证明失效并触发 online resolve 当前态核验；无单调来源版本，不能按事件时间或 payload 直接开停。外部恢复不能覆盖 `local_enabled=false`；未知/过期证明拒绝新业务。 |
 | 用户/组织变化 | 标记对应租户需要重新同步 |
 | 权限变化 | 清理权限 cache / grants cache |
-| 应用订阅变化 | 仅更新外部资格/订阅能力快照，与平台分配及租户开关取交集，不直接覆盖本地功能开关 |
+| 应用订阅变化 | 在已验证学校—应用—client 绑定下复核当前资格；OMS 逐服务额度是独立门禁，不生成生命周期事件。 |
 
 即使有 Webhook，也不能完全依赖事件补齐状态；仍需周期性完整对账。事件和对账都遵守 [03 的独立状态来源](03-tenant-scope-schema.md#租户状态的独立来源)：各来源幂等/版本比较，乱序或顺序不可验证时重新获取权威状态，不能用快照整行覆盖本地暂停或 provisioning 状态。验收“本地暂停后外部 active”“外部停订后本地恢复”“订阅恢复但本地功能仍关闭”及重复/乱序事件。
 

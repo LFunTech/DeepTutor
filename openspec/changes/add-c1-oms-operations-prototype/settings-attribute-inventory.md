@@ -13,7 +13,7 @@
 
 | DeepTutor 对象 | 当前可见属性/规则 | OMS 管理层级与边界 |
 | --- | --- | --- |
-| 连接 `connections` | `provider`、`name`、`api_key`、`base_url` 及目标服务各自的 `model`；只覆盖 `llm/task/embedding/tts/stt/imagegen/videogen`，**不含 search**。`base_url` 可留空用默认端点；关联 profile 凭据由连接供给，profile 内不可独立改。`api_version`、`extra_headers` 在 catalog 类型中存在，但当前连接编辑器未暴露。 | “连接与凭据列表 → 连接详情 → 关联服务”；仅授权高权限人员维护，Secret 只用引用/受控解析，普通运营不见明文。 |
+| 连接 `connections` | `provider`、`name`、`api_key`、`base_url` 及目标服务各自的 `model`；前端 `CONNECTABLE_SERVICES` 列出 `llm/task/embedding/tts/stt/imagegen/videogen`，**不含 search**，但当前后端 `_connection_targets()` 只生成 `llm/embedding/tts/stt/imagegen/videogen`，未生成 `task`，实际可选项受后端返回值限制。这是现有源码间差异，不得由 OMS 硬编码“task 可连接”来掩盖。`base_url` 可留空用默认端点；关联 profile 凭据由连接供给，profile 内不可独立改。`api_version`、`extra_headers` 在 catalog 类型中存在，但当前连接编辑器未暴露。 | “连接与凭据列表 → 连接详情 → 关联服务”；仅授权高权限人员维护，Secret 只用引用/受控解析，普通运营不见明文。 |
 | 通用 profile | `name`、`provider`/`binding`、`base_url`、`api_key`；高级 `api_version`、非搜索服务的 `extra_headers`；关联 `connection_id` 只读来源。LLM/task 的 `api_format` 仅在 provider 返回多个选项时可选；`wire_api` 为推导值。OAuth/CodeBuddy、managed/read_only profile 不可按统一 API Key 必填处理。 | “服务 → 供应商配置列表 → 配置详情”；条件字段来自 descriptor，草稿/测试/发布与生效反馈分开；无权限者只读安全状态。 |
 | `llm` 对话模型 | `active_profile_id`、`active_model_id`；模型 `name/model/context_window`、条件性 `reasoning_effort`、`capabilities.{tools,vision,json_output,reasoning}`。窗口检测与选项随 provider。 | 对话模型服务详情 → profile → 模型/能力详情；不得硬编码通用推理档位。 |
 | `task` 任务模型 | profile/model 基础项与能力；**未单独配置时回退 LLM**。当前编辑器没有 LLM 专属 context-window/默认 reasoning-effort 控件。 | 任务模型独立服务详情；明确当前配置或回退来源，不假装与 LLM 表单完全相同。 |
@@ -25,6 +25,34 @@
 | `videogen` 文生视频 | 模型 `name/model/aspect_ratio/duration/resolution`；异步任务型服务。 | 视频服务详情独立展示任务型配置、测试与生效状态；时长/分辨率不套图片字段。 |
 
 通用目录现有 profile/model 增删、选择、草稿保存、单服务应用和诊断测试；新 OMS 高保真原型应按列表→详情演示这些管理流程，但不能声称模拟保存已让真实执行者 active。每项服务的**配额单位和可信用量来源**须另经真实调用路径审计，不能从存在 model/profile 字段推出 Token 计量。
+
+### 控件、候选来源与当前 OMS 原型差距（2026-09-26）
+
+此表保留本轮修改前的差距基线，只核对 OMS 拟管理的 DeepTutor 平台设置；DeepTutor 的个人偏好、学习内容和本地安装操作不因“原设置里有控件”自动进入 OMS。修订后的演示表单读取**离线生成的 descriptor 快照**而不调用真实供应商，保存也不改变运行态；本轮结果见下方“实施核对与保留边界”。
+
+| 字段/操作 | DeepTutor 当前控件与规则 | 修订前 OMS 原型 | 本轮验收点 |
+| --- | --- | --- | --- |
+| 连接 `provider`、Profile `provider/binding` | 由 `_connection_targets()`、`_provider_choices()` 返回候选；选中更新默认 endpoint、API 格式及部分服务默认模型/维度/音色；废弃或受管 provider 有不同处理 | 两处自由文本；连接适用服务为固定复选框 | 按服务/鉴权方式选择供应商，服务选项按该供应商可连接范围过滤；保留合法的自定义供应商候选，而非放行任意标识。`task` 前后端差异先核对。 |
+| LLM/task `model` | `ModelListPicker` 可通过 `/api/settings/fetch-models` 获取候选；获取不到时可手动填写；task 未配置时回退 LLM | 新增模型始终自由文本；连接模型候选亦未演示 | 有候选时可选择，空/失败时显式提示并手动兜底；不得把原型 fixture 冒充实时供应商模型发现。 |
+| LLM/task `api_format` | 仅供应商返回多个 `api_formats` 时显示下拉；按选项更新默认端点但保留用户自定义地址 | 控件缺失，只在说明文字提及 | Profile 层条件下拉、默认值及切换联动；单一格式不制造无意义输入。 |
+| LLM `reasoning_effort`、LLM/task `capabilities`、`active_profile_id/active_model_id` | 按模型能力显示推理档位；工具/视觉/JSON/推理四项为“自动/支持/不支持”三态选择；当前 Profile/模型显式选用 | 模型表单无对应控件或选用动作；Profile 表单反而混入 `model` 等模型字段 | 拆回模型/选用层，保留自动来源与 task 回退，不把四项能力做成一个布尔或自由文本。 |
+| Embedding `dimension/send_dimensions` | 可用维度已知时“自动/支持值/自定义”，未知时数字输入；是否发送维度为复选框 | 维度始终文本，是否发送为下拉，且两者位于通用 Profile/服务表单而非新增模型表单 | 模型层条件维度选择、正整数校验与复选框；无候选不编造固定维度。 |
+| 搜索 `provider` 与 Key/URL/API 版本/代理 | 供应商下拉；凭据和地址是否展示/必填随 provider 变，版本和代理属于高级条件字段 | provider 自由文本，URL/版本/代理一律显示 | 按 descriptor 条件显隐/校验；搜索不创建模型或通用连接。 |
+| MinerU/Docling、视频学习 | 解析引擎/模式/模型版本及字幕来源为选择；OCR/公式/表格/下载等为开关；视频来源为单选式卡片 | 主要枚举已是下拉，但布尔改为下拉；本地模型下载来源等未提供 | 保留条件语义与原子操作；开关优先用可访问开关/复选框。安装和模型下载需单独高权限审阅，不直接移植本地按钮。 |
+| PyMuPDF4LLM/LiteParse | 图片格式下拉、DPI/最大页数数字输入、图片/链接提取开关等按引擎条件出现 | 只提供 LiteParse 图片模式，其余缺失 | 若 OMS 承诺维护该引擎设置，应提供现有字段及边界校验；不能用“附加选项以后端为准”的静态说明代替表单。 |
+| 原本为文本的字段 | 名称、Base URL/代理、MinerU 语言、TTS 音色、图片大小/质量/风格、视频比例/时长/分辨率等依当前编辑器允许输入；LLM 上下文窗口为数字输入并有检测/来源反馈 | 多数仍为文本；上下文窗口缺检测反馈 | 保留合法自由输入并补适用校验与反馈；**不应为视觉一致性强行改成无来源的下拉框**。 |
+
+Agent/Tool 等资源目录的“平台策略说明”不是 DeepTutor 全部 Agent/Tool 设置的等价编辑器；若以后宣称可维护其运行参数，需要先逐对象审计真实设置与执行者，不以通用策略文字代替。OMS 本轮原型优先修正上述明确映射的连接/Profile/模型/解析/搜索表单；TMS 不引入这些平台维护表单，只同步共享安全服务展示的契约与回归验证。
+
+### 本轮原型实施核对与保留边界
+
+| 范围 | 当前原型处理 | 尚未接入/正式实施门禁 |
+| --- | --- | --- |
+| 连接、Profile、模型 | OMS 的候选来自 `_provider_choices()`/`_connection_targets()` 的离线生成快照，记录来源文件摘要并由 `check:provider-snapshot` 防漂移；按支持服务选择连接、按 Profile 选模型，DashScope Qwen 候选仅为标明的演示样本。推理档位离线对照 `web/lib/reasoning-effort.ts` 常见模型族，并记录该源码摘要；OAuth 模型不猜测实时账户支持档位。模型能力为三态，维度/`send_dimensions` 归模型；Search 无连接/模型，task 后端 descriptor 暂无连接目标。OAuth/免 Key 不出现 API Key 演示操作。 | 实时模型发现、过期/失败状态、OAuth 授权、Secret 托管、诊断测试、执行者确认与发布都不由原型实现；不能称草稿可调用。正式 API 需复用受权 descriptor、服务端再次校验与审计。 |
+| 搜索、解析、视频学习 | Search Key/URL 条件、高级 API 版本/代理；非搜索 Profile 高级 API 版本/请求头 JSON 校验；PyMuPDF4LLM、LiteParse、MinerU、Docling 等按引擎展示现有下拉/开关/数字项。 | OCR 引擎 readiness、远端 Key、云端安装/模型下载、视频来源可用性仍需后端权威确认。原型不执行下载或安装。 |
+| Agent 与能力 | `web/components/settings/SubagentSettingsEditor.tsx` 存在 `enabled`、模型选择/手动兜底、effort、超时、`permission_mode`、`auto_approve`、thinking、sandbox、approval、network 等条件控件。OMS 仅展示并保存**平台策略草稿**，页面明确“Agent 运行参数待接入”。 | 不把本地个人/子 Agent 设置直接升级成云端平台配置；逐类定义 owner、执行者、授权、隔离及高风险审批后才可开发运行参数表单。内置 CapabilityRegistry 身份只读。 |
+| Tool 与集成 | `web/features/settings/sections/ToolsSettingsSection.tsx` 从 `/api/tools` 读取 toggleable/availability，并保存当前用户 `enabled_optional_tools`；这不是全局平台启停。OMS Tool 页明确“Tool 运行参数待接入”，仅维护演示平台策略文字。 | ToolRegistry 内置定义不可在线改写；全局允许范围、学校授权、个人可用开关和执行 readiness 必须分层建模，不能拿用户 toggle API 当 OMS 管理 API。MCP/外部集成还需独立 Secret、执行者和审计契约。 |
+| 知识基础能力、运行资源 | 当前统一策略草稿只用于信息架构演示，页面提示“平台运行参数待接入”。 | KB 正文/个人内容不进 OMS；网络/workspace/安装类高风险操作须单独权限与安全审阅，不能因 DeepTutor 本地设置存在就向普通运营开放。 |
 
 ## 模型目录之外的服务与设置
 

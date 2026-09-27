@@ -1,0 +1,40 @@
+---
+title: "GET 读取会话详情"
+description: "读取当前用户有权访问的会话详情。"
+slug: /api/http/get-session/
+method: GET
+path: "/api/sessions/{session_id}"
+---
+
+# GET `/api/sessions/{session_id}`
+
+## 用途与时机
+
+展示一段已知会话的消息和元数据，或在修改前读取当前状态。
+
+## 前置条件
+
+有效 `dt_token`，且当前用户有权访问该 `session_id`。
+
+## 请求
+
+**GET `/api/sessions/{session_id}`**
+
+| Path | 必填 | 说明 |
+| --- | --- | --- |
+| `session_id` | 是 | 从会话列表或 turn 事件获得，按 URL 路径编码 |
+
+```bash
+curl --fail-with-body "$BASE_URL/api/sessions/$SESSION_ID" \
+  -H "Authorization: Bearer $DT_TOKEN"
+```
+
+## 响应
+
+`200` 返回会话对象，包含 `session_id`、`title` 等会话元数据、`messages` 数组及 `active_turns`。每条消息可含 `id`、`role`、`content`、`metadata`、`events`；事件内容可能仅供预览。以返回的字段为准，不要根据消息文本推断 turn ID。
+
+## 错误与恢复
+
+`404` 表示不存在或不可见；不枚举其他 ID。`401` 更新凭证；修改前若需版本控制，使用当前响应／部署给出的版本。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

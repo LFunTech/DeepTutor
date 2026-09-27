@@ -1,0 +1,42 @@
+---
+title: "DELETE 删除会话"
+description: "删除当前用户有权操作的会话。"
+slug: /api/http/delete-session/
+method: DELETE
+path: "/api/sessions/{session_id}"
+---
+
+# DELETE `/api/sessions/{session_id}`
+
+## 用途与时机
+
+用户明确请求删除整段会话时调用；不要用它清理某一条消息。
+
+## 前置条件
+
+有效 `dt_token`，有删除权；应先向用户确认影响范围。
+
+## 请求
+
+**DELETE `/api/sessions/{session_id}`**
+
+| Path | 必填 | 说明 |
+| --- | --- | --- |
+| `session_id` | 是 | 要删除的已授权会话 |
+
+无请求体。
+
+```bash
+curl --fail-with-body -X DELETE "$BASE_URL/api/sessions/$SESSION_ID" \
+  -H "Authorization: Bearer $DT_TOKEN"
+```
+
+## 响应
+
+`200` JSON：`{"deleted":true,"session_id":"…"}`；若关联清理仍在进行，可能为 `202`，并带 `cleanup` 状态。不要将 `202` 误判为未接受删除。
+
+## 错误与恢复
+
+`404` 会话不存在或不可见；`409` 存在不能删除的关联状态。不要无限重试；向用户说明并保留请求关联信息。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。

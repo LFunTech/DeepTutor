@@ -1,0 +1,43 @@
+---
+title: "DELETE 删除会话消息"
+description: "删除当前会话中有权操作的消息。"
+slug: /api/http/delete-message/
+method: DELETE
+path: "/api/sessions/{session_id}/messages/{message_id}"
+---
+
+# DELETE `/api/sessions/{session_id}/messages/{message_id}`
+
+## 用途与时机
+
+用户明确要求删除某条消息及其对应 turn 时调用；运行中的 turn 不能删除。
+
+## 前置条件
+
+有效 `dt_token`，有会话修改权；`message_id` 必须是整数。
+
+## 请求
+
+**DELETE `/api/sessions/{session_id}/messages/{message_id}`**
+
+| Path | 必填 | 说明 |
+| --- | --- | --- |
+| `session_id` | 是 | 已授权会话 |
+| `message_id` | 是 | 待删除消息的整数 ID |
+
+无请求体。
+
+```bash
+curl --fail-with-body -X DELETE "$BASE_URL/api/sessions/$SESSION_ID/messages/$MESSAGE_ID" \
+  -H "Authorization: Bearer $DT_TOKEN"
+```
+
+## 响应
+
+`200` 返回删除结果（含 `deleted`）；关联清理尚未完成时可返回 `202` 与 `cleanup`。不要将其视作可直接重试的失败。
+
+## 错误与恢复
+
+`404` 消息不可见；`409` 运行中的 turn 或关联约束阻止删除。先让用户决定是否取消 turn，不能绕过冲突。
+
+返回 [HTTP API 目录](../../http-api.mdx)；通用鉴权和状态处理见 [认证与安全](../../auth-and-security.mdx) 与 [错误与排障](../../errors.mdx)。
