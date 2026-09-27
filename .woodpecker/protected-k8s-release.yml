@@ -234,7 +234,7 @@ steps:
         case "$${digest}" in sha256:*) ;; *) echo "unexpected digest: $${digest}" >&2; exit 2 ;; esac
         printf "export DEEPTUTOR_RUNTIME_IMAGE_DIGEST='%s/runtime@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${digest}" > .deeptutor-image.env
         manifest_url="https://$${registry_host}/v2/$${registry_path}/docs/manifests/$${DEEPTUTOR_IMAGE_TAG}"
-        curl --fail --silent --show-error --head --user "$${REGISTRY_PUSH_USERNAME}:$${REGISTRY_PUSH_TOKEN}" -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' "$${manifest_url}" > "$${headers}"
+        curl --fail --silent --show-error --head --user "$${REGISTRY_PUSH_USERNAME}:$${REGISTRY_PUSH_TOKEN}" -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json' "$${manifest_url}" > "$${headers}"
         docs_digest="$$(awk 'BEGIN{IGNORECASE=1} /^Docker-Content-Digest:/ {print $2}' "$${headers}" | tr -d '\r' | tail -n1)"
         printf '%s\n' "$${docs_digest}" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "invalid docs image digest" >&2; exit 2; }
         printf "export DEEPTUTOR_DOCS_IMAGE_DIGEST='%s/docs@%s'\n" "$${DEEPTUTOR_REGISTRY_REPOSITORY}" "$${docs_digest}" >> .deeptutor-image.env

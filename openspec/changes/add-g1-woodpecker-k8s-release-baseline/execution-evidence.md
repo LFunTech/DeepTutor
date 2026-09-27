@@ -2379,3 +2379,9 @@ OpenSpec validate --all --strict -> 28 passed, 0 failed
 ```
 
 本机 Docker Desktop overlay 为 `58.4G/58.3G`、可用空间 `0`，完整 `docker build` 在 `npm ci` 阶段以 `ENOSPC` 失败；未清理用户镜像或卷，也未把此失败伪称为镜像构建通过。`docs-site/` 当前未提交，Woodpecker 受保护 tag 的 clone 尚不可见；本轮未提交、打 tag、触发流水线或访问真实集群，因此 registry push、真实 K8s rollout 和 `https://llm-agent-test.f123.pub/docs/` 均保持未验证。D6.1 和 D6.4 待授权发布与有足够构建空间的环境完成后再勾选。
+
+### 2026-09-27 test-cn rc.48 首次流水线与 manifest 媒体类型诊断
+
+获用户授权后，包含工作区全部未忽略改动的 `e7fc7311` 已推送至 `origin/master`，并推送 `deploy/test-cn/v1.4.0-rc.48`。Woodpecker pipeline `#59` 中 `compile-docs-test-cn` 与 `compile-frontend-test-cn` 同时运行；文档镜像构建、typecheck、Docusaurus build 和 registry push 成功，`docs@sha256:5c47a1f1b05a89cc5775f056c7f941204dc5716dad5791ef5c8ea2688ac1446d`。runtime、主前端、Python 依赖、runtime base 与 secret preflight 也成功。但 `pre-deploy-check-test-cn` 在查询 docs manifest 时返回 404，`deploy-test-cn` 被跳过，真实 Ingress/TLS 尚未验证。
+
+根因已用相同 registry 的只读 HEAD 请求复现：docs 镜像 manifest 类型是 `application/vnd.oci.image.manifest.v1+json`，原预部署查询只接受 `application/vnd.docker.distribution.manifest.v2+json`，因此 registry 返回 404；加入 OCI 类型的 Accept 后返回 200 及上述 digest。runtime 镜像为 Docker v2 manifest，原请求保持可用。本轮将 docs 查询改为同时接受 Docker v2 与 OCI manifest，并新增回归断言；不得复用或移动 rc.48 tag，修复须经新的受保护 test-cn tag 验证。D6.1 据真实 CI 文档镜像构建与推送结果勾选，D6.4 仍未验证。

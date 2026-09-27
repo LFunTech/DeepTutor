@@ -46,6 +46,10 @@ def test_docs_digest_is_locked_and_smoke_runs_after_deployment():
     precheck = "\n".join(steps["pre-deploy-check-test-cn"]["commands"])
     deploy = "\n".join(steps["deploy-test-cn"]["commands"])
     assert "/docs/manifests/$${DEEPTUTOR_IMAGE_TAG}" in precheck
+    assert (
+        "Accept: application/vnd.docker.distribution.manifest.v2+json, "
+        "application/vnd.oci.image.manifest.v1+json"
+    ) in precheck
     assert "DEEPTUTOR_DOCS_IMAGE_DIGEST" in precheck
     assert "docs@" in precheck
     assert "docs-image-digest.json" in precheck
