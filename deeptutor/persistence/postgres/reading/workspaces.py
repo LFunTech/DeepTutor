@@ -64,11 +64,15 @@ class Workspaces:
         for mid in ids:
             validate_id(mid, "material")
         rows = self._execute(
-            "SELECT material_id FROM enterprise.reading_materials WHERE tenant_id=%s AND owner_id=%s AND material_id=ANY(%s)",
+            "SELECT * FROM enterprise.reading_materials "
+            "WHERE tenant_id=%s AND owner_id=%s AND material_id=ANY(%s) "
+            "ORDER BY material_id FOR UPDATE",
             (*self._owner, list(ids)),
         ).fetchall()
         if {r["material_id"] for r in rows} != set(ids):
             raise ReadingError("material not found")
+        for row in rows:
+            material(row)
 
     def _workspace_result(self, wid, return_summary):
         return self.get_workspace_summary(wid) if return_summary else self.get_workspace(wid)
@@ -234,6 +238,11 @@ class Workspaces:
           WHERE tenant_id=%s AND owner_id=%s AND workspace_id=%s AND active_material_id=%s""",
             (time.time(), *self._owner, workspace_id, material_id),
         )
+        self._execute(
+            "UPDATE enterprise.reading_workspaces SET active_material_id=NULL "
+            "WHERE tenant_id=%s AND owner_id=%s AND workspace_id=%s AND active_material_id=%s",
+            (*self._owner, workspace_id, material_id),
+        )
         if not self._execute(
             "DELETE FROM enterprise.reading_workspace_materials WHERE tenant_id=%s AND owner_id=%s AND workspace_id=%s AND material_id=%s",
             (*self._owner, workspace_id, material_id),
@@ -282,6 +291,7 @@ class Workspaces:
             (*self._owner, workspace_id, material_id),
         ).fetchone():
             raise ReadingError("material does not belong to this reading workspace")
+        self._require_materials([material_id])
         self._execute(
             "UPDATE enterprise.reading_materials SET last_opened_at=%s,version=version+1 WHERE tenant_id=%s AND owner_id=%s AND material_id=%s",
             (time.time(), *self._owner, material_id),

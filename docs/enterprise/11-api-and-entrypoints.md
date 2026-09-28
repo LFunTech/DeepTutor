@@ -16,6 +16,8 @@ A1/A2 保留现有入口/产品协议并替换固定 tenant 的 PG/S3/scratch，
 
 P1 前置应用联调 contract、错误矩阵、配置矩阵和 smoke 命令见 [EduPlus2 前置应用接入联调契约](eduplus2-fronting-app-integration-contract.md)。云端 OMS/TMS 已有**独立开发态前端原型**，但真实 `/tms`、`/oms` 管理入口、Handoff/OIDC callback、在线 client 注册治理及 `/api/v1/tms/*`、`/api/v1/oms/*` 的完整管理闭环仍未交付；DeepTutor 本地 Web 同名占位页不是生产管理入口。前置应用负责打开/refresh/周期合法性校验；当前联邦切片只处理自身 token/session/owner/resource guard 与审计。
 
+当前工作区另有尚未发布的正式 OMS Skill HTTP 写入切片：`POST /api/v1/oms/skills/draft` 接收完整 ZIP；`POST /skills/revisions/{revision_id}/review`、`POST /skills/revisions/{revision_id}/publish` 分别由独立审查与发布动作保护；`POST`/`DELETE /skills/{name}/schools/{school_id}/grant` 按目标学校授权/撤权。以上路径均带 `/api/v1/oms` 前缀，使用 EduPlus2 平台身份认证和 DeepTutor Enterprise 的 `ops.skills.manage/review/publish/grant` 逐动作权限，写事务再次复核。审查、发布和学校授权绑定精确包摘要/版本；但读取清单、OMS 界面、CLI/SDK 和运行时 Skill 授权过滤仍未贯通，不能把该切片当作首个 Agent 已可使用 Skill 或完整 OMS 已交付。
+
 ## 企业应用外壳与核心入口
 
 企业启动器/应用 factory 位于独立 `deeptutor_enterprise` 包，优先复用容器注入、TurnRuntimeManager/SessionStore、Tool/Capability 协议；缺失处通过通用核心 seam 补齐。产品继续使用既有 HTTP 与 `/api/v1/ws` 语义，不把 Plugin API 或直接 `DeepTutorApp()` 默认初始化当作企业入口的等价替代。
@@ -83,7 +85,7 @@ DeepTutor 当前主要入口：
 | `GET` | `/api/v1/eduplus2/handoff/callback` | 未实现。后续 TMS/OMS 或 Handoff proposal 再定义。 |
 | `POST` | `/api/v1/eduplus2/logout` | 未实现。后续 session/handoff proposal 再定义。 |
 | `GET` | `/api/v1/eduplus2/session` | 未实现。后续 session/handoff proposal 再定义。 |
-| `POST` | `/api/v1/eduplus2/webhooks` | 企业组合已实现验签后的控制台 mock 接收（204，且不改变租户状态）；test-cn URL 已由 EduPlus2 控制台 8 类 mock 事件联调成功。真实事件在版本化 inbox/绑定契约完成前返回 503，正式 Webhook 保持禁用；旧 revocation 入口是独立契约。 |
+| `POST` | `/api/v1/eduplus2/webhooks` | 企业组合验签后隔离 mock（204 且不改变学校状态）；test-cn 控制台 8 类 mock 与后续非 mock terminated/created 均已返回 204。真实事件事务内完成 inbox、学校绑定/PG onboarding 与资格投影；其他真实事件、本人首管和正式多学校入口仍按各自提案验收。旧 revocation 入口是独立契约。 |
 | `POST` | `/api/v1/eduplus2/sync/{tenant_id}` | 未实现。后续同步 proposal 再定义。 |
 
 ### Token exchange 契约

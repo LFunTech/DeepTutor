@@ -23,6 +23,32 @@ from deeptutor.persistence.postgres.governance import RuntimeGovernanceStore
 from deeptutor.runtime.externalized_providers import ObjectBlobRef, ResourceHandle
 
 _SAFE_KIND = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
+_RESOURCE_STATES = frozenset(
+    {"pending", "uploaded", "ready", "delete-pending", "deleted", "failed"}
+)
+_RESOURCE_RETENTIONS = frozenset({"default", "temporary", "retained", "legal-hold"})
+_CLEANUP_STATES = frozenset({"pending", "running", "failed", "done"})
+
+
+class ResourceBusinessStateError(ValueError):
+    """持久化业务状态未知；不得将校验失败当成可重试对象存储故障。"""
+
+
+def _validate_retention(value: str) -> str:
+    if value not in _RESOURCE_RETENTIONS:
+        raise ResourceBusinessStateError("resource retention is unknown")
+    return value
+
+
+def _validate_resource_row(row) -> None:
+    if row["state"] not in _RESOURCE_STATES:
+        raise ResourceBusinessStateError("resource state is unknown")
+    _validate_retention(row["retention"])
+
+
+def _validate_cleanup_state(value: str) -> None:
+    if value not in _CLEANUP_STATES:
+        raise ResourceBusinessStateError("resource cleanup job state is unknown")
 
 
 def _coerce_kind(value: str) -> str:
@@ -54,6 +80,18 @@ def _coerce_sha256(value: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError("sha256 is required")
     return digest
+
+
+def _validate_reference_binding(row, *, session_id: str, purpose: str) -> None:
+    metadata = row["metadata"] if isinstance(row["metadata"], dict) else {}
+    bound_session = str(metadata.get("session_id") or "").strip()
+    requested_session = str(session_id or "").strip()
+    if bound_session and bound_session != requested_session:
+        raise PermissionError("resource reference is not bound to this session")
+    bound_purpose = str(metadata.get("purpose") or "").strip()
+    requested_purpose = str(purpose or "").strip()
+    if bound_purpose and requested_purpose and bound_purpose != requested_purpose:
+        raise PermissionError("resource reference is not bound to this purpose")
 
 
 class PostgresObjectResourceStore:
@@ -99,6 +137,7 @@ class PostgresObjectResourceStore:
 
     @staticmethod
     def _handle(row) -> ResourceHandle:
+        _validate_resource_row(row)
         return ResourceHandle(
             tenant_id=str(row["tenant_id"]),
             owner_id=str(row["owner_id"]),
@@ -246,14 +285,17 @@ class PostgresObjectResourceStore:
         rid = _coerce_resource_id(resource_id)
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
-            row = await (
+            rows = await (
                 await c.execute(
                     "SELECT * FROM enterprise.resource_objects "
                     "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
-                    "AND resource_id=%s AND state='pending' ORDER BY created_at DESC LIMIT 1",
+                    "AND resource_id=%s ORDER BY created_at DESC,id DESC",
                     (*self.store._owner, kind, rid),
                 )
-            ).fetchone()
+            ).fetchall()
+        for candidate in rows:
+            _validate_resource_row(candidate)
+        row = next((candidate for candidate in rows if candidate["state"] == "pending"), None)
         if row is None:
             raise FileNotFoundError("resource upload intent not found")
         metadata = row["metadata"] if isinstance(row["metadata"], dict) else {}
@@ -274,6 +316,19 @@ class PostgresObjectResourceStore:
             raise ValueError("resource hash mismatch")
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
+            current = await (
+                await c.execute(
+                    "SELECT * FROM enterprise.resource_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND id=%s "
+                    "AND resource_kind=%s AND resource_id=%s FOR UPDATE",
+                    (*self.store._owner, row["id"], kind, rid),
+                )
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("resource upload intent was already consumed")
+            _validate_resource_row(current)
+            if current["state"] != "pending":
+                raise RuntimeError("resource upload intent was already consumed")
             result = await c.execute(
                 "UPDATE enterprise.resource_objects "
                 "SET state='ready',updated_at=now(),cleanup_error='' "
@@ -321,25 +376,20 @@ class PostgresObjectResourceStore:
         rid = _coerce_resource_id(resource_id)
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
-            row = await (
+            rows = await (
                 await c.execute(
                     "SELECT * FROM enterprise.resource_objects "
                     "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
-                    "AND resource_id=%s AND state='ready' ORDER BY created_at DESC LIMIT 1",
+                    "AND resource_id=%s ORDER BY created_at DESC,id DESC",
                     (*self.store._owner, kind, rid),
                 )
-            ).fetchone()
+            ).fetchall()
+        for candidate in rows:
+            _validate_resource_row(candidate)
+        row = next((candidate for candidate in rows if candidate["state"] == "ready"), None)
         if row is None:
             raise FileNotFoundError("resource reference not found")
-        metadata = row["metadata"] if isinstance(row["metadata"], dict) else {}
-        bound_session = str(metadata.get("session_id") or "").strip()
-        requested_session = str(session_id or "").strip()
-        if bound_session and bound_session != requested_session:
-            raise PermissionError("resource reference is not bound to this session")
-        bound_purpose = str(metadata.get("purpose") or "").strip()
-        requested_purpose = str(purpose or "").strip()
-        if bound_purpose and requested_purpose and bound_purpose != requested_purpose:
-            raise PermissionError("resource reference is not bound to this purpose")
+        _validate_reference_binding(row, session_id=session_id, purpose=purpose)
         head = getattr(self.object_store, "head_object", None)
         if not callable(head):
             raise RuntimeError("object store does not support resource verification")
@@ -352,7 +402,23 @@ class PostgresObjectResourceStore:
         observed_type = str(ref.content_type or "").strip().lower()
         if stored_type and observed_type and stored_type != observed_type:
             raise ValueError("resource mime type mismatch")
-        return self._handle(row)
+        async with self.store.db.transaction(self.store.scope) as c:
+            await self._authorized(c)
+            current = await (
+                await c.execute(
+                    "SELECT * FROM enterprise.resource_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND id=%s "
+                    "AND resource_kind=%s AND resource_id=%s",
+                    (*self.store._owner, row["id"], kind, rid),
+                )
+            ).fetchone()
+        if current is None:
+            raise FileNotFoundError("resource reference not found")
+        _validate_resource_row(current)
+        if current["state"] != "ready":
+            raise FileNotFoundError("resource reference not found")
+        _validate_reference_binding(current, session_id=session_id, purpose=purpose)
+        return self._handle(current)
 
     async def put(
         self,
@@ -370,6 +436,7 @@ class PostgresObjectResourceStore:
         kind = _coerce_kind(resource_kind)
         rid = _coerce_resource_id(resource_id)
         name = _coerce_filename(filename)
+        retention = _validate_retention(retention)
         digest = hashlib.sha256(data).hexdigest()
         object_id = uuid4()
         object_key = self._object_key(kind, rid, object_id)
@@ -409,6 +476,18 @@ class PostgresObjectResourceStore:
                 raise OSError("object-store verification mismatch")
             async with self.store.db.transaction(self.store.scope) as c:
                 await self._authorized(c)
+                current = await (
+                    await c.execute(
+                        "SELECT * FROM enterprise.resource_objects "
+                        "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                        (*self.store._owner, object_id),
+                    )
+                ).fetchone()
+                if current is None:
+                    raise RuntimeError("resource object candidate was withdrawn")
+                _validate_resource_row(current)
+                if current["state"] != "pending":
+                    raise RuntimeError("resource object candidate was withdrawn")
                 result = await c.execute(
                     "UPDATE enterprise.resource_objects "
                     "SET state='ready',updated_at=now(),cleanup_error='' "
@@ -450,10 +529,31 @@ class PostgresObjectResourceStore:
     async def _record_cleanup_request(self, object_id: UUID, *, error: str = "") -> None:
         try:
             async with self.store.db.transaction(self.store.scope) as c:
+                row = await (
+                    await c.execute(
+                        "SELECT state,retention FROM enterprise.resource_objects "
+                        "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                        (*self.store._owner, object_id),
+                    )
+                ).fetchone()
+                if row is None:
+                    return
+                _validate_resource_row(row)
+                if row["state"] == "deleted":
+                    return
+                job = await (
+                    await c.execute(
+                        "SELECT state FROM enterprise.resource_cleanup_jobs "
+                        "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                        (*self.store._owner, object_id),
+                    )
+                ).fetchone()
+                if job is not None:
+                    _validate_cleanup_state(job["state"])
                 await c.execute(
                     "UPDATE enterprise.resource_objects "
                     "SET state='delete-pending',cleanup_error=%s,updated_at=now() "
-                    "WHERE tenant_id=%s AND owner_id=%s AND id=%s AND state<>'deleted'",
+                    "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
                     (str(error or ""), *self.store._owner, object_id),
                 )
                 await c.execute(
@@ -495,11 +595,14 @@ class PostgresObjectResourceStore:
                 await c.execute(
                     "SELECT * FROM enterprise.resource_objects "
                     "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
-                    "AND resource_id=%s AND id=%s AND state='ready'",
+                    "AND resource_id=%s AND id=%s",
                     (*self.store._owner, kind, rid, object_id),
                 )
             ).fetchone()
         if row is None:
+            raise FileNotFoundError("resource object not found")
+        _validate_resource_row(row)
+        if row["state"] != "ready":
             raise FileNotFoundError("resource object not found")
         return row
 
@@ -518,15 +621,34 @@ class PostgresObjectResourceStore:
         object_id = UUID(str(handle.object_id))
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
-            result = await c.execute(
-                "UPDATE enterprise.resource_objects "
-                "SET state='delete-pending',updated_at=now() "
+            row = await (
+                await c.execute(
+                    "SELECT * FROM enterprise.resource_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
+                    "AND resource_id=%s AND id=%s FOR UPDATE",
+                    (*self.store._owner, kind, rid, object_id),
+                )
+            ).fetchone()
+            if row is None:
+                raise FileNotFoundError("resource object not found")
+            _validate_resource_row(row)
+            if row["state"] == "deleted":
+                raise FileNotFoundError("resource object not found")
+            job = await (
+                await c.execute(
+                    "SELECT state FROM enterprise.resource_cleanup_jobs "
+                    "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                    (*self.store._owner, object_id),
+                )
+            ).fetchone()
+            if job is not None:
+                _validate_cleanup_state(job["state"])
+            await c.execute(
+                "UPDATE enterprise.resource_objects SET state='delete-pending',updated_at=now() "
                 "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
-                "AND resource_id=%s AND id=%s AND state<>'deleted'",
+                "AND resource_id=%s AND id=%s",
                 (*self.store._owner, kind, rid, object_id),
             )
-            if result.rowcount != 1:
-                raise FileNotFoundError("resource object not found")
             await c.execute(
                 "INSERT INTO enterprise.resource_cleanup_jobs"
                 "(tenant_id,owner_id,object_id,state,last_error) VALUES(%s,%s,%s,'pending','') "
@@ -562,29 +684,36 @@ class PostgresObjectResourceStore:
             await self._authorized(c)
             rows = await (
                 await c.execute(
-                    "SELECT r.id AS object_id,r.resource_kind,r.resource_id,j.state,j.attempt,"
+                    "SELECT r.id AS object_id,r.resource_kind,r.resource_id,"
+                    "r.state AS object_state,r.retention,j.state,j.attempt,"
                     "j.last_error,r.cleanup_error "
                     "FROM enterprise.resource_objects r "
                     "JOIN enterprise.resource_cleanup_jobs j "
                     "ON (j.tenant_id,j.owner_id,j.object_id)=(r.tenant_id,r.owner_id,r.id) "
                     "WHERE r.tenant_id=%s AND r.owner_id=%s "
-                    "AND r.state='delete-pending' "
+                    "AND (r.state='delete-pending' OR j.state<>'done') "
                     f"{kind_clause} "
                     "ORDER BY j.not_before,r.updated_at,r.id LIMIT %s",
                     params,
                 )
             ).fetchall()
-        return [
-            {
+        result = []
+        for row in rows:
+            _validate_resource_row(
+                {"state": row["object_state"], "retention": row["retention"]}
+            )
+            _validate_cleanup_state(row["state"])
+            if row["object_state"] != "delete-pending" or row["state"] == "done":
+                raise ResourceBusinessStateError("resource cleanup job is inconsistent")
+            result.append({
                 "object_id": str(row["object_id"]),
                 "resource_kind": row["resource_kind"],
                 "resource_id": row["resource_id"],
                 "state": row["state"],
                 "attempt": int(row["attempt"]),
                 "last_error": row["last_error"] or row["cleanup_error"] or "",
-            }
-            for row in rows
-        ]
+            })
+        return result
 
     async def cleanup_pending(
         self, *, resource_kind: str | None = None, limit: int = 100
@@ -606,6 +735,17 @@ class PostgresObjectResourceStore:
                     ).fetchone()
                     if row is None:
                         continue
+                    _validate_resource_row(row)
+                    job = await (
+                        await c.execute(
+                            "SELECT state FROM enterprise.resource_cleanup_jobs "
+                            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                            (*self.store._owner, object_id),
+                        )
+                    ).fetchone()
+                    if job is None:
+                        raise ResourceBusinessStateError("resource cleanup job is missing")
+                    _validate_cleanup_state(job["state"])
                     await c.execute(
                         "UPDATE enterprise.resource_cleanup_jobs "
                         "SET state='running',last_error='',updated_at=now() "
@@ -614,6 +754,30 @@ class PostgresObjectResourceStore:
                     )
                 await self._io(self.object_store.delete, self._blob_ref(row))
                 async with self.store.db.transaction(self.store.scope) as c:
+                    current = await (
+                        await c.execute(
+                            "SELECT state,retention FROM enterprise.resource_objects "
+                            "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                            (*self.store._owner, object_id),
+                        )
+                    ).fetchone()
+                    if current is None:
+                        raise ResourceBusinessStateError("resource disappeared during cleanup")
+                    _validate_resource_row(current)
+                    if current["state"] != "delete-pending":
+                        raise ResourceBusinessStateError("resource changed during cleanup")
+                    current_job = await (
+                        await c.execute(
+                            "SELECT state FROM enterprise.resource_cleanup_jobs "
+                            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                            (*self.store._owner, object_id),
+                        )
+                    ).fetchone()
+                    if current_job is None:
+                        raise ResourceBusinessStateError("resource cleanup job is missing")
+                    _validate_cleanup_state(current_job["state"])
+                    if current_job["state"] != "running":
+                        raise ResourceBusinessStateError("resource cleanup job changed")
                     await c.execute(
                         "UPDATE enterprise.resource_objects "
                         "SET state='deleted',cleanup_error='',deleted_at=now(),updated_at=now() "
@@ -627,9 +791,35 @@ class PostgresObjectResourceStore:
                         (*self.store._owner, object_id),
                     )
                 completed += 1
+            except ResourceBusinessStateError:
+                raise
             except Exception as exc:
                 error = getattr(exc, "code", "") or type(exc).__name__
                 async with self.store.db.transaction(self.store.scope) as c:
+                    current = await (
+                        await c.execute(
+                            "SELECT state,retention FROM enterprise.resource_objects "
+                            "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                            (*self.store._owner, object_id),
+                        )
+                    ).fetchone()
+                    if current is None:
+                        raise ResourceBusinessStateError("resource disappeared during cleanup") from exc
+                    _validate_resource_row(current)
+                    if current["state"] != "delete-pending":
+                        raise ResourceBusinessStateError("resource changed during cleanup") from exc
+                    current_job = await (
+                        await c.execute(
+                            "SELECT state FROM enterprise.resource_cleanup_jobs "
+                            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                            (*self.store._owner, object_id),
+                        )
+                    ).fetchone()
+                    if current_job is None:
+                        raise ResourceBusinessStateError("resource cleanup job is missing") from exc
+                    _validate_cleanup_state(current_job["state"])
+                    if current_job["state"] != "running":
+                        raise ResourceBusinessStateError("resource cleanup job changed") from exc
                     await c.execute(
                         "UPDATE enterprise.resource_objects "
                         "SET cleanup_error=%s,updated_at=now() "
@@ -637,13 +827,10 @@ class PostgresObjectResourceStore:
                         (error, *self.store._owner, object_id),
                     )
                     await c.execute(
-                        "INSERT INTO enterprise.resource_cleanup_jobs"
-                        "(tenant_id,owner_id,object_id,state,attempt,last_error) "
-                        "VALUES(%s,%s,%s,'failed',1,%s) "
-                        "ON CONFLICT(tenant_id,owner_id,object_id) DO UPDATE "
-                        "SET state='failed',attempt=enterprise.resource_cleanup_jobs.attempt+1,"
-                        "last_error=EXCLUDED.last_error,updated_at=now()",
-                        (*self.store._owner, object_id, error),
+                        "UPDATE enterprise.resource_cleanup_jobs "
+                        "SET state='failed',attempt=attempt+1,last_error=%s,updated_at=now() "
+                        "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                        (error, *self.store._owner, object_id),
                     )
                 errors.append({"object_id": str(object_id), "error": error})
         remaining = await self.list_cleanup(resource_kind=resource_kind, limit=1)

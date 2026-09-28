@@ -6,7 +6,12 @@ import uuid
 from deeptutor.learning.contracts import LearningStoreError, PathLeaseConflictError
 
 from .authority import ExecutionAuthority, lease_from_row
-from .base import validate_id
+from .base import (
+    validate_id,
+    validate_interaction_status,
+    validate_path_lease_row,
+    validate_path_operation_row,
+)
 
 
 class LearningBindings:
@@ -60,9 +65,11 @@ class LearningBindings:
             raise PathLeaseConflictError(lease)
         if self.authority is not None and self.authority.operation_id is not None:
             row = self._execute(
-                "SELECT status,version FROM enterprise.mastery_path_operations WHERE tenant_id=%s AND owner_id=%s AND path_id=%s AND operation_id=%s",
+                "SELECT status,version,path_ref FROM enterprise.mastery_path_operations WHERE tenant_id=%s AND owner_id=%s AND path_id=%s AND operation_id=%s",
                 (*self._owner, path, self.authority.operation_id),
             ).fetchone()
+            if row:
+                validate_path_operation_row(row)
             if (
                 not row
                 or row["status"] != "active"
@@ -195,6 +202,12 @@ class LearningBindings:
                 (*u._owner, session_id),
             ).fetchone():
                 raise LearningStoreError("active execution cannot detach learning history")
+            for interaction in u._execute(
+                "SELECT status FROM enterprise.mastery_interactions "
+                "WHERE tenant_id=%s AND owner_id=%s AND session_id=%s FOR UPDATE",
+                (*u._owner, session_id),
+            ):
+                validate_interaction_status(interaction["status"])
             paths = u._execute(
                 "SELECT path_id FROM enterprise.mastery_interactions WHERE tenant_id=%s AND owner_id=%s AND session_id=%s "
                 "UNION SELECT path_id FROM enterprise.mastery_events WHERE tenant_id=%s AND owner_id=%s AND session_id=%s "
@@ -325,6 +338,7 @@ class LearningBindings:
                 (*u._owner, operation_id),
             ).fetchone()
             if row:
+                validate_path_operation_row(row)
                 row["operation_id"] = str(row["operation_id"])
                 row["execution_id"] = str(row["execution_id"])
             return row
@@ -379,7 +393,14 @@ class LearningBindings:
                 (*u._owner, execution_id),
             ).fetchall()
             u._compat(rows)
+            for operation in u._execute(
+                "SELECT status,path_ref FROM enterprise.mastery_path_operations "
+                "WHERE tenant_id=%s AND owner_id=%s AND execution_id=%s FOR UPDATE",
+                (*u._owner, execution_id),
+            ):
+                validate_path_operation_row(operation)
             for row in rows:
+                validate_path_lease_row(row)
                 if row["kind"] == "turn":
                     turn = u._execute(
                         "SELECT status FROM enterprise.turns WHERE tenant_id=%s AND user_id=%s AND id=%s FOR UPDATE",

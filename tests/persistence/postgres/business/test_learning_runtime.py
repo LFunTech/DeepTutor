@@ -4,7 +4,9 @@ import asyncio
 import importlib
 import json
 
+import psycopg
 import pytest
+import pytest_asyncio
 
 from deeptutor.learning.models import LearningProgress
 from deeptutor.persistence.postgres.executor import ExecutorLease
@@ -96,7 +98,7 @@ async def test_explicit_learning_provider_operations_and_failure_closed(
         await executor.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def learning_runtime(
     migrated_pg, business_sync_database, business_actors, pg_session_store_factory
 ):
@@ -446,6 +448,96 @@ async def test_controlled_background_recovery_preserves_question_no_reexecution(
         await new_executor.close()
 
 
+async def test_background_recovery_rejects_invalid_lease_before_failing_turn(
+    learning_runtime, migrated_pg,
+):
+    from deeptutor.learning.runtime import LearningRuntime
+
+    runtime = learning_runtime
+    session = await runtime.session_store.create_session("invalid-recovery")
+    turn = await runtime.session_store.begin_turn(
+        session["id"], owner_id=runtime.executor.execution_id, fencing_token=5
+    )
+    teaching = await runtime.for_turn(session["id"], turn["id"])
+    await teaching.run(lambda unit: unit.acquire_path_lease("invalid", session["id"], turn["id"]))
+    original_status = (await runtime.session_store.get_turn(turn["id"]))["status"]
+    await runtime.executor.close()
+    new_executor = ExecutorLease(migrated_pg.runtime_dsn, resource=runtime.database.resource)
+    await new_executor.acquire()
+    resumed = LearningRuntime(
+        runtime.database,
+        runtime.scope,
+        executor=new_executor,
+        session_store=runtime.session_store,
+        authorize=runtime.authorize,
+    )
+    try:
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            async with connection.transaction():
+                for constraint in (
+                    "mastery_path_leases_kind_check",
+                    "mastery_path_leases_check",
+                ):
+                    await connection.execute(
+                        f"ALTER TABLE enterprise.mastery_path_leases DROP CONSTRAINT IF EXISTS {constraint}"
+                    )
+                await connection.execute(
+                    "UPDATE enterprise.mastery_path_leases SET kind='future-kind' "
+                    "WHERE tenant_id=%s AND owner_id=%s AND path_id='invalid'",
+                    (runtime.scope.tenant_id, runtime.scope.user_id),
+                )
+        with pytest.raises(ValueError, match="lease kind is unknown"):
+            await resumed.recover_once()
+        assert (await runtime.session_store.get_turn(turn["id"]))["status"] == original_status
+    finally:
+        await new_executor.close()
+
+
+async def test_background_recovery_rejects_invalid_operation_before_failing_turn(
+    learning_runtime, migrated_pg,
+):
+    from deeptutor.learning.runtime import LearningRuntime
+    from deeptutor.persistence.postgres.learning import ExecutionAuthority
+
+    runtime = learning_runtime
+    session = await runtime.session_store.create_session("invalid-operation-recovery")
+    turn = await runtime.session_store.begin_turn(
+        session["id"], owner_id=runtime.executor.execution_id, fencing_token=8
+    )
+    teaching = await runtime.for_turn(session["id"], turn["id"])
+    await teaching.run(lambda unit: unit.acquire_path_lease("turn-path", session["id"], turn["id"]))
+    manager = runtime._with_authority(ExecutionAuthority(runtime.executor))
+    await manager.run(lambda unit: unit.begin_path_operation("operation-path"))
+    original_status = (await runtime.session_store.get_turn(turn["id"]))["status"]
+    await runtime.executor.close()
+    new_executor = ExecutorLease(migrated_pg.runtime_dsn, resource=runtime.database.resource)
+    await new_executor.acquire()
+    resumed = LearningRuntime(
+        runtime.database,
+        runtime.scope,
+        executor=new_executor,
+        session_store=runtime.session_store,
+        authorize=runtime.authorize,
+    )
+    try:
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "ALTER TABLE enterprise.mastery_path_operations "
+                    "DROP CONSTRAINT IF EXISTS mastery_path_operations_status_check"
+                )
+                await connection.execute(
+                    "UPDATE enterprise.mastery_path_operations SET status='future-state' "
+                    "WHERE tenant_id=%s AND owner_id=%s AND path_id='operation-path'",
+                    (runtime.scope.tenant_id, runtime.scope.user_id),
+                )
+        with pytest.raises(ValueError, match="operation status is unknown"):
+            await resumed.recover_once()
+        assert (await runtime.session_store.get_turn(turn["id"]))["status"] == original_status
+    finally:
+        await new_executor.close()
+
+
 async def test_session_delete_cleans_owned_scratch_in_same_pg_unit(learning_runtime):
     from deeptutor.core.providers import ApplicationProviders, provider_context
     from deeptutor.services.session.deletion import delete_session_lifecycle
@@ -599,6 +691,62 @@ async def test_delete_session_detaches_completed_history_and_preserves_learning(
     events = (await runtime.event_page("p"))["events"]
     assert any(e["event_type"] == "session.history_detached" for e in events)
     assert all(e["session_id"] == e["turn_id"] == "" for e in events)
+
+
+async def test_history_detach_rejects_unknown_interaction_before_mutating_provenance(
+    learning_runtime, migrated_pg,
+):
+    from deeptutor.learning.models import MasteryInteraction, PendingQuestion
+    from deeptutor.persistence.postgres.learning import ExecutionAuthority
+
+    runtime = learning_runtime
+    await _seed_path(runtime)
+    session = await runtime.session_store.create_session("unknown-history")
+    turn = await runtime.session_store.begin_turn(
+        session["id"], owner_id=runtime.executor.execution_id, fencing_token=6
+    )
+    teaching = await runtime.for_turn(session["id"], turn["id"])
+    await teaching.run(lambda unit: unit.acquire_path_lease("p", session["id"], turn["id"]))
+
+    def create(unit):
+        with unit.transaction("p") as transaction:
+            transaction.put_interaction(
+                MasteryInteraction(
+                    interaction_id="unknown-history-interaction",
+                    path_id="p",
+                    question=PendingQuestion(question_id="q", knowledge_point_id="k"),
+                    session_id=session["id"],
+                    turn_id=turn["id"],
+                )
+            )
+
+    await teaching.run(create)
+    await teaching.run(lambda unit: unit.release_leases_for_turn(turn["id"]))
+    await runtime.session_store.finalize_turn(turn["id"], status="completed")
+    token = await runtime.session_store.claim_deletion(session["id"])
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.mastery_interactions "
+                "DROP CONSTRAINT IF EXISTS mastery_interactions_status_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.mastery_interactions SET status='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND interaction_id='unknown-history-interaction'",
+                (runtime.scope.tenant_id, runtime.scope.user_id),
+            )
+    manager = runtime._with_authority(ExecutionAuthority(runtime.executor))
+    with pytest.raises(ValueError, match="interaction status is unknown"):
+        await manager.run(
+            lambda unit: unit.detach_session_history(session["id"], deletion_token=token)
+        )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        row = await connection.execute(
+            "SELECT session_id,turn_id FROM enterprise.mastery_interactions "
+            "WHERE tenant_id=%s AND owner_id=%s AND interaction_id='unknown-history-interaction'",
+            (runtime.scope.tenant_id, runtime.scope.user_id),
+        )
+        assert await row.fetchone() == (session["id"], turn["id"])
 
 
 async def test_history_detach_rejects_active_and_other_owner(

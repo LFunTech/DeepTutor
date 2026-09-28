@@ -14,7 +14,8 @@ from jose import JWTError, jwt
 from psycopg.types.json import Jsonb
 
 from ..scope import TenantScope
-from .accounts import AccountOperations, initial_policy
+from ..tenant_state import tenant_allows_authentication, validate_tenant_business_values
+from .accounts import AccountOperations, initial_policy, valid_account_domain
 
 
 class LoginRateLimited(PermissionError):
@@ -120,6 +121,7 @@ class IdentityService(AccountOperations):
                     "SELECT * FROM enterprise.tenants WHERE id=%s FOR UPDATE", (self.tenant_id,)
                 )
             ).fetchone()
+            validate_tenant_business_values(tenant)
             if tenant["bootstrap_completed"]:
                 existing = await (
                     await c.execute(
@@ -176,7 +178,7 @@ class IdentityService(AccountOperations):
             row = await (
                 await c.execute(
                     """SELECT u.*,lc.password_hash,t.local_enabled,t.external_eligibility,
-                t.provisioning_status,t.auth_epoch FROM enterprise.users u
+                t.provisioning_status,t.recovery_state,t.auth_epoch FROM enterprise.users u
                 JOIN enterprise.tenants t ON t.id=u.tenant_id
                 JOIN enterprise.local_credentials lc ON (lc.tenant_id,lc.user_id)=(u.tenant_id,u.id)
                 WHERE u.tenant_id=%s AND u.username=%s FOR UPDATE OF u,t,lc""",
@@ -194,11 +196,10 @@ class IdentityService(AccountOperations):
                 valid_length
                 and valid
                 and row
+                and valid_account_domain(row)
                 and not row["disabled"]
                 and row["deleted_at"] is None
-                and row["local_enabled"]
-                and row["external_eligibility"] in ("not_required", "allowed")
-                and row["provisioning_status"] == "ready"
+                and tenant_allows_authentication(row)
                 and row["auth_epoch"] == self.epoch
             )
             if allowed:
@@ -289,11 +290,12 @@ class IdentityService(AccountOperations):
         claims = self._claims(token)
         row = await (
             await c.execute(
-                """SELECT u.id,u.username,u.role,u.auth_version,s.id AS session_id,s.device_credential_id
+                """SELECT u.id,u.username,u.role,u.preset,u.auth_version,s.id AS session_id,s.device_credential_id,
+            t.local_enabled,t.external_eligibility,t.provisioning_status,t.recovery_state
             FROM enterprise.auth_sessions s JOIN enterprise.users u ON (u.tenant_id,u.id)=(s.tenant_id,s.user_id)
             JOIN enterprise.tenants t ON t.id=u.tenant_id
             WHERE s.tenant_id=%s AND s.id=%s AND s.user_id=%s AND s.revoked_at IS NULL AND s.expires_at>now()
-            AND NOT u.disabled AND u.deleted_at IS NULL AND t.local_enabled AND t.external_eligibility IN ('not_required','allowed') AND t.provisioning_status='ready'
+            AND NOT u.disabled AND u.deleted_at IS NULL
             AND t.auth_epoch=%s AND s.auth_epoch=%s AND s.auth_version=u.auth_version AND u.auth_version=%s
             """
                 + (" FOR UPDATE OF u,s,t" if lock else ""),
@@ -307,7 +309,7 @@ class IdentityService(AccountOperations):
                 ),
             )
         ).fetchone()
-        if not row:
+        if not row or not valid_account_domain(row) or not tenant_allows_authentication(row):
             raise PermissionError("authentication required")
         await self._validate_device_session(c, str(row["session_id"]))
         return Identity(

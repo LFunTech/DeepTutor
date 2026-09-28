@@ -13,6 +13,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from deeptutor.persistence.postgres.notebook_upsert import validate_notebook_values
+
 from .id_mapping import (
     SourceMessage,
     TypedReferenceRewriter,
@@ -470,6 +472,12 @@ class SQLiteChatHistoryImporter:
                 ),
             )
         for row in rows["notebook_entries"]:
+            source = row.get("source") or "deep_question"
+            score_trend = row.get("score_trend") or "new"
+            material_id = row.get("material_id") or ""
+            validate_notebook_values({
+                "source": source, "score_trend": score_trend, "material_id": material_id,
+            })
             payload = {
                 **row,
                 "session_id": row["session_id"],
@@ -507,12 +515,12 @@ class SQLiteChatHistoryImporter:
                     row.get("difficulty") or "",
                     row.get("user_answer") or "",
                     Jsonb(rewritten.get("user_answer_images_json") or []),
-                    row.get("source") or "deep_question",
-                    row.get("material_id") or "",
+                    source,
+                    material_id,
                     row.get("material_title") or "",
                     row.get("section_id") or "",
                     row.get("section_title") or "",
-                    row.get("score_trend") or "new",
+                    score_trend,
                     bool(row.get("is_correct") or 0),
                     bool(row.get("resolved") or 0),
                     bool(row.get("bookmarked") or 0),

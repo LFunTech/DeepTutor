@@ -220,6 +220,26 @@ async def test_verify_report_covers_chat_notebook_source_without_unknown_skip(
     assert report.domains["notebook_entries"] == {"source": 1, "target": 1}
     assert report.domains["notebook_entry_categories"] == {"source": 1, "target": 1}
 
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.notebook_entries "
+                "DROP CONSTRAINT IF EXISTS notebook_entries_source_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.notebook_entries SET source='future-source' "
+                "WHERE tenant_id=%s AND owner_id=%s",
+                (actor.tenant_id, actor.user_id),
+            )
+    drift = await OfflineImportVerifier(migrated_pg.admin_dsn).verify_batch(
+        import_report["batch_id"]
+    )
+    assert drift.ok is False
+    assert any(
+        issue["code"] == "source_verify_failed" and "source" in issue["detail"]["error"]
+        for issue in drift.issues
+    )
+
 
 async def test_verify_report_covers_learning_reading_sources_without_unknown_skip(
     tmp_path,
@@ -270,6 +290,84 @@ async def test_verify_report_covers_learning_reading_sources_without_unknown_ski
     assert report.ok is True
     assert report.domains["mastery_paths"] == {"source": 1, "target": 1}
     assert report.domains["reading_links"] == {"source": 1, "target": 1}
+
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.reading_materials "
+                "DROP CONSTRAINT IF EXISTS reading_materials_status_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.reading_materials SET status='future-state',progress=0 "
+                "WHERE tenant_id=%s AND owner_id=%s",
+                (actor.tenant_id, actor.user_id),
+            )
+    drift = await OfflineImportVerifier(migrated_pg.admin_dsn).verify_batch(
+        import_report["batch_id"]
+    )
+    assert drift.ok is False
+    assert any(
+        issue["code"] == "source_verify_failed" and "state" in issue["detail"]["error"]
+        for issue in drift.issues
+    )
+
+
+@pytest.mark.parametrize(
+    ("table", "constraint", "corruption", "message"),
+    [
+        ("mastery_interactions", "mastery_interactions_status_check", "status='future-state'", "interaction status is unknown"),
+        ("mastery_topic_meta", "mastery_topic_meta_status_check", "status='future-state'", "topic status is unknown"),
+        ("mastery_topic_sources", "mastery_topic_sources_kind_check", "kind='future-kind'", "source kind is unknown"),
+        ("mastery_topic_sources", "mastery_topic_sources_check", "kind='chat',external_id=''", "chat source id is required"),
+    ],
+)
+async def test_verify_report_rejects_unknown_mastery_target_without_database_checks(
+    tmp_path,
+    migrated_pg,
+    business_actors,
+    pg_session_store_factory,
+    table,
+    constraint,
+    corruption,
+    message,
+) -> None:
+    from deeptutor.persistence.postgres.offline_import.learning_reading_sqlite import (
+        SQLiteLearningReadingImporter,
+    )
+    from deeptutor.persistence.postgres.offline_import.verify_report import OfflineImportVerifier
+
+    actor = business_actors.tenants[0].owners[0]
+    await _seed_existing_mapping(migrated_pg, actor, pg_session_store_factory)
+    manifest = _learning_snapshot(
+        _make_mastery_v2_source(tmp_path / "mastery"),
+        tmp_path / "artifact",
+        source_id="legacy-mastery",
+        source_version="mastery_sqlite/v2",
+        tenant_id=actor.tenant_id,
+        source_owner="legacy-user",
+        target_owner=actor.user_id,
+    )
+    report = await SQLiteLearningReadingImporter(migrated_pg.admin_dsn).import_manifest(
+        manifest, operator="unit-test"
+    )
+    verifier = OfflineImportVerifier(migrated_pg.admin_dsn)
+    assert (await verifier.verify_batch(report["batch_id"])).ok is True
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.{table} DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.{table} SET {corruption} "
+                "WHERE tenant_id=%s AND owner_id=%s",
+                (actor.tenant_id, actor.user_id),
+            )
+    drift = await verifier.verify_batch(report["batch_id"])
+    assert drift.ok is False
+    assert any(
+        issue["code"] == "source_verify_failed" and message in issue["detail"]["error"]
+        for issue in drift.issues
+    )
 
 
 async def test_verify_report_covers_runtime_projection_sources_without_unknown_skip(
@@ -332,3 +430,24 @@ async def test_verify_report_covers_runtime_projection_sources_without_unknown_s
     assert report.domains["cron_uncertain_executions"] == {"source": 1, "target": 1}
     assert report.domains["partner_status"] == {"source": 2, "target": 2}
     assert report.domains["marginnote_tombstones"] == {"source": 1, "target": 1}
+
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.marginnote_objects "
+                "DROP CONSTRAINT IF EXISTS marginnote_objects_object_type_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.marginnote_objects SET object_type='future-type' "
+                "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+                "AND object_id='shared-note'",
+                (actor.tenant_id, actor.user_id),
+            )
+    drift = await OfflineImportVerifier(migrated_pg.admin_dsn).verify_batch(
+        import_report["batch_id"]
+    )
+    assert drift.ok is False
+    assert any(
+        issue["code"] == "source_verify_failed" and "MarginNote" in issue["detail"]["error"]
+        for issue in drift.issues
+    )

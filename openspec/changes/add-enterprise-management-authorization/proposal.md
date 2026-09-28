@@ -4,7 +4,7 @@
 
 ## Why
 
-目前 OMS 的 `ops.*` 与 TMS 的 `tenant.*` 权限权威不一致：OMS 已改为 DeepTutor 本地授权，TMS 仍假设 EduPlus2 管理员事件和权限接口会提供完整授权。test-cn 已验证的是签名 Webhook 的 **mock** 投递，不是两端管理登录、学校绑定、在线账号状态或撤权闭环。若继续分别补权限，会出现跨应用继承、首位学校管理员无人开通、菜单与 API 不一致以及撤权竞态。
+目前 OMS 的 `ops.*` 与 TMS 的 `tenant.*` 权限权威不一致：OMS 已改为 DeepTutor 本地授权，TMS 仍假设 EduPlus2 管理员事件和权限接口会提供完整授权。test-cn 已有签名 Webhook 的 mock 与真实 created/terminated 投递及学校 PG 绑定，**仍不是**两端管理登录、本人首管激活、在线账号状态或撤权闭环。若继续分别补权限，会出现跨应用继承、首位学校管理员无人开通、菜单与 API 不一致以及撤权竞态。
 
 ## What Changes
 

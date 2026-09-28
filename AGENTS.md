@@ -64,6 +64,33 @@ permitted; missing external capabilities must be recorded as dependencies, and
 affected DeepTutor operations must remain fail closed. Approval of a DeepTutor
 proposal does not authorize work in another team's repository or systems.
 
+## Database logic boundary
+
+All supported local, default, and enterprise business runtimes are
+PostgreSQL-only. Do not start, select, or reintroduce a SQLite runtime mode,
+fallback, business writer, or hidden SQLite cache in Web/API/WS, CLI, SDK,
+tools, background jobs, or supported channels. Missing PostgreSQL configuration
+or readiness must fail closed before business side effects. Historical SQLite
+files may be read only by isolated, controlled offline-import tooling and
+old-format test fixtures; these exceptions must not be callable as a business
+runtime. Preserve supported features by moving their state to PostgreSQL rather
+than silently disabling them to satisfy this rule.
+
+Do not implement business rules, authorization, state transitions, version
+guards, or cross-table validation with stored procedures, user-defined database
+functions, or application-defined triggers. Do not use PostgreSQL ENUM types or
+enum-like `CHECK ... IN (...)` / `CHECK ... = ANY(ARRAY[...])` constraints, or
+conditional `CHECK` constraints that encode enumerated business states, to
+validate business values. Put all such validation and transitions in DeepTutor
+application code, using explicit transactions and tests. Versioned SQL
+migrations may define tables, indexes, keys, non-enumeration physical
+constraints, and RLS for persistence/isolation, but no procedural business
+logic or database-owned value catalog. Do not rewrite a migration already
+applied in an environment; retire every legacy routine and enum-like check
+through forward migrations only after its application-layer replacement and
+compatibility tests are ready. No database routine or enum-like check may be
+left behind at the end of this migration effort.
+
 ## Architecture
 
 ```
@@ -80,7 +107,6 @@ Entry Points:  CLI (Typer)  |  WebSocket /ws  |  Python SDK
               │  (Level 1)   │  │   (Level 2)        │
               └──────────────┘  └────────────────────┘
 ```
-
 
 ## Mandatory Upstream Mergeability Constraint
 

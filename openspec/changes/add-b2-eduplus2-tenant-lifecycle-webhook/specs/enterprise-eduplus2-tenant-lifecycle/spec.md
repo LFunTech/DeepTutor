@@ -46,6 +46,8 @@ EduPlus2 的已验签订阅 Webhook 是智能体基座学校接入与订阅生�
 
 TMS 的应用 ID SHALL 从已验签 JWT `azp` 对应的本校 active client 登记和同一学校—应用 Webhook 投影确定，不能从静态全局配置或请求参数取得。一个应用的停用 SHALL NOT 覆盖另一应用的有效 TMS 管理资格；仍须对目标应用独立检查其投影、人工冻结及本地权限。
 
+本 change SHALL 验证真实 Webhook 候选的持久交接，以及以隔离合成身份执行的本人激活接口正负例。正式 TMS 未交付时，真实用户的 TMS 登录、OIDC `sub` 匹配和学校管理员最终激活由管理授权/TMS change 验收；这些未验收前不得宣称真实人员已有权限，但也不得以缺正式 TMS UI 阻断本 Webhook 数据库接收链路的完成。
+
 #### Scenario: system 或已完成引导
 - **WHEN** created actor 为 system/null，或学校已完成首位管理员引导后又收到 created
 - **THEN** 学校生命周期可处理，但不得新增可用管理员授权

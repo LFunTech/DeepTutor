@@ -3,10 +3,11 @@
 from itertools import islice
 
 from deeptutor.reading.catalog_contracts import ReadingPageRequired
+from deeptutor.reading.catalog_models import IngestionStatus, SourceKind
 from deeptutor.reading.models import ReadingError
 
 from .base import operation, validate_id
-from .materials import ascii_key, material
+from .materials import ascii_key, material, validate_material_business_state
 from .sessions import session
 from .workspaces import workspace
 
@@ -128,22 +129,39 @@ class Queries:
                 raise ReadingError(f"input exceeds {MAX_WORKSPACE_MATERIALS} IDs")
             # 旧 counts 的空串过滤、字符串化与 None=全部合同保留。
             ids = list(dict.fromkeys(str(x) for x in raw if str(x)))
-        row = self._execute(
-            """SELECT count(*) AS all,
-          count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM enterprise.reading_workspace_materials t WHERE t.tenant_id=m.tenant_id AND t.owner_id=m.owner_id AND t.material_id=m.material_id)) AS unassigned,
-          count(*) FILTER(WHERE status IN ('queued','processing')) AS processing,
-          count(*) FILTER(WHERE status='failed') AS failed,
-          count(*) FILTER(WHERE render_mode='video' OR source_kind='video') AS video,
-          count(*) FILTER(WHERE render_mode='audio' OR source_kind='audio') AS audio,
-          count(*) FILTER(WHERE render_mode NOT IN ('video','audio') AND source_kind='web') AS web,
-          count(*) FILTER(WHERE render_mode NOT IN ('video','audio') AND source_kind='file') AS document
-          FROM enterprise.reading_materials m WHERE tenant_id=%s AND owner_id=%s AND (%s::text[] IS NULL OR material_id=ANY(%s::text[]))""",
+        cursor = self._execute(
+            """SELECT m.source_kind,m.status,m.progress,m.render_mode,
+              NOT EXISTS(SELECT 1 FROM enterprise.reading_workspace_materials t
+                WHERE t.tenant_id=m.tenant_id AND t.owner_id=m.owner_id
+                  AND t.material_id=m.material_id) AS unassigned
+              FROM enterprise.reading_materials m
+             WHERE m.tenant_id=%s AND m.owner_id=%s
+               AND (%s::text[] IS NULL OR m.material_id=ANY(%s::text[]))""",
             (*self._owner, ids, ids),
-        ).fetchone()
-        return {
-            **{k: row[k] for k in ("all", "unassigned", "processing", "failed")},
-            "by_kind": {k: row[k] for k in ("document", "web", "video", "audio")},
-        }
+        )
+        counts = {key: 0 for key in ("all", "unassigned", "processing", "failed")}
+        by_kind = {key: 0 for key in ("document", "web", "video", "audio")}
+        for row in cursor:
+            try:
+                source, status = validate_material_business_state(
+                    row["source_kind"], row["status"], row["progress"]
+                )
+            except ValueError as exc:
+                raise ReadingError(str(exc)) from exc
+            counts["all"] += 1
+            counts["unassigned"] += bool(row["unassigned"])
+            counts["processing"] += status in (IngestionStatus.QUEUED, IngestionStatus.PROCESSING)
+            counts["failed"] += status is IngestionStatus.FAILED
+            mode = row["render_mode"]
+            if mode == "video" or source is SourceKind.VIDEO:
+                by_kind["video"] += 1
+            if mode == "audio" or source is SourceKind.AUDIO:
+                by_kind["audio"] += 1
+            if mode not in ("video", "audio") and source is SourceKind.WEB:
+                by_kind["web"] += 1
+            if mode not in ("video", "audio") and source is SourceKind.FILE:
+                by_kind["document"] += 1
+        return {**counts, "by_kind": by_kind}
 
     @operation()
     def list_sessions(self, workspace_id):

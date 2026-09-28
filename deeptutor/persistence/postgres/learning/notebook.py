@@ -7,6 +7,7 @@ from deeptutor.persistence.postgres.notebook_upsert import (
     mastery_reference_query,
     prepare_upsert,
     require_mastery_reference,
+    validate_notebook_values,
 )
 
 
@@ -42,6 +43,19 @@ class LearningNotebook:
                 prepared = prepare_upsert(u._owner, session_id, item, now)
                 if prepared is None:
                     continue
+                existing = u._execute(
+                    "SELECT source,score_trend,material_id "
+                    "FROM enterprise.notebook_entries "
+                    "WHERE tenant_id=%s AND owner_id=%s AND session_id=%s "
+                    "AND turn_id=%s AND question_id=%s FOR UPDATE",
+                    (
+                        *u._owner, session_id,
+                        str(item.get("turn_id") or "").strip(),
+                        str(item.get("question_id") or "").strip(),
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    validate_notebook_values(existing)
                 require_mastery_reference(
                     u._execute(*mastery_reference_query(u._owner, session_id, item)).fetchone()
                 )

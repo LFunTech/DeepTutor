@@ -216,3 +216,111 @@ def test_pg_marginnote_requires_existing_device_and_preserves_device_dimension(
     )
     with pytest.raises(ValueError, match="finite non-negative"):
         invalid_clock_store.touch_device(first.device_id)
+
+
+def test_pg_marginnote_unknown_object_type_rejects_batch_and_stored_row(
+    migrated_pg, business_sync_database, business_actors,
+) -> None:
+    owner = business_actors.tenants[0].owners[0]
+    store = PostgresMarginNoteStore(business_sync_database, owner.scope, kb_id="biology")
+    device, _ = store.pair_device()
+    valid = MarginNoteObject(object_id="valid", object_type=NOTE, device_id=device.device_id)
+    unknown = MarginNoteObject(
+        object_id="unknown", object_type="future-type", device_id=device.device_id
+    )
+    with pytest.raises(ValueError, match="object type"):
+        store.ingest(SyncBatch(device_id=device.device_id, objects=[valid, unknown]))
+    assert store.get_cursor(device.device_id) == ""
+    assert store.get("valid", device_id=device.device_id) is None
+
+    store.ingest(SyncBatch(device_id=device.device_id, objects=[valid]))
+    with psycopg.connect(migrated_pg.admin_dsn) as c:
+        c.execute(
+            "ALTER TABLE enterprise.marginnote_objects "
+            "DROP CONSTRAINT IF EXISTS marginnote_objects_object_type_check"
+        )
+        c.execute(
+            "UPDATE enterprise.marginnote_objects SET object_type='future-type' "
+            "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+            "AND device_id=%s AND object_id='valid'",
+            (owner.tenant_id, owner.user_id, device.device_id),
+        )
+    with pytest.raises(ValueError, match="object type"):
+        store.get("valid", device_id=device.device_id)
+    with pytest.raises(ValueError, match="object type"):
+        store.ingest(
+            SyncBatch(
+                device_id=device.device_id,
+                cursor=store.get_cursor(device.device_id),
+                objects=[valid],
+            )
+        )
+    cursor_before = store.get_cursor(device.device_id)
+    with pytest.raises(ValueError, match="object type"):
+        store.ingest(
+            SyncBatch(
+                device_id=device.device_id,
+                cursor=cursor_before,
+                deleted_ids=["valid"],
+            )
+        )
+    assert store.get_cursor(device.device_id) == cursor_before
+    with psycopg.connect(migrated_pg.admin_dsn) as connection:
+        object_row = connection.execute(
+            "SELECT object_type FROM enterprise.marginnote_objects "
+            "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+            "AND device_id=%s AND object_id='valid'",
+            (owner.tenant_id, owner.user_id, device.device_id),
+        ).fetchone()
+        tombstone = connection.execute(
+            "SELECT 1 FROM enterprise.marginnote_tombstones "
+            "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+            "AND device_id=%s AND object_id='valid'",
+            (owner.tenant_id, owner.user_id, device.device_id),
+        ).fetchone()
+    assert object_row == ("future-type",)
+    assert tombstone is None
+
+
+@pytest.mark.parametrize("read_method", ["count", "list_documents", "collect_tags"])
+def test_pg_marginnote_aggregates_reject_unknown_object_type(
+    migrated_pg, business_sync_database, business_actors, read_method,
+) -> None:
+    owner = business_actors.tenants[0].owners[0]
+    store = PostgresMarginNoteStore(business_sync_database, owner.scope, kb_id="biology")
+    device, _ = store.pair_device()
+    store.ingest(
+        SyncBatch(
+            device_id=device.device_id,
+            objects=[
+                MarginNoteObject(
+                    object_id="aggregated", object_type=NOTE, device_id=device.device_id,
+                    document_id="doc-1", document_title="Synthetic", tags=["tag-1"],
+                )
+            ],
+        )
+    )
+    with psycopg.connect(migrated_pg.admin_dsn) as connection:
+        connection.execute(
+            "ALTER TABLE enterprise.marginnote_objects "
+            "DROP CONSTRAINT IF EXISTS marginnote_objects_object_type_check"
+        )
+        connection.execute(
+            "UPDATE enterprise.marginnote_objects SET object_type='future-type' "
+            "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+            "AND device_id=%s AND object_id='aggregated'",
+            (owner.tenant_id, owner.user_id, device.device_id),
+        )
+    with pytest.raises(ValueError, match="object type"):
+        getattr(store, read_method)(device_id=device.device_id)
+
+
+@pytest.mark.parametrize("read_method", ["search", "list_objects"])
+def test_pg_marginnote_rejects_unknown_object_type_filter(
+    business_sync_database, business_actors, read_method,
+) -> None:
+    owner = business_actors.tenants[0].owners[0]
+    store = PostgresMarginNoteStore(business_sync_database, owner.scope, kb_id="biology")
+    arguments = {"query": "synthetic"} if read_method == "search" else {}
+    with pytest.raises(ValueError, match="object type"):
+        getattr(store, read_method)(object_type="future-type", **arguments)

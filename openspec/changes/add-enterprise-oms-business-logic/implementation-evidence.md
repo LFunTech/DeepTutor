@@ -127,9 +127,15 @@ OMS 可读平台级 endpoint/Secret 引用是否就绪、workspace/index binding
 
 供给登记证明现有 `Database.transaction()` 只接受 `TenantScope`，不能把平台全局供给事务伪装成目标租户用户；因此新增最窄的 upstream-neutral `GlobalScope` 数据库范围，沿用同一连接池、受限 PG role、超时、事务和取消保障，但将 `app.tenant_id` 置空，使所有 tenant RLS 表不可读。它**不是身份或权限证明**，只能在未来平台动作鉴权后由企业扩展调用；核心只改 `scope.py` 与 `connection.py` 的范围类型，不改 orchestrator/路由/会话。`test_global_scope_cannot_read_tenant_rls_and_does_not_leak_on_pool_reuse` 红灯为缺 `GlobalScope`，绿灯与完整 core PG connection 测试 **59 passed**；企业 suite **332 passed、3 skipped**。受影响入口是使用同一 `Database` 的 CLI/HTTP/WS/SDK/后台 PG 调用，现有 `TenantScope` 分支未变；仍需本地/企业各入口执行 smoke、当前 upstream merge 审阅和完整平台授权负例才能勾选 3.2。先前 `git merge-base HEAD upstream/main` 与 `git rev-parse upstream/main` 同为 `897fce52f24bf22e6e50d8a3e4df532632a26322`（本地已获取引用的兼容基线），不能以该静态祖先检查代替最终 upstream 兼容验收。
 
-## 6.1 平台权限与全服务配置依赖提案重订（旧版历史完成；新版待审阅）
+## 6.1 平台权限与全服务配置依赖提案重订（当前修订版复核完成）
 
-`add-b2-oms-platform-read-governance` 曾按 EduPlus2 同时管理平台身份与 OMS 权限的旧目标获批，`add-enterprise-all-service-provider-settings` 的 Provider/连接配置目标亦曾获批；2026-09-26 strict validation 是**旧版文档**证据。2026-09-27 用户确认 DeepTutor 自主管理仅限本产品 OMS 的 `ops.*` 动作、目标学校授权和撤权，EduPlus2 仅提供已交付身份/学校接口且本代理不得修改其仓库。两份直接依赖提案已按新边界重订，**尚待分别重新审阅批准**，故本 change 6.1 由已勾改为未勾。全服务 Secret ref、PG 不可变配置版本、逐执行者确认、失败保留旧 active 及本地 Web 兼容目标不变；实际 OMS OIDC/账号在线状态/学校接口和 DeepTutor 应用权限迁移仍待验收，跨学校写 router 继续不装配。
+`add-b2-oms-platform-read-governance` 曾按 EduPlus2 同时管理平台身份与 OMS 权限的旧目标获批，`add-enterprise-all-service-provider-settings` 的 Provider/连接配置目标亦曾获批；2026-09-26 strict validation 是**旧版文档**证据。2026-09-27 用户确认 DeepTutor Enterprise 程序自主管理仅限本产品 OMS 的 `ops.*` 动作、目标学校授权和撤权，PG 仅存事实，EduPlus2 仅提供既存身份/学校接口，本代理不得修改其仓库。用户随后分别批准 `add-enterprise-management-authorization`、`add-b2-oms-platform-read-governance`、`add-enterprise-all-service-provider-settings` 当前修订版。复核三份 proposal/design 的授权来源、`platform`/`school` 范围、Secret/导出边界、全服务设置、逐实例确认及核心本地设置兼容，并清除直接依赖提案顶部过期的“待重新批准”标记和一处旧双人首管文字；三份 change 均执行 `openspec validate <change-id> --strict` 且返回 valid。此处 6.1 只标记依赖方案重订、批准和文档一致性，不宣称身份接口、应用权限、配置服务或 OMS 写 API 已交付。实际 OMS OIDC/账号在线状态/学校接口和 DeepTutor 应用权限迁移仍待验收，跨学校写 router 继续不装配。
+
+本轮另以 `management/0004_oms_skill_actions.sql` 在本仓库新增五个 `ops.skills.*` 动作及三个角色的 v2 候选模板，**不自动给已有主体或 assignment 升权**；`MigrationRunner.verify()` 复核目录状态/范围与模板，校验失败关闭。隔离临时 PG 定向迁移测试为 **24 passed**，含新动作/模板、重复 apply、默认零权、目录退役漂移，以及受 FORCE RLS 限制的数据库 owner 迁移。此迁移只完成 Skill 权限事实目录的一部分，不代表 3.2 的统一 PEP、6.5 的 Skill 持久化/审核/运行时过滤或任何正式 API 已完成。
+
+Skill ZIP 纯校验器现从唯一 `SKILL.md` 额外解析 `tags`、布尔 `always` 与 `requires.bins/env/sandbox`，而不把字符串等错误类型当作真值或将错误依赖忽略。新行为测试先见 8 个失败，再实施严格解析；定向 `test_oms_skill_package.py` **26 passed**。包仍未持久保存、服务端审查或接入企业运行时，6.5 继续未勾选。
+
+本轮所有代码改动后的企业测试全量重跑为 **515 passed、3 skipped**（隔离合成 PG）；`ruff check`/`ruff format --check` 覆盖受影响 Python 文件，`openspec validate --all --strict` 为 **29 passed、0 failed**，`git diff --check` 通过。最终企业 wheel 构建并核对包含 `management/0004_oms_skill_actions.sql` 与更新后的 Skill 包校验模块。未对真实学校/供应商执行调用，未部署、提交或推送。
 
 ## 7.1 统一总账契约与旧财务目标退役（门禁完成）
 
@@ -173,7 +179,7 @@ OMS 可读平台级 endpoint/Secret 引用是否就绪、workspace/index binding
 - 仓库根目录 `.venv/bin/python -m pytest -q --tb=short` **未进入执行阶段**：收集时 `tests/multi_user/conftest.py`、`tests/services/session/conftest.py` 的非顶层 `pytest_plugins` 与当前 pytest 不兼容，且可选伙伴依赖 `slack_sdk`、`telegram` 缺失，计 4 个 collection error。此问题不影响上述独立企业与 core PG 定向结果，但根测试套件不能宣称通过。
 - 进一步尝试 `.venv/bin/python -m pytest -q tests/persistence/postgres --tb=short`，发现未改动的 `business/test_externalized_turn_attachments.py` 两个断言失败（ObjectStore 错误预期与 `FakeWebSocket.headers` 缺失），`business/test_learning_runtime.py` 的 async fixture 在当前 pytest/pytest-asyncio 配置下发生 19 个 setup error；为避免同源错误继续刷屏，中断时为 **2 failed、45 passed、2 skipped、19 errors**。这些不属于本轮 `GlobalScope` 修改路径，不能把更宽 core PG 套件报告为通过，后续须单独修复测试环境/原有失败。
 - 受保护启动/管理入口定向 31 项及本地设置/CLI/SDK 定向 4 项通过；`ruff check` 覆盖本轮新测试，`ruff format --check` 覆盖两份新测试，`bash -n deploy/docker-runtime/start-backend.sh` 通过。受保护镜像/脚本/部署模板改变只做静态和合成 shell 验证，未实际构建/发布镜像。
-- 2026-09-27 权威修订后 `openspec instructions apply --change add-enterprise-oms-business-logic --json` 为 **7/23，尚有 16 项未完成**；旧版 8/23 是 6.1 重新审阅前的历史快照。7.2 仅标内部总账事务门禁，不能越过 4.2、7.4、7.7 开放平台采购或服务新调用。EduPlus2 发送端改动已撤销；正式跨学校写 API 继续未开放；无真实 tenant 数据迁移、生产发布或归档。此前 test-cn Webhook mock 联调不等于 G2/G3 或 OMS 生产放行。
+- 2026-09-27 权威修订后、6.1 重审前的 `openspec instructions apply --change add-enterprise-oms-business-logic --json` 历史快照为 **7/23，尚有 16 项未完成**；6.1 当前复核结果见下文，不能用历史数字覆盖当前进度。7.2 仅标内部总账事务门禁，不能越过 4.2、7.4、7.7 开放平台采购或服务新调用。EduPlus2 发送端改动已撤销；正式跨学校写 API 继续未开放；无真实 tenant 数据迁移、生产发布或归档。此前 test-cn Webhook mock 联调不等于 G2/G3 或 OMS 生产放行。
 
 ## 发送端前置联调状态（2026-09-27，更正）
 
@@ -186,3 +192,18 @@ OMS 可读平台级 endpoint/Secret 引用是否就绪、workspace/index binding
 ## 2026-09-27 已撤回发送端授权客户端清理
 
 `oms/authorization.py::OmsPlatformAuthorizationClient` 仅服务于已撤回的 EduPlus2 专有在线权限端点和 `oms:*` 动作，与已批准的 DeepTutor PG `ops.*` 权威冲突。删除该未装配模块及旧合成测试，新增入口负例固定不可导入；先红后绿，OMS 入口/OIDC 身份定向 **13 passed**。`oms/identity.py` 的 OIDC 验签能力仍只验证身份，不产生任何本产品权限；正式写 API 继续关闭，4.2/7.7 不据此勾选。
+
+## 2026-09-28 正式 OMS 身份与全局模型草稿切片（任务未整项完成）
+
+- 企业 HTTP 装配新增精确的 `/api/v1/oms/me`、`GET /models`、`GET|POST /models/draft`；OMS Bearer 不再被租户 `dt_token` 中间件误当成个人会话，缺 Bearer、错误令牌、停用平台账号、无本产品动作授权分别失败关闭。`PlatformOidcJwtVerifier` 只给出受信 issuer/sub/client 身份；`trusted_oms_identity_from_token` 还要求显式装配的**在线账号状态检查器**并查本仓库主体 policy version。所有 OMS 动作由 `require_management_permission` 判定，写草稿时与 CAS 和追加审计在同一 PG 事务内再次核验；安全管理员有 `ops.oms.access` 但无 `ops.providers.read/manage` 时仍为 403。默认不装配外部 verifier/账号状态检查器，目标环境未核实 `eduplus-platform-admin` 的真实换票/在线接口前受保护入口为 503，**不能算正式登录验收**。
+- `oms/0013_global_model_catalog.sql` 仅建全局模型草稿/旧 active 字段，不从租户或部署配置回填，不在 migration 中自动赋权。`POST /models/draft` 只接收符合 `ModelDeployment` 和 `env:` Secret 引用的模型，按 `expected_version` CAS，重复旧版本返回 409；响应/只读草稿 DTO 和审计不回显 Secret 引用或 endpoint。迁移可重复 apply/verify、状态约束 drift 检查已覆盖。运行时修正了现有 `load_runtime_model_deployments` 在 `status=saved` 时错误读取 `desired` 的旁路：现在未发布草稿不参与执行，已有 `active` 保持不变；若无 active，继续使用部署基线。旧测试维护 helper 仍属内部代码，非 OMS 发布入口。
+- 先红后绿定向身份、权限、草稿、迁移和运行时负例；完整企业套件本轮 **521 passed、3 skipped**，`ruff check` 和受影响文件格式检查通过。全部只使用临时 PG 合成数据。**此切片尚无 OIDC 授权码/服务端 OMS 会话、真实在线账号适配、受控首管理员、配置测试/目标执行者确认/发布/回退、Skill 存储与执行过滤、独立正式前端、服务准入/用量和 test-cn 真实联调。**所以 4.2、6.2–6.5、7.4–7.7 均不勾选，OMS 仍为 **8/23**；草稿不可作为首个 Agent 的 active 模型。
+- 本轮企业 wheel 无隔离构建通过，包内确认包含 `oms/model_drafts.py`、`oms/identity.py` 与 `oms/migrations/0013_global_model_catalog.sql`；两份相关 OpenSpec change strict validation 和 `git diff --check` 通过。根仓库 `.venv/bin/pytest -q --tb=short` 仅在收集阶段中止：两处非顶层 `pytest_plugins` 与当前 pytest 不兼容，另缺可选 `slack_sdk`、`telegram`，共 4 个 collection error；不能宣称根套件通过。
+
+## 2026-09-28 4.1 生命周期与 OMS 权威边界核对
+
+`add-b2-eduplus2-tenant-lifecycle-webhook` 的已验签 Webhook-only 修订版已把订阅事件持久化于 `eduplus2.lifecycle_inbox`，按学校/应用 generation 投影至 `eduplus2.webhook_school_state` 与 `enterprise.tenants.external_eligibility`；同步异常、冻结、久未投递只作为诊断/保守门禁，不凭 OMS 额度或后台按钮改写外部订阅。`local_enabled`/资源 ready 与外部资格独立。当前正式 OMS 路由只含主体、模型草稿与 Skill 草稿，无订阅开停 API；OMS 供给、grant、attempt 服务不写 `external_eligibility` 或发送 `tenant.suspended`。额度不足的合成负例在 `OmsAttemptLedger.reserve()` 返回 `QuotaUnavailable` 后核对学校资格、本地开关、认证 epoch 均不变；OMS `/me` 与生命周期投影/学校管理路径均不读取 quota ledger。`test_lifecycle_reconcile.py` 全文件与额度边界负例 **40 passed**，仅临时 PG/合成事件；已部署 test-cn 的真实 Webhook 验收仍以 lifecycle change 自身证据为准。此项完成的是跨 change 边界核对，不放行 OMS 跨学校写入，也不表示漏送事件可被自动纠正。
+
+## 2026-09-28 Skill 不可变草稿的独立切片（6.5 仍未完成）
+
+`oms/0014_skill_packages.sql` 新建分 `global`/`tenant` owner 的版本、发布指针和学校授权表，全部无默认 publication/grant；当前应用层只有追加新修订的入口，尚无更新/删除入口。`upload_global_skill()` 仅接收经服务端 `SKILL.md`/ZIP 验证的完整包，以不可变对象键存 ObjectStore、版本 CAS/本产品 `ops.skills.manage` 事务复核及脱敏审计保存待复核草稿。正式 `POST /api/v1/oms/skills/draft` 先鉴权再解析 multipart，拒绝无权者、大包、非法 ZIP 和旧版本；响应不含对象键或内容。对象上传后 PG 再次校验失败可能留下不可访问孤儿对象，后续需受控 ObjectStore 对账；草稿未审查、发布、授予或进入任何运行时 Skill 解析。按新的仓库规则，撤回了本轮新增的数据库函数/触发器及 `0015_skill_owner_guards.sql`；owner/发布/授权的一致性必须在后续应用层事务中校验，不能凭 DB 函数放行。此前带函数版本的测试数字是历史快照，不代表当前验证结果。这不是 6.5 的完成证据，更不能让首个 Agent 使用该草稿。

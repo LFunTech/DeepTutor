@@ -91,6 +91,7 @@ async def test_platform_token_is_verified_without_tenant_exchange_claims(oidc_fi
         identity = await verifier.verify(value)
 
     assert identity.subject == "platform-user-123"
+    assert identity.issuer == ISSUER
     assert identity.client_id == CLIENT_ID
     assert identity.token_hash and value not in identity.token_hash
     assert not hasattr(identity, "roles")

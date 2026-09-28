@@ -16,6 +16,12 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from deeptutor.learning.models import LearningProgress
+from deeptutor.persistence.postgres.learning.base import (
+    validate_interaction_status,
+    validate_topic_source_row,
+    validate_topic_status,
+)
+from deeptutor.persistence.postgres.reading.materials import validate_material_business_state
 
 from .id_mapping import advance_identity_sequence, stable_text_id
 from .planner import source_check_manifest
@@ -551,8 +557,15 @@ class SQLiteLearningReadingImporter:
                     source_key=old_id,
                     prefix="mat",
                 )[:128]
+            source_kind = row["source_kind"]
+            status = row["status"] if row.get("status") is not None else "queued"
+            progress = row["progress"] if row.get("progress") is not None else 0
+            validate_material_business_state(source_kind, status, progress)
             existing = await self._reading_material(connection, tenant_id, owner_id, target_id)
             if existing is not None:
+                validate_material_business_state(
+                    existing["source_kind"], existing["status"], existing["progress"]
+                )
                 if not self._same_material(existing, row):
                     raise ValueError(f"conflicting reading material: {old_id!r}")
             else:
@@ -572,14 +585,14 @@ class SQLiteLearningReadingImporter:
                         row["content_id"],
                         row["filename"],
                         row["title"],
-                        row["source_kind"],
+                        source_kind,
                         row.get("source_url") or "",
                         row.get("mime") or "",
                         row.get("render_mode") or "text",
                         row.get("cover_url") or "",
                         float(row.get("duration_seconds") or 0),
-                        row.get("status") or "queued",
-                        int(row.get("progress") or 0),
+                        status,
+                        progress,
                         row.get("error_code") or "",
                         row.get("error_detail") or "",
                         float(row.get("last_opened_at") or 0),
@@ -871,6 +884,7 @@ class SQLiteLearningReadingImporter:
         interaction_map: dict[str, str] = {}
         inserted_interactions = 0
         for row in rows["mastery_interactions"]:
+            validate_interaction_status(row["status"])
             old_id = str(row["interaction_id"])
             target_id = await self._allocate_text_target(
                 connection,
@@ -963,6 +977,7 @@ class SQLiteLearningReadingImporter:
                     ),
                 )
             else:
+                validate_topic_status(meta.get("status"))
                 await connection.execute(
                     """
                     INSERT INTO enterprise.mastery_topic_meta(
@@ -978,7 +993,7 @@ class SQLiteLearningReadingImporter:
                         meta.get("description") or "",
                         meta.get("emoji") or "🧭",
                         int(meta.get("map_seed") or _default_map_seed(target_path)),
-                        meta.get("status") or "active",
+                        meta["status"],
                         float(meta["created_at"]),
                         float(meta["updated_at"]),
                     ),
@@ -986,6 +1001,7 @@ class SQLiteLearningReadingImporter:
 
         for row in rows["mastery_topic_sources"]:
             kind = str(row["kind"])
+            validate_topic_source_row({"kind": kind, "external_id": row.get("external_id")})
             external_id = await self._topic_external_id(row.get("external_id"), kind, resolver)
             await connection.execute(
                 """

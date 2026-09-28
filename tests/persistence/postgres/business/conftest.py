@@ -106,6 +106,26 @@ async def migrated_pg(pg_dsn) -> MigratedPostgres:
     )
 
 
+@pytest.fixture
+def restricted_business_dsn(pg_dsn, migrated_pg: MigratedPostgres) -> str:
+    """给真实业务表授权非 owner 测试角色，以免迁移 owner 绕过 RLS。"""
+
+    role = "business_" + uuid.uuid4().hex
+    with psycopg.connect(pg_dsn) as connection:
+        connection.execute(
+            sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS")
+            .format(sql.Identifier(role))
+        )
+    with psycopg.connect(migrated_pg.admin_dsn) as connection:
+        for statement in (
+            "GRANT USAGE ON SCHEMA enterprise TO {}",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA enterprise TO {}",
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA enterprise TO {}",
+        ):
+            connection.execute(sql.SQL(statement).format(sql.Identifier(role)))
+    return make_conninfo(**{**conninfo_to_dict(migrated_pg.runtime_dsn), "user": role})
+
+
 @pytest_asyncio.fixture
 async def business_database(migrated_pg: MigratedPostgres):
     """共享一个有界、低权的产品数据库池，并在 teardown 等待完整关闭。"""

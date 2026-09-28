@@ -14,13 +14,33 @@ from deeptutor.reading.models import ReadingError
 from .base import SAFE_ID, operation, validate_id
 
 
+def validate_material_business_state(source_kind, status, progress):
+    """阅读目录和离线导入共用的来源、状态及进度条件。"""
+
+    try:
+        source = SourceKind(source_kind)
+        state = IngestionStatus(status)
+    except ValueError as exc:
+        raise ValueError("reading material source or state is unknown") from exc
+    if (
+        type(progress) is not int
+        or not 0 <= progress <= 100
+        or (state is IngestionStatus.READY) != (progress == 100)
+    ):
+        raise ValueError("reading material state and progress disagree")
+    return source, state
+
+
 def material(row):
     if row is None:
         return None
     values = {f.name: row[f.name] for f in fields(MaterialRecord)}
-    values.update(
-        source_kind=SourceKind(values["source_kind"]), status=IngestionStatus(values["status"])
-    )
+    try:
+        values["source_kind"], values["status"] = validate_material_business_state(
+            values["source_kind"], values["status"], values["progress"]
+        )
+    except ValueError as exc:
+        raise ReadingError(str(exc)) from exc
     return MaterialRecord(**values)
 
 
@@ -74,9 +94,10 @@ class Materials:
             raise ReadingError("duration must be finite")
         duration = max(0.0, duration)
         previous = self._execute(
-            "SELECT version FROM enterprise.reading_materials WHERE tenant_id=%s AND owner_id=%s AND material_id=%s FOR UPDATE",
+            "SELECT * FROM enterprise.reading_materials WHERE tenant_id=%s AND owner_id=%s AND material_id=%s FOR UPDATE",
             (*self._owner, mid),
         ).fetchone()
+        material(previous)
         self._cas(previous, expected_version)
         now = time.time()
         row = self._execute(

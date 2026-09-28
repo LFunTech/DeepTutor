@@ -133,6 +133,8 @@ class PostgresPartnerRuntimeStatusRepository:
         return safe_payload
 
     def _project(self, row: dict[str, Any], *, now_ms: int | None = None) -> dict[str, Any]:
+        if row["state"] not in _ALLOWED_STATES:
+            raise PartnerRuntimeStatusError("unknown persisted Partner runtime state")
         payload = deepcopy(row["payload"] or {})
         if not isinstance(payload, dict):
             payload = {}
@@ -177,7 +179,7 @@ class PostgresPartnerRuntimeStatusRepository:
         partner_id = str(partner_id or "").strip()
         if not partner_id:
             raise ValueError("partner_id is required")
-        if state not in _ALLOWED_STATES:
+        if not isinstance(state, str) or state not in _ALLOWED_STATES:
             raise ValueError(f"unsupported Partner runtime state {state!r}")
         owner_id = self._resolve_owner_id(owner_id)
         worker_id = str(worker_id or self.worker_id)
@@ -188,13 +190,15 @@ class PostgresPartnerRuntimeStatusRepository:
         with self.db.transaction(self._scope(owner_id)) as connection:
             row = connection.execute(
                 """
-                SELECT worker_id, version, expires_at_ms
+                SELECT worker_id, version, expires_at_ms, state
                   FROM enterprise.partner_runtime_status
                  WHERE tenant_id = %s AND owner_id = %s AND partner_id = %s
                  FOR UPDATE
                 """,
                 (self.tenant_id, owner_id, partner_id),
             ).fetchone()
+            if row is not None and row["state"] not in _ALLOWED_STATES:
+                raise PartnerRuntimeStatusError("unknown persisted Partner runtime state")
             if row is not None and row["worker_id"] != worker_id and int(row["expires_at_ms"]) >= now_ms:
                 raise PartnerRuntimeStatusConflict("Partner runtime status is owned by current worker")
             version = int(row["version"]) + 1 if row is not None else 1

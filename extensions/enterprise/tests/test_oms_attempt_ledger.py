@@ -6,6 +6,8 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+import re
 import uuid
 
 from deeptutor_enterprise.migrations.runner import MigrationRunner
@@ -122,6 +124,38 @@ async def _balances(pg_dsn, tenant_id, lot_id):
             )
         ).fetchall()
     return lot, {row[0]: tuple(row[1:]) for row in grants}
+
+
+async def test_quota_exhaustion_does_not_change_webhook_school_eligibility(pg_dsn):
+    """服务额度门禁不得冒充 EduPlus2 订阅暂停，也不拦管理入口。"""
+
+    from deeptutor_enterprise.oms.attempts import OmsAttemptLedger, QuotaUnavailable
+
+    db, tenant_id, _, _ = await _ledger(pg_dsn)
+    scope = TenantScope(str(tenant_id), "learner-1")
+    try:
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            before = await (
+                await c.execute(
+                    "SELECT external_eligibility,local_enabled,auth_epoch "
+                    "FROM enterprise.tenants WHERE id=%s",
+                    (tenant_id,),
+                )
+            ).fetchone()
+        with pytest.raises(QuotaUnavailable):
+            await OmsAttemptLedger(db).reserve(scope, _request(units=81))
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            tenant = await (
+                await c.execute(
+                    "SELECT external_eligibility,local_enabled,auth_epoch "
+                    "FROM enterprise.tenants WHERE id=%s",
+                    (tenant_id,),
+                )
+            ).fetchone()
+        assert before[0] == "allowed"
+        assert tenant == before
+    finally:
+        await db.__aexit__(None, None, None)
 
 
 async def test_attempt_gift_first_unknown_keeps_reservation_and_settles_once(pg_dsn):
@@ -650,20 +684,37 @@ async def test_attempt_evidence_and_audit_facts_are_append_only(pg_dsn):
     try:
         ledger = OmsAttemptLedger(db)
         await ledger.reserve(scope, request)
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(tenant_id),))
+            before = await (
+                await c.execute(
+                    "SELECT event_kind,reference FROM oms.attempt_evidence_events "
+                    "WHERE tenant_id=%s AND attempt_id=%s ORDER BY created_at,id",
+                    (tenant_id, request.attempt_id),
+                )
+            ).fetchall()
         await ledger.mark_dispatched(scope, request.attempt_id)
         async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
             await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(tenant_id),))
-            with pytest.raises(psycopg.Error):
+            after = await (
                 await c.execute(
-                    "UPDATE oms.attempt_evidence_events SET reference='tampered' "
-                    "WHERE tenant_id=%s AND attempt_id=%s",
+                    "SELECT event_kind,reference FROM oms.attempt_evidence_events "
+                    "WHERE tenant_id=%s AND attempt_id=%s ORDER BY created_at,id",
                     (tenant_id, request.attempt_id),
                 )
-        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
-            with pytest.raises(psycopg.Error):
-                await c.execute(
-                    "DELETE FROM oms.audit_events WHERE object_id=%s",
-                    (str(request.attempt_id),),
-                )
+            ).fetchall()
+        assert len(after) == len(before) + 1
+        assert after[:len(before)] == before
+        assert after[-1][0] == "dispatch_intent"
     finally:
         await db.__aexit__(None, None, None)
+
+
+async def test_oms_application_has_no_fact_mutation_sql():
+    source = Path(__file__).parents[1] / "src/deeptutor_enterprise/oms"
+    forbidden = re.compile(
+        r"\b(?:UPDATE|DELETE\s+FROM)\s+oms\.(?:attempt_evidence_events|audit_events)\b",
+        re.IGNORECASE,
+    )
+    for path in source.rglob("*.py"):
+        assert not forbidden.search(path.read_text(encoding="utf8")), path

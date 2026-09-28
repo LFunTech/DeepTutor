@@ -6,6 +6,10 @@ from contextvars import ContextVar
 
 from deeptutor.persistence.postgres.connection import CommitCompletedAfterCancellation
 from deeptutor.persistence.postgres.learning import AsyncLearningStore, ExecutionAuthority
+from deeptutor.persistence.postgres.learning.base import (
+    validate_path_lease_row,
+    validate_path_operation_row,
+)
 
 _bound: ContextVar["LearningRuntime | None"] = ContextVar("learning_runtime", default=None)
 
@@ -222,12 +226,22 @@ class LearningRuntime:
 
         def candidates(unit):
             rows = unit._execute(
-                "SELECT execution_id,turn_id FROM enterprise.mastery_path_leases "
+                "SELECT * FROM enterprise.mastery_path_leases "
                 "WHERE tenant_id=%s AND owner_id=%s AND execution_id<>%s "
                 "ORDER BY execution_id,path_id LIMIT 1001",
                 (*unit._owner, authority.execution_id),
             ).fetchall()
-            return unit._compat(rows)
+            for row in unit._compat(rows):
+                validate_path_lease_row(row)
+            execution_ids = list({row["execution_id"] for row in rows})
+            if execution_ids:
+                for operation in unit._execute(
+                    "SELECT status,path_ref FROM enterprise.mastery_path_operations "
+                    "WHERE tenant_id=%s AND owner_id=%s AND execution_id=ANY(%s)",
+                    (*unit._owner, execution_ids),
+                ):
+                    validate_path_operation_row(operation)
+            return rows
 
         rows = await manager.run(candidates)
         for row in rows:

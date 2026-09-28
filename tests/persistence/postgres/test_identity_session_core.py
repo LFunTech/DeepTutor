@@ -10,6 +10,8 @@ import pytest
 
 from tests.fixtures.postgres import single_database_user_dsn
 
+pytestmark = pytest.mark.asyncio
+
 
 class _RejectEnterpriseImports(importlib.abc.MetaPathFinder):
     """若 core 在导入或运行时反向加载企业包，立即让测试失败。"""

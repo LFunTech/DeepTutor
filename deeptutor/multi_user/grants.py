@@ -68,15 +68,26 @@ def _load_pg_grant(user_id: str) -> dict[str, Any] | None:
     runtime = _pg_runtime()
     if runtime is None:
         return None
+    from deeptutor.persistence.postgres.governance import validate_runtime_policy_row
+
     db, scope = runtime
     with db.transaction(scope) as c:
-        row = c.execute(
-            "SELECT document FROM enterprise.runtime_policies "
+        rows = c.execute(
+            "SELECT subject_kind,status,document FROM enterprise.runtime_policies "
             "WHERE tenant_id=%s AND policy_kind='user_grant' "
-            "AND subject_kind='owner' AND subject_id=%s "
-            "AND status IN ('saved','active')",
+            "AND subject_id=%s",
             (scope.tenant_id, str(user_id)),
-        ).fetchone()
+        ).fetchall()
+    for row in rows:
+        validate_runtime_policy_row(row)
+    row = next(
+        (
+            item
+            for item in rows
+            if item["subject_kind"] == "owner" and item["status"] in {"saved", "active"}
+        ),
+        None,
+    )
     if row is None:
         return empty_grant(user_id)
     return normalize_grant(user_id, row["document"])
@@ -86,8 +97,17 @@ def _save_pg_grant(user_id: str, grant: dict[str, Any]) -> bool:
     runtime = _pg_runtime()
     if runtime is None:
         return False
+    from deeptutor.persistence.postgres.governance import validate_runtime_policy_row
+
     db, scope = runtime
     with db.transaction(scope) as c:
+        rows = c.execute(
+            "SELECT subject_kind,status FROM enterprise.runtime_policies "
+            "WHERE tenant_id=%s AND policy_kind='user_grant' AND subject_id=%s FOR UPDATE",
+            (scope.tenant_id, str(user_id)),
+        ).fetchall()
+        for row in rows:
+            validate_runtime_policy_row(row)
         c.execute(
             "INSERT INTO enterprise.runtime_policies"
             "(tenant_id,policy_kind,subject_kind,subject_id,version,document,status,updated_by) "

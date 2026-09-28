@@ -627,6 +627,8 @@ class PostgresMatrixStore(MatrixStore):
         )
 
     def _set_trust(self, device: OlmDevice, state: TrustState) -> bool:
+        if not isinstance(state, TrustState) or state.name not in _VALID_TRUST_STATES:
+            raise ValueError("invalid Matrix device trust state")
         now_ms = self._now_ms()
 
         def write(connection):
@@ -641,7 +643,7 @@ class PostgresMatrixStore(MatrixStore):
                 """,
                 (*self._account_values(), device.user_id, device.id),
             ).fetchone()
-            if current is not None and current["state"] == state.name:
+            if current is not None and _trust_state(current["state"]) == state:
                 device.trust_state = state
                 return False
             connection.execute(
@@ -673,7 +675,7 @@ class PostgresMatrixStore(MatrixStore):
                 """,
                 (*self._account_values(), device.user_id, device.id),
             ).fetchone()
-            return row is not None and row["state"] == state.name
+            return row is not None and _trust_state(row["state"]) == state
 
         return self._run(read)
 

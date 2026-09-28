@@ -14,6 +14,15 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from deeptutor.capabilities.marginnote4.models import ALL_TYPES
+from deeptutor.persistence.postgres.learning.base import (
+    validate_interaction_status,
+    validate_topic_source_row,
+    validate_topic_status,
+)
+from deeptutor.persistence.postgres.notebook_upsert import validate_notebook_values
+from deeptutor.persistence.postgres.reading.materials import validate_material_business_state
+
 
 @dataclass(slots=True)
 class OfflineVerifyReport:
@@ -720,6 +729,12 @@ class OfflineImportVerifier:
             owner_id,
             path_ids,
         )
+        for interaction in interactions:
+            validate_interaction_status(interaction["status"])
+        for metadata in topic_meta:
+            validate_topic_status(metadata["status"])
+        for topic_source in topic_sources:
+            validate_topic_source_row(topic_source)
         target_payload.update(
             {
                 "mastery_paths": paths,
@@ -799,7 +814,7 @@ class OfflineImportVerifier:
         materials = await self._fetch_by_text_ids(
             connection,
             """
-            SELECT material_id,content_id,filename,title,status,progress
+            SELECT material_id,content_id,filename,title,source_kind,status,progress
               FROM enterprise.reading_materials
              WHERE tenant_id=%s AND owner_id=%s AND material_id = ANY(%s)
              ORDER BY material_id
@@ -808,6 +823,10 @@ class OfflineImportVerifier:
             owner_id,
             material_ids,
         )
+        for item in materials:
+            validate_material_business_state(
+                item["source_kind"], item["status"], item["progress"]
+            )
         workspaces = await self._fetch_by_text_ids(
             connection,
             """
@@ -1714,16 +1733,20 @@ class OfflineImportVerifier:
     ) -> list[dict[str, Any]]:
         if not entry_ids:
             return []
-        return await self._fetch_rows(
+        rows = await self._fetch_rows(
             connection,
             """
-            SELECT id,session_id,turn_id,followup_session_id,question_id,question
+            SELECT id,session_id,turn_id,followup_session_id,question_id,question,
+                   source,score_trend,material_id
               FROM enterprise.notebook_entries
              WHERE tenant_id=%s AND owner_id=%s AND id = ANY(%s)
              ORDER BY id
             """,
             (tenant_id, owner_id, sorted(entry_ids)),
         )
+        for item in rows:
+            validate_notebook_values(item)
+        return rows
 
     async def _notebook_categories(
         self, connection, tenant_id: str, owner_id: str, category_ids: set[int]
@@ -1958,7 +1981,13 @@ class OfflineImportVerifier:
             """,
             (tenant_id, owner_id, kb_id),
         )
-        return [row for row in rows if (str(row["device_id"]), str(row["object_id"])) in pairs]
+        selected = [
+            row for row in rows if (str(row["device_id"]), str(row["object_id"])) in pairs
+        ]
+        for row in selected:
+            if row["object_type"] not in ALL_TYPES:
+                raise ValueError("MarginNote object type is unknown")
+        return selected
 
     async def _fetch_margin_tombstones(
         self,

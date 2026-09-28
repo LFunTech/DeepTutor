@@ -61,6 +61,14 @@ async def _principal(connection, app, subject, school_id=None, active=True):
     return principal_id
 
 
+async def _bump_policy_version(connection, principal_id, *, times=1):
+    await connection.execute(
+        "UPDATE management.principals SET policy_version=policy_version+%s "
+        "WHERE id=%s",
+        (times, principal_id),
+    )
+
+
 async def _assignment(
     connection, app, principal_id, role, scope, school_id=None, *, binding_fenced=True
 ):
@@ -83,6 +91,7 @@ async def _assignment(
             uuid.uuid4(),
         ),
     )
+    await _bump_policy_version(connection, principal_id)
     return assignment_id
 
 
@@ -126,6 +135,168 @@ async def test_default_deny_and_oms_platform_scope(pg_dsn):
             await require_management_permission(
                 connection, _identity("oms", "operator"), "ops.credentials.manage"
             )
+
+
+async def test_principal_disable_keeps_last_admin_without_database_trigger(pg_dsn):
+    from deeptutor_enterprise.management.authorization import ManagementAuthorizationDenied
+    from deeptutor_enterprise.management.principals import (
+        DisablePrincipalCommand,
+        disable_management_principal,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        original = await _principal(connection, "oms", "original-admin")
+        await _assignment(connection, "oms", original, "platform_security_admin", "platform")
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    command = DisablePrincipalCommand(
+        target_principal_id=original,
+        target_school_id=None,
+        expected_policy_version=2,
+        reason="合成停用验收",
+        request_id="synthetic-disable-1",
+    )
+    try:
+        async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
+            with pytest.raises(ManagementAuthorizationDenied, match="last active"):
+                await disable_management_principal(
+                    connection, _identity("oms", "original-admin"), command
+                )
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+            second = await _principal(connection, "oms", "second-admin")
+            await _assignment(connection, "oms", second, "platform_security_admin", "platform")
+        async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
+            result = await disable_management_principal(
+                connection, _identity("oms", "original-admin"), command
+            )
+            assert result.target_policy_version == 3
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+            row = await (
+                await connection.execute(
+                    "SELECT status,policy_version FROM management.principals WHERE id=%s",
+                    (original,),
+                )
+            ).fetchone()
+            assert row == ("disabled", 3)
+    finally:
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+            pass
+
+
+async def test_school_principal_disable_is_school_scoped_and_versioned(pg_dsn):
+    from deeptutor_enterprise.management.authorization import ManagementAuthorizationDenied
+    from deeptutor_enterprise.management.principals import (
+        DisablePrincipalCommand,
+        disable_management_principal,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    school, other_school = uuid.uuid4(), uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await _tenant(connection, school)
+        await _tenant(connection, other_school)
+        await connection.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,101,'verified',now(),'synthetic','synthetic://a'),"
+            "(%s,102,'verified',now(),'synthetic','synthetic://b')",
+            (school, other_school),
+        )
+        first = await _principal(connection, "tms", "first", school)
+        await _assignment(connection, "tms", first, "school_admin", "school", school)
+        second = await _principal(connection, "tms", "second", school)
+        await _assignment(connection, "tms", second, "school_admin", "school", school)
+    command = DisablePrincipalCommand(
+        target_principal_id=first, target_school_id=school, expected_policy_version=2,
+        reason="合成学校管理员停用", request_id="synthetic-disable-school",
+    )
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    try:
+        async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
+            await connection.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school),))
+            with pytest.raises(ManagementAuthorizationDenied):
+                await disable_management_principal(
+                    connection,
+                    _identity("tms", "first", school),
+                    DisablePrincipalCommand(
+                        target_principal_id=first, target_school_id=other_school,
+                        expected_policy_version=2, reason="跨校", request_id="synthetic-cross-school",
+                    ),
+                )
+            result = await disable_management_principal(
+                connection, _identity("tms", "first", school), command
+            )
+            assert result.target_policy_version == 3
+        async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
+            await connection.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school),))
+            with pytest.raises(ManagementAuthorizationDenied):
+                await disable_management_principal(
+                    connection, _identity("tms", "second", school),
+                    DisablePrincipalCommand(
+                        target_principal_id=second, target_school_id=school,
+                        expected_policy_version=2, reason="最后管理员",
+                        request_id="synthetic-last-school",
+                    ),
+                )
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+            rows = await (
+                await connection.execute(
+                    "SELECT subject,status,policy_version FROM management.principals "
+                    "WHERE id IN (%s,%s) ORDER BY subject", (first, second)
+                )
+            ).fetchall()
+            assert rows == [("first", "disabled", 3), ("second", "active", 2)]
+    finally:
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+            pass
+
+
+async def test_concurrent_principal_disables_leave_one_admin_without_trigger(pg_dsn):
+    from deeptutor_enterprise.management.authorization import ManagementAuthorizationDenied
+    from deeptutor_enterprise.management.principals import (
+        DisablePrincipalCommand,
+        disable_management_principal,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    principals = []
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        for subject in ("first", "second"):
+            principal = await _principal(connection, "oms", subject)
+            await _assignment(connection, "oms", principal, "platform_security_admin", "platform")
+            principals.append((subject, principal))
+
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+
+    async def disable(subject, principal):
+        async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
+            try:
+                await disable_management_principal(
+                    connection,
+                    _identity("oms", subject),
+                    DisablePrincipalCommand(
+                        target_principal_id=principal, target_school_id=None,
+                        expected_policy_version=2, reason="并发停用",
+                        request_id=f"synthetic-concurrent-{subject}",
+                    ),
+                )
+                return True
+            except ManagementAuthorizationDenied:
+                return False
+
+    try:
+        assert sorted(await asyncio.gather(*(disable(*p) for p in principals))) == [False, True]
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+            rows = await (
+                await connection.execute(
+                    "SELECT status FROM management.principals WHERE id IN (%s,%s)",
+                    (principals[0][1], principals[1][1]),
+                )
+            ).fetchall()
+            assert sorted(row[0] for row in rows) == ["active", "disabled"]
+    finally:
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+            pass
 
 
 async def test_tms_current_school_only_and_old_policy_version_denied(pg_dsn):
@@ -222,6 +393,51 @@ async def test_tms_unavailable_school_denies_management_access(pg_dsn, blocked_s
             )
 
 
+@pytest.mark.parametrize(
+    ("field", "constraint"),
+    [
+        ("external_eligibility", "tenants_external_eligibility_check"),
+        ("provisioning_status", "tenants_provisioning_status_check"),
+        ("recovery_state", "tenants_recovery_state_check"),
+    ],
+)
+async def test_lifecycle_governance_rejects_unknown_school_value_without_db_check(
+    pg_dsn, field, constraint
+):
+    from deeptutor_enterprise.management.authorization import (
+        ManagementAuthorizationDenied,
+        require_management_permission,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    school = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await _tenant(connection, school)
+        await connection.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,101,'verified',now(),'synthetic-verifier','synthetic://school')",
+            (school,),
+        )
+        principal = await _principal(connection, "oms", "reconcile-operator")
+        await _assignment(connection, "oms", principal, "platform_operator", "school", school)
+        await connection.execute(f"ALTER TABLE enterprise.tenants DROP CONSTRAINT IF EXISTS {constraint}")
+        await connection.execute(
+            f"UPDATE enterprise.tenants SET {field}='future-value' WHERE id=%s",
+            (school,),
+        )
+
+    async with await psycopg.AsyncConnection.connect(single_database_user_dsn(pg_dsn)) as c:
+        with pytest.raises(ManagementAuthorizationDenied, match="school business state"):
+            await require_management_permission(
+                c,
+                _identity("oms", "reconcile-operator"),
+                "ops.reconciliation.manage",
+                target_school_id=school,
+                write=True,
+            )
+
+
 async def test_oms_school_write_denied_when_locally_disabled(pg_dsn):
     from deeptutor_enterprise.management.authorization import (
         ManagementAuthorizationDenied,
@@ -286,7 +502,7 @@ async def test_oms_school_grant_does_not_survive_external_school_rebinding(pg_ds
         )
     runtime_dsn = single_database_user_dsn(pg_dsn)
     async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
-        with pytest.raises(ManagementAuthorizationDenied, match="not granted"):
+        with pytest.raises(ManagementAuthorizationDenied, match="assignment fact is invalid"):
             await require_management_permission(
                 connection,
                 _identity("oms", "legacy-operator"),
@@ -358,6 +574,7 @@ async def test_oms_governance_does_not_imply_delegation_or_business_execution(pg
             "now()-interval '1 minute',now()+interval '2 hours')",
             (uuid.uuid4(), actor, school),
         )
+        await _bump_policy_version(connection, actor)
     async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
         decision = await require_management_delegation(
             connection,
@@ -378,7 +595,10 @@ async def test_oms_governance_does_not_imply_delegation_or_business_execution(pg
             )
 
 
-async def test_tms_grant_requires_explicit_delegation_and_is_idempotent(pg_dsn):
+@pytest.mark.parametrize("disable_db_bump", [False, True])
+async def test_tms_grant_requires_explicit_delegation_and_is_idempotent(
+    pg_dsn, disable_db_bump
+):
     from dataclasses import replace
 
     from deeptutor_enterprise.management.grants import (
@@ -416,7 +636,11 @@ async def test_tms_grant_requires_explicit_delegation_and_is_idempotent(pg_dsn):
                 "now()-interval '1 minute',now()+interval '2 hours')",
                 (uuid.uuid4(), actor, action, school),
             )
+            await _bump_policy_version(connection, actor)
         actor_version = 2 + len(actions)
+    if disable_db_bump:
+        # 目标 schema 已无数据库触发器；该参数保留，用同一路径证明程序逻辑独立生效。
+        pass
 
     expiry = datetime.now(timezone.utc) + timedelta(hours=1)
     command = GrantRoleCommand(
@@ -522,6 +746,7 @@ async def test_management_grant_rejects_missing_delegation_and_sensitive_role(pg
             "now()-interval '1 minute',now()+interval '2 hours')",
             (uuid.uuid4(), actor, school),
         )
+        await _bump_policy_version(connection, actor)
     command = GrantRoleCommand(
         target_principal_id=target,
         role_key="school_auditor",
@@ -606,6 +831,7 @@ async def test_oms_governance_can_grant_only_delegated_school_role(pg_dsn):
                 "now()-interval '1 minute',now()+interval '2 hours')",
                 (uuid.uuid4(), actor, action, school),
             )
+            await _bump_policy_version(connection, actor)
         actor_version = 2 + len(actions)
     command = GrantRoleCommand(
         target_principal_id=target,
@@ -636,7 +862,10 @@ async def test_oms_governance_can_grant_only_delegated_school_role(pg_dsn):
             )
 
 
-async def test_tms_role_revoke_invalidates_old_session_and_replays_once(pg_dsn):
+@pytest.mark.parametrize("disable_db_bump", [False, True])
+async def test_tms_role_revoke_invalidates_old_session_and_replays_once(
+    pg_dsn, disable_db_bump
+):
     from dataclasses import replace
 
     from deeptutor_enterprise.management.authorization import (
@@ -665,6 +894,9 @@ async def test_tms_role_revoke_invalidates_old_session_and_replays_once(pg_dsn):
         target_assignment = await _assignment(
             connection, "tms", target, "school_auditor", "school", school
         )
+    if disable_db_bump:
+        # 目标 schema 已无数据库触发器；该参数保留，用同一路径证明程序逻辑独立生效。
+        pass
     command = RevokeRoleCommand(
         assignment_id=target_assignment,
         target_school_id=school,
@@ -731,7 +963,10 @@ async def test_tms_role_revoke_invalidates_old_session_and_replays_once(pg_dsn):
         assert later_replay.target_policy_version == 3
 
 
-async def test_last_school_admin_revoke_is_conflict_without_poisoning_transaction(pg_dsn):
+@pytest.mark.parametrize("disable_db_guard", [False, True])
+async def test_last_school_admin_revoke_is_conflict_without_poisoning_transaction(
+    pg_dsn, disable_db_guard
+):
     from deeptutor_enterprise.management.authorization import require_management_permission
     from deeptutor_enterprise.management.grants import (
         ManagementGrantConflict,
@@ -751,6 +986,9 @@ async def test_last_school_admin_revoke_is_conflict_without_poisoning_transactio
         )
         actor = await _principal(connection, "tms", "only-admin", school)
         assignment = await _assignment(connection, "tms", actor, "school_admin", "school", school)
+    if disable_db_guard:
+        # 目标 schema 已无数据库触发器；该参数保留，用同一路径证明程序逻辑独立生效。
+        pass
     command = RevokeRoleCommand(
         assignment_id=assignment,
         target_school_id=school,
@@ -775,6 +1013,96 @@ async def test_last_school_admin_revoke_is_conflict_without_poisoning_transactio
             write=True,
         )
         assert decision.assignment_id == assignment
+
+
+async def test_last_platform_security_admin_revoke_is_blocked_by_application(pg_dsn):
+    from deeptutor_enterprise.management.grants import (
+        ManagementGrantConflict,
+        RevokeRoleCommand,
+        revoke_management_role,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        principal = await _principal(connection, "oms", "only-security-admin")
+        assignment = await _assignment(
+            connection, "oms", principal, "platform_security_admin", "platform"
+        )
+    command = RevokeRoleCommand(
+        assignment_id=assignment,
+        target_school_id=None,
+        expected_assignment_version=1,
+        expected_target_policy_version=2,
+        command_id=uuid.uuid4(),
+        reason="平台最后管理员不可撤权",
+        request_id="synthetic-last-platform-admin",
+    )
+    async with await psycopg.AsyncConnection.connect(single_database_user_dsn(pg_dsn)) as c:
+        with pytest.raises(ManagementGrantConflict, match="last"):
+            await revoke_management_role(c, _identity("oms", "only-security-admin"), command)
+
+
+async def test_two_administrators_cannot_revoke_each_other_concurrently_without_db_guard(
+    pg_dsn,
+):
+    from deeptutor_enterprise.management.authorization import ManagementAuthorizationDenied
+    from deeptutor_enterprise.management.grants import (
+        ManagementGrantConflict,
+        RevokeRoleCommand,
+        revoke_management_role,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    school = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await _tenant(c, school)
+        await c.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,101,'verified',now(),'synthetic-verifier','synthetic://school')",
+            (school,),
+        )
+        first = await _principal(c, "tms", "admin-one", school)
+        second = await _principal(c, "tms", "admin-two", school)
+        first_assignment = await _assignment(c, "tms", first, "school_admin", "school", school)
+        second_assignment = await _assignment(c, "tms", second, "school_admin", "school", school)
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+
+    async def revoke_as(subject: str, assignment_id: uuid.UUID):
+        command = RevokeRoleCommand(
+            assignment_id=assignment_id,
+            target_school_id=school,
+            expected_assignment_version=1,
+            expected_target_policy_version=2,
+            command_id=uuid.uuid4(),
+            reason="合成双管理员互撤",
+            request_id=f"synthetic-revoke-{subject}",
+        )
+        try:
+            async with await psycopg.AsyncConnection.connect(runtime_dsn) as c:
+                await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school),))
+                await revoke_management_role(c, _identity("tms", subject, school), command)
+            return "revoked"
+        except (ManagementAuthorizationDenied, ManagementGrantConflict):
+            return "denied"
+
+    outcomes = await asyncio.wait_for(
+        asyncio.gather(
+            revoke_as("admin-one", second_assignment),
+            revoke_as("admin-two", first_assignment),
+        ),
+        timeout=5,
+    )
+    assert sorted(outcomes) == ["denied", "revoked"]
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        active = await (
+            await c.execute(
+                "SELECT count(*) FROM management.assignments WHERE application='tms' "
+                "AND school_id=%s AND role_key='school_admin' AND status='active'",
+                (school,),
+            )
+        ).fetchone()
+    assert active == (1,)
 
 
 async def test_revoke_waits_for_inflight_management_write_and_blocks_old_version(pg_dsn):

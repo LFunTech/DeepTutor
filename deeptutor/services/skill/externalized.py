@@ -89,14 +89,21 @@ class ExternalizedSkillService:
             await self.resources._authorized(c)
             rows = await (
                 await c.execute(
-                    "SELECT DISTINCT ON (resource_id) * FROM enterprise.resource_objects "
+                    "SELECT * FROM enterprise.resource_objects "
                     "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
-                    f"{rid_clause}AND state='ready' AND deleted_at IS NULL "
+                    f"{rid_clause}"
                     "ORDER BY resource_id, created_at DESC, id DESC",
                     params,
                 )
             ).fetchall()
-        return [self.resources._handle(row) for row in rows]
+        handles = []
+        seen = set()
+        for row in rows:
+            handle = self.resources._handle(row)
+            if handle.state == "ready" and row["deleted_at"] is None and handle.resource_id not in seen:
+                handles.append(handle)
+                seen.add(handle.resource_id)
+        return handles
 
     async def _all_handles(self, kind: str, resource_id: str):
         return await self.resources.list(resource_kind=kind, resource_id=resource_id)

@@ -10,6 +10,8 @@ import uuid
 import bcrypt
 from psycopg.types.json import Jsonb
 
+from ..tenant_state import tenant_allows_authentication
+
 LEARNER_POLICY = {
     "age_band": "9-12",
     "locked_persona": "teacher",
@@ -19,14 +21,23 @@ LEARNER_POLICY = {
     "reading": {"allow_upload": False, "material_ids": [], "extensions": []},
 }
 
+ACCOUNT_ROLES = frozenset({"tenant_admin", "user"})
+ACCOUNT_PRESETS = frozenset({"standard", "custom", "learner"})
+
+
+def valid_account_domain(row) -> bool:
+    return row["role"] in ACCOUNT_ROLES and row["preset"] in ACCOUNT_PRESETS
+
 
 def initial_policy(preset):
-    if preset not in ("standard", "custom", "learner"):
+    if not isinstance(preset, str) or preset not in ACCOUNT_PRESETS:
         raise ValueError("invalid account preset")
     return deepcopy(LEARNER_POLICY) if preset == "learner" else None
 
 
 def public_account(row):
+    if not valid_account_domain(row):
+        raise ValueError("account has unknown role or preset")
     result = {
         k: row[k]
         for k in (
@@ -109,6 +120,8 @@ class AccountOperations:
         ).fetchone()
         if not row:
             raise LookupError("identity not found")
+        if not valid_account_domain(row):
+            raise ValueError("account has unknown role or preset")
         return actor, row
 
     async def profile(self, token, *, username=None):
@@ -281,7 +294,7 @@ class AccountOperations:
         async with self.db.transaction(self._scope) as c:
             row = await (
                 await c.execute(
-                    "SELECT d.*,u.username,u.role,u.preset,u.disabled,u.deleted_at,u.auth_version AS current_version,t.local_enabled,t.external_eligibility,t.provisioning_status,t.auth_epoch AS current_epoch FROM enterprise.device_credentials d JOIN enterprise.users u ON (u.tenant_id,u.id)=(d.tenant_id,d.user_id) JOIN enterprise.tenants t ON t.id=u.tenant_id WHERE d.tenant_id=%s AND d.pairing_code_hash=%s FOR UPDATE OF u,t,d",
+                    "SELECT d.*,u.username,u.role,u.preset,u.disabled,u.deleted_at,u.auth_version AS current_version,t.local_enabled,t.external_eligibility,t.provisioning_status,t.recovery_state,t.auth_epoch AS current_epoch FROM enterprise.device_credentials d JOIN enterprise.users u ON (u.tenant_id,u.id)=(d.tenant_id,d.user_id) JOIN enterprise.tenants t ON t.id=u.tenant_id WHERE d.tenant_id=%s AND d.pairing_code_hash=%s FOR UPDATE OF u,t,d",
                     (self.tenant_id, hashlib.sha256(pairing_code.encode()).hexdigest()),
                 )
             ).fetchone()
@@ -295,9 +308,7 @@ class AccountOperations:
                 and row["deleted_at"] is None
                 and row["auth_version"] == row["current_version"]
                 and row["auth_epoch"] == self.epoch == row["current_epoch"]
-                and row["local_enabled"]
-                and row["external_eligibility"] in ("allowed", "not_required")
-                and row["provisioning_status"] == "ready"
+                and tenant_allows_authentication(row)
                 and (not row["pin_locked_until"] or row["pin_locked_until"] <= now)
             ):
                 valid = (

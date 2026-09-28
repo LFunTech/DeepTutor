@@ -1,6 +1,6 @@
 # 10. 用户数据同步与 Webhook 方案
 
-> **2026-09-27 新权威边界（本地实施中）**：学校接入及订阅生命周期只采信目标应用的已验签真实 Webhook，取消 online resolve 二次核验与周期证明 TTL；EduPlus2 OIDC/JWKS 仍负责用户认证，DeepTutor Enterprise 自行决定权限。当前工作区已有接收事务内自动建校/PG onboarding、投影、TMS 本人激活入口和隔离合成测试；多学校 **AI 运行时**由 B1/B2、OMS/TMS 另行实施，不是 Webhook 数据库链路的前置。已部署 test-cn 旧镜像的真实投递仍为 503；下文旧在线核验切片仅是历史现状，见 `add-b2-eduplus2-tenant-lifecycle-webhook` 最新 proposal/design/spec/tasks。
+> **2026-09-27 新权威边界（实施中）**：学校接入及订阅生命周期只采信目标应用的已验签真实 Webhook，取消 online resolve 二次核验与周期证明 TTL；EduPlus2 OIDC/JWKS 仍负责用户认证，DeepTutor Enterprise 自行决定权限。`rc.53` 已在 test-cn 收到真实非 mock terminated/created；另对获批准的独立测试学校完成新增订阅→暂停→恢复，Webhook 成功，PG 资格 `allowed→denied→allowed`，而本地 AI 开关仍关闭、资源仍 pending。正式 TMS 尚未交付，actor 本人登录/首管激活归管理授权/TMS 提案，不把当前候选登记写成可用管理员。多学校 **AI 运行时**由 B1/B2、OMS/TMS 另行实施，不是 Webhook 数据库链路的前置。下文旧在线核验切片仅是历史现状，见 `add-b2-eduplus2-tenant-lifecycle-webhook` 最新 proposal/design/spec/tasks。
 
 ## 阶段边界
 
@@ -128,11 +128,11 @@ POST /api/v1/eduplus2/webhooks
 
 当前企业组合已提供此路径的**已验签控制台 mock 接收**：读取 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`（或本地兜底 `DT_EDUPLUS2_WEBHOOK_SECRET`），按 EduPlus2 的 `timestamp.event.raw-body` 三段式 HMAC-SHA256 校验 `X-EduPlus-*` 头；仅 `X-EduPlus-Mock: true` 且 `event_id=mock_...` 的 demo 请求返回 204，不修改租户状态。2026-09-26 已在 `test-cn` HTTPS URL 由 EduPlus2 `智能体基座` 控制台实际执行 8 类订阅事件 demo，发送端投递记录均为 HTTP 204；此证据只覆盖 mock URL 联调。
 
-`rc.50` 在 test-cn 发布的是此前“通知 + 在线核验”切片，但正式接收器未配置启用；真实订阅重试返回 503，目标 inbox 和学校绑定仍为空。**当前工作区尚未发布的新代码**改为 Webhook 事务内原子写 inbox、稳定学校绑定、目标应用 client、PG onboarding 标记、生命周期投影与最小 actor 候选，不再依赖 online resolve 或证明 TTL。学校初始仍为 `local_enabled=false`、AI 资源 `pending`，但本人可凭已验签 OIDC JWT 经 TMS 引导入口完成首位管理员激活；真实 `actor.user_id` 与 JWT `sub` 等价性仍待 test 脱敏证据。不因 PG onboarding 或 204 开放 AI 新调用。Secret 不写入本文或日志，详情见对应 OpenSpec `implementation-evidence.md`。
+历史：`rc.50` 正式接收器未配置启用，真实订阅重试返回 503。当前 `rc.53` 已发布事务内原子 inbox、学校绑定、应用 client、PG onboarding、生命周期投影与最小 actor 候选，不依赖 online resolve 或证明 TTL；真实 terminated/created 已经 204 并落库。学校初始仍为 `local_enabled=false`、AI 资源 `pending`；TMS 引导 API 有隔离合成 JWT 正负例，但正式 TMS 登录尚未交付，真实 `actor.user_id` 与 JWT `sub` 仍待本人联调。不因 PG onboarding 或 204 开放 AI 新调用。Secret 不写入本文或日志，详情见对应 OpenSpec `implementation-evidence.md`。
 
 `.secrets/.test-secrets` 仅是本地测试输入，不会自动同步至测试 K8s。`test-cn` 受保护 tag 发布步骤从 Woodpecker 仓库 Secret `dt_test_cn_eduplus2_webhook_secret` 注入密钥，仅同步目标命名空间运行时 Secret 的 `DT_EDUPLUS2_WEBHOOK_SECRET` 字段后才继续部署；后端通过已有 `envFrom` 和 `DT_EDUPLUS2_WEBHOOK_SECRET_REF`/同名变量读取。应核对 Woodpecker、K8s 与 EduPlus2 对应 Webhook 使用同一密钥；不能靠本地文件存在便认定公网 URL 可验签。
 
-正式接收另需由**本系统**发布契约配置 `DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF`（独立稳定密钥，不与 Webhook Secret 共用）、`DT_EDUPLUS2_OIDC_ISSUER` 和 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true`。目标应用 ID 从已验签 Webhook body 的 `app.id` 取得并按学校—应用持久化，不再配置静态应用 ID；TMS 将已验签 JWT 的 `azp` 与该投影对应的 active client 绑定，不能仅凭 body 或 URL 选择应用。轮换时可选 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF` 和 Unix 秒截止 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL`。Webhook 生命周期接收不需要 `DT_EDUPLUS2_LIFECYCLE_PROOF_TTL_SECONDS` 或 online resolve；其余 OAuth 用途可能仍需独立 provider 配置。目标环境合约、迁移、资源与全入口门禁未验收前，接收开关必须保持关闭；不能把新增密钥硬编码到 Git 或仅因签名正确就开通业务。
+正式接收需由**本系统**发布契约配置 `DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY_REF`（独立稳定密钥，不与 Webhook Secret 共用）、`DT_EDUPLUS2_OIDC_ISSUER` 和 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true`。目标应用 ID 从已验签 Webhook body 的 `app.id` 取得并按学校—应用持久化，不再配置静态应用 ID；TMS 将已验签 JWT 的 `azp` 与该投影对应的 active client 绑定，不能仅凭 body 或 URL 选择应用。轮换时可选 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_SECRET_REF` 和 Unix 秒截止 `DT_EDUPLUS2_WEBHOOK_PREVIOUS_UNTIL`。Webhook 生命周期接收不需要 `DT_EDUPLUS2_LIFECYCLE_PROOF_TTL_SECONDS` 或 online resolve；其余 OAuth 用途可能仍需独立 provider 配置。test-cn 已受控开启接收并验证两类真实事件；资源与全入口门禁尚未验收，不能把新增密钥硬编码到 Git，也不能仅因签名正确就开通 AI/管理业务。
 
 本节当前已实现的 Webhook 只处理八类应用订阅 `subscription.*` 通知；应用安装、client 配置、用户/组织/权限变化若要同步，仍需各自独立合同和提案，不能假定此入口已覆盖。它不是 TMS/OMS 每次登录或第三方 `POST /api/v1/auth/eduplus2/exchange` 的主链路。普通第三方调用仍必须实时验签 EduPlus2 user JWT，并查 active client/app 注册状态；即使暂未接入 Webhook，也不能放松 token 校验或使用未审计的手工配置绕过注册流程。
 
@@ -146,7 +146,7 @@ POST /api/v1/eduplus2/webhooks
 
 ## Webhook 幂等
 
-> 以下描述当前工作区代码，尚未在 test-cn 发布或验证真实事件。
+> 以下描述当前已部署接收器；真实 created/terminated 已验证，其他事件的外部联调仍按提案任务追踪。
 
 当前接收器将目标应用正确且已验签的真实事件最小业务事实写入 `eduplus2.lifecycle_inbox`；首次 `subscription.created` 直接按稳定 `tenant.id` 自动且幂等创建学校 PG 锚点/绑定/client/投影/onboarding 标记，非 created 的未知学校事件仅留脱敏 inbox 并以 `denied/school_not_bound` 终结，不凭其建校或遗留永久 pending。`school_code` 仅保存为显示信息，不作绑定/授权键。PG 事务内完成投影后才返回 204，失败返回可重试 5xx，不先响应后放进进程内队列。原始 body、OAuth Secret、签名不入库；稳定独立摘要密钥对不含投递时间的业务投影做 HMAC，同 ID 不同业务事实拒绝为 409。`webhook_school_controls` 保存与订阅投影独立的本地人工冻结；后续恢复事件不清除冻结。内部 OMS 程序服务要求 `ops.reconciliation.manage`、目标学校、expected_version、命令 ID 与审计；正式 OMS 身份/UI 入口仍归权限/OMS 提案。
 

@@ -1,6 +1,7 @@
 """原通用会话路由 + 企业认证：无旧 admin/plugin/文件管理入口。"""
 
 from contextlib import asynccontextmanager, nullcontext
+from datetime import datetime
 import hashlib
 import hmac
 import json
@@ -9,6 +10,7 @@ import re
 import secrets
 import time
 import uuid
+from uuid import UUID
 
 from fastapi import APIRouter, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -16,7 +18,7 @@ from jose import JWTError, jwt
 import psycopg
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.datastructures import Headers
+from starlette.datastructures import Headers, UploadFile
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import HTTPConnection
@@ -24,6 +26,7 @@ from starlette.responses import JSONResponse
 
 from deeptutor.core.providers import provider_context
 
+from ..configuration import ModelDeployment
 from ..context import bind_identity_reference, current_token, identity_context
 from ..identity.service import LoginRateLimited
 from ..scope import TenantScope
@@ -67,6 +70,7 @@ class AuthenticationMiddleware:
         connection = HTTPConnection(scope)
         headers = Headers(scope=scope)
         path = scope.get("path", "")
+        oms_path = scope["type"] == "http" and path.startswith("/api/v1/oms/")
         origin = headers.get("origin")
         token, uses_bearer = bearer_from_headers_or_cookie(
             headers,
@@ -178,9 +182,18 @@ class AuthenticationMiddleware:
                         if not csrf or not cookie or not hmac.compare_digest(csrf, cookie):
                             status = 403
                             raise PermissionError
-            identity = None if anonymous else await enterprise.identity.authenticate(token or "")
-            if not anonymous:
+            if oms_path and (not token or not uses_bearer):
+                status = 401
+                raise PermissionError
+            identity = (
+                None
+                if anonymous or oms_path
+                else await enterprise.identity.authenticate(token or "")
+            )
+            if not anonymous and not oms_path:
                 await enforce_eduplus2_token_allowed()
+                await enterprise.lease.check()
+            elif oms_path:
                 await enterprise.lease.check()
             with provider_context(enterprise.providers):
                 with identity_context(identity, token) if identity is not None else nullcontext():
@@ -228,6 +241,40 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=256)
+
+
+class OmsModelDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=1000)
+    models: tuple[ModelDeployment, ...] = Field(min_length=1, max_length=32)
+
+
+class OmsSkillReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approved: bool = Field(strict=True)
+    reason: str = Field(min_length=1, max_length=1000)
+    code_review_evidence: str = Field(default="", max_length=2000)
+
+
+class OmsSkillPublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsSkillGrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_grant_version: int = Field(ge=0)
+    expires_at: datetime
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsSkillRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_grant_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class AuditExportRequest(BaseModel):
@@ -407,8 +454,373 @@ def create_application(enterprise):
     eduplus2_auth = APIRouter()
     eduplus2_audit = APIRouter()
     tms_bootstrap = APIRouter()
+    oms = APIRouter()
     conversation_test = APIRouter()
     health = APIRouter()
+
+    async def _authorize_oms_request(
+        request: Request, action: str, *, target_school_id: UUID | None = None
+    ):
+        """每个正式 OMS 请求都重新验身份及本产品动作权限。"""
+        from deeptutor.persistence.postgres.scope import GlobalScope
+
+        from ..management.authorization import (
+            ManagementAuthorizationDenied,
+            require_management_permission,
+        )
+        from ..oms.identity import PlatformAccountInactive, trusted_oms_identity_from_token
+
+        bearer = request.headers.get("authorization", "")
+        if not bearer.lower().startswith("bearer "):
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        try:
+            actor = await trusted_oms_identity_from_token(enterprise, bearer[7:])
+        except PlatformAccountInactive:
+            return JSONResponse({"detail": "Account unavailable"}, status_code=403)
+        except PermissionError:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Identity unavailable"}, status_code=503)
+        try:
+            scope = (
+                GlobalScope("@oms-access")
+                if target_school_id is None
+                else TenantScope(str(target_school_id), "@oms-access")
+            )
+            async with enterprise.db.transaction(scope) as c:
+                await require_management_permission(
+                    c, actor, "ops.oms.access", target_school_id=target_school_id,
+                    write=False,
+                )
+                decision = await require_management_permission(
+                    c, actor, action, target_school_id=target_school_id,
+                    write=False,
+                )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Permission unavailable"}, status_code=503)
+        return actor, decision
+
+    @oms.get("/me")
+    async def oms_me(request: Request):
+        """独立 OMS 平台主体入口；不复用租户会话或 JWT 中的角色。"""
+
+        authorized = await _authorize_oms_request(request, "ops.oms.access")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, decision = authorized
+        return {
+            "application": "oms",
+            "subject": actor.subject,
+            "policy_version": decision.policy_version,
+        }
+
+    @oms.get("/models")
+    async def oms_models(request: Request):
+        """只展示当前部署的模型标识；不将部署配置冒充 OMS 可发布草稿。"""
+
+        authorized = await _authorize_oms_request(request, "ops.providers.read")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        return {
+            "models": [
+                {
+                    "profile_id": model.profile_id,
+                    "model_id": model.model_id,
+                    "model": model.model,
+                    "provider": model.provider,
+                    "source": "deployment",
+                    "managed": False,
+                    "status": "readiness_unverified",
+                }
+                for model in enterprise.deployment.models
+            ]
+        }
+
+    @oms.post("/models/draft")
+    async def oms_model_draft(request: Request, command: OmsModelDraftRequest):
+        """保存全局草稿；执行者确认与发布尚未装配，绝不激活此版本。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.model_drafts import ModelDraftConflict, save_global_model_draft
+
+        authorized = await _authorize_oms_request(request, "ops.providers.manage")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            version = await save_global_model_draft(
+                enterprise,
+                actor,
+                models=command.models,
+                expected_version=command.expected_version,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except ModelDraftConflict:
+            return JSONResponse({"detail": "Version conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid model draft"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+        return {"version": version, "status": "saved"}
+
+    @oms.get("/models/draft")
+    async def oms_model_draft_read(request: Request):
+        """只读脱敏草稿；目标执行者未确认前不显示为可用模型。"""
+
+        from deeptutor.persistence.postgres.scope import GlobalScope
+
+        from ..management.authorization import (
+            ManagementAuthorizationDenied,
+            require_management_permission,
+        )
+
+        authorized = await _authorize_oms_request(request, "ops.providers.read")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            async with enterprise.db.transaction(GlobalScope("@oms-model-draft-read")) as c:
+                await require_management_permission(c, actor, "ops.providers.read", write=False)
+                row = await (
+                    await c.execute(
+                        "SELECT version,status,desired FROM oms.model_catalog_config "
+                        "WHERE id='global'"
+                    )
+                ).fetchone()
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+        if row is None:
+            return {"version": 0, "status": "unconfigured", "models": []}
+        models = row["desired"].get("models")
+        if not isinstance(models, list):
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+        return {
+            "version": row["version"],
+            "status": row["status"],
+            "models": [
+                {
+                    "profile_id": model.get("profile_id"),
+                    "model_id": model.get("model_id"),
+                    "model": model.get("model"),
+                    "provider": model.get("provider"),
+                    "source": "oms_draft",
+                    "managed": True,
+                    "status": "not_active",
+                }
+                for model in models
+                if isinstance(model, dict)
+            ],
+        }
+
+    @oms.post("/skills/draft")
+    async def oms_skill_draft(request: Request):
+        """仅接受完整 ZIP；无权者在解析 multipart 前即被拒绝。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.skill_package import SkillPackageRejected
+        from ..oms.skill_store import SkillDraftConflict, upload_global_skill
+
+        authorized = await _authorize_oms_request(request, "ops.skills.manage")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        length = request.headers.get("content-length")
+        if length and (not length.isdecimal() or int(length) > 20_100_000):
+            return JSONResponse({"detail": "Skill package too large"}, status_code=413)
+        try:
+            async with request.form(max_files=1, max_fields=2, max_part_size=4096) as form:
+                upload = form.get("file")
+                raw_version = form.get("expected_version")
+                reason = form.get("reason")
+                if (
+                    not isinstance(upload, UploadFile)
+                    or upload.content_type != "application/zip"
+                    or not isinstance(raw_version, str)
+                    or not raw_version.isascii()
+                    or not raw_version.isdecimal()
+                    or not isinstance(reason, str)
+                ):
+                    return JSONResponse({"detail": "Invalid Skill package"}, status_code=422)
+                payload = bytearray()
+                while chunk := await upload.read(64 * 1024):
+                    if len(payload) + len(chunk) > 20_000_000:
+                        return JSONResponse({"detail": "Skill package too large"}, status_code=413)
+                    payload.extend(chunk)
+                result = await upload_global_skill(
+                    enterprise,
+                    actor,
+                    bytes(payload),
+                    expected_version=int(raw_version),
+                    reason=reason,
+                    request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+                )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except SkillDraftConflict:
+            return JSONResponse({"detail": "Version conflict"}, status_code=409)
+        except (SkillPackageRejected, ValueError):
+            return JSONResponse({"detail": "Invalid Skill package"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Skill storage unavailable"}, status_code=503)
+        return {
+            "revision_id": str(result.revision_id),
+            "name": result.name,
+            "version": result.version,
+            "sha256": result.sha256,
+            "status": result.status,
+        }
+
+    @oms.post("/skills/revisions/{revision_id}/review")
+    async def oms_skill_review(
+        request: Request, revision_id: UUID, command: OmsSkillReviewRequest
+    ):
+        """只允许独立审查人；服务端复读不可变 ZIP，不能由按钮伪造审查。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.skill_package import SkillPackageRejected
+        from ..oms.skill_store import SkillReviewConflict, review_global_skill
+
+        authorized = await _authorize_oms_request(request, "ops.skills.review")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await review_global_skill(
+                enterprise, actor, revision_id,
+                expected_sha256=command.expected_sha256,
+                approved=command.approved,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+                code_review_evidence=command.code_review_evidence,
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except SkillReviewConflict:
+            return JSONResponse({"detail": "Skill review conflict"}, status_code=409)
+        except (SkillPackageRejected, ValueError):
+            return JSONResponse({"detail": "Invalid Skill review"}, status_code=422)
+        except (RuntimeError, psycopg.Error, OSError):
+            return JSONResponse({"detail": "Skill review unavailable"}, status_code=503)
+        return {
+            "review_id": str(result.review_id),
+            "revision_id": str(result.revision_id),
+            "approved": result.approved,
+            "code_file_count": result.code_file_count,
+            "replayed": result.replayed,
+        }
+
+    @oms.post("/skills/revisions/{revision_id}/publish")
+    async def oms_skill_publish(
+        request: Request, revision_id: UUID, command: OmsSkillPublishRequest
+    ):
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.skill_store import SkillReviewConflict, publish_global_skill
+
+        authorized = await _authorize_oms_request(request, "ops.skills.publish")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await publish_global_skill(
+                enterprise, actor, revision_id,
+                expected_version=command.expected_version,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except SkillReviewConflict:
+            return JSONResponse({"detail": "Skill publication conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid Skill publication"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Skill publication unavailable"}, status_code=503)
+        return {
+            "publication_id": str(result.publication_id),
+            "revision_id": str(result.revision_id),
+            "review_id": str(result.review_id),
+            "version": result.version,
+        }
+
+    @oms.post("/skills/{name}/schools/{school_id}/grant")
+    async def oms_skill_grant(
+        request: Request, name: str, school_id: UUID, command: OmsSkillGrantRequest
+    ):
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.skill_store import SkillReviewConflict, grant_global_skill
+
+        authorized = await _authorize_oms_request(
+            request, "ops.skills.grant", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await grant_global_skill(
+                enterprise, actor, school_id, name,
+                expected_grant_version=command.expected_grant_version,
+                expires_at=command.expires_at,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except SkillReviewConflict:
+            return JSONResponse({"detail": "Skill grant conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid Skill grant"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Skill grant unavailable"}, status_code=503)
+        return {
+            "school_id": str(result.school_id), "name": result.name,
+            "revision_id": str(result.revision_id),
+            "grant_version": result.grant_version,
+            "publication_version": result.publication_version,
+            "status": result.status,
+        }
+
+    @oms.delete("/skills/{name}/schools/{school_id}/grant")
+    async def oms_skill_revoke(
+        request: Request, name: str, school_id: UUID, command: OmsSkillRevokeRequest
+    ):
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.skill_store import SkillReviewConflict, revoke_global_skill
+
+        authorized = await _authorize_oms_request(
+            request, "ops.skills.grant", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await revoke_global_skill(
+                enterprise, actor, school_id, name,
+                expected_grant_version=command.expected_grant_version,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except SkillReviewConflict:
+            return JSONResponse({"detail": "Skill grant conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid Skill grant"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Skill grant unavailable"}, status_code=503)
+        return {
+            "school_id": str(result.school_id), "name": result.name,
+            "revision_id": str(result.revision_id),
+            "grant_version": result.grant_version,
+            "publication_version": result.publication_version,
+            "status": result.status,
+        }
 
     async def require_audit_admin():
         identity = await enterprise.identity.authenticate(current_token())
@@ -909,6 +1321,7 @@ def create_application(enterprise):
             (auth, "/api/auth"),
             (eduplus2_auth, "/api/v1"),
             (tms_bootstrap, "/api/v1/tms"),
+            (oms, "/api/v1/oms"),
             (eduplus2_audit, "/api/v1/enterprise/audit/eduplus2"),
             (conversation_test, "/api/v1/enterprise/conversation-test"),
             # Next/AppShell 在登录前会读取界面语言和主题。只挂载核心的

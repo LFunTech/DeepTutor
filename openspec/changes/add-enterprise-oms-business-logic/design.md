@@ -2,6 +2,18 @@
 
 > 2026-09-27 用户确认 OMS 应用权限由 DeepTutor 自主管理且不得修改 EduPlus2；本次权威模型修订版已单独获批。既有内部实现证据见 `implementation-evidence.md`，不据此开放平台写 API。
 
+## test-cn 首个 Agent 的正式 OMS 优先切片
+
+用户将首轮目标限定为 **test-cn 独立正式 OMS 中真实维护模型和 global Skill，并在指定测试学校下由受控服务主体运行首个 Agent**；本轮不开放学校用户入口。这改变交付顺序，不降低下文权限、配置生效、Skill 审查、总账和真实执行门禁，也不把开发态原型提升为生产数据源。完成这条纵向链路不等于其余 OMS/TMS 或全服务 Provider change 完成。
+
+1. **身份与入口先行**：核实既存 `eduplus-platform-admin` 授权码登录、issuer/`azp`/audience、稳定 `sub` 和在线账号状态；独立 OMS 会话默认零权。DeepTutor Enterprise 程序按版本化 PG 事实授权 `ops.oms.access`、`ops.providers.read/manage`、`ops.credentials.manage`、`ops.skills.*` 及指定学校范围，首位平台管理员只经受控登记。未核实外部身份或未建立本产品授权时正式写 API 关闭；不得用现有 EduPlus2 运营页面会话、JWT role、学校账号或 Webhook Secret 代替。
+2. **可运行的模型配置**：OMS 独立前端只消费受保护的 `/api/v1/oms/*` API；连接、模型和 Secret ref 在企业 PG 中版本化，按 DeepTutor 既有 descriptor 校验。草稿、静态验证、目标执行者装载确认、发布、回退和审计均为真实状态；部分确认保留旧 active。首个 Agent 所需的模型类型须实际装载并完成调用前准入，不得将保存草稿或单 Pod 内存状态展示为全体生效。
+3. **可运行的 Skill**：global 非 builtin 仅接受完整 ZIP，服务端校验 `SKILL.md`、文件安全与摘要，将不可变包置于企业对象存储、元数据/审查/发布/学校授权置于 PG；builtin 按打包版本只读且默认零学校授权。目标学校的 Skill manifest、显式选择、`read_skill` 与 `always` 注入共享同一授权解析，脚本/`always` 未经审查不执行；OMS 原型 fixture、浏览器预检和用户级 `/api/skills` 不作为正式写入路径。
+4. **受控 Agent 联调**：先由用户指定测试学校并只读核对 Webhook 当前订阅/稳定绑定；学校 AI 本地 ready、服务授权、有限供给、赠送/充值额度和明确的服务主体 grant 均须经正式流程建立。任何向供应商发出的可计费测试先预留、按真实 attempt/usage 结算或保持待核对；Agent 子调用不得双扣。未满足其中任一项时可以做静态配置验证，但不发供应商请求。首轮不开放学校用户登录/入口，也不授予普通账号跨校能力。
+5. **test-cn 交付**：独立构建/部署 OMS 与后端迁移，CI 注入 Secret 引用而非明文入库；验证管理员/无权者、错学校、Secret 脱敏、版本冲突、部分发布失败、Skill 未授权和执行者重启，随后以指定学校受控服务主体完成真实 Agent 调用、用量/审计回读与回退。当前 test-cn 仅部署后端/文档服务，`/oms` 尚未作为正式应用部署；发布前不能声称本切片已可用。
+
+该切片还需在本仓库后续权限目录迁移中明确 Skill 动作，而非借用 `ops.oms.access` 或 Provider 写权：`ops.skills.read/manage/review/publish` 为 `platform` 范围，`ops.skills.grant` 为目标 `school` 范围。管理包、记录实际安全审查、发布版本和向学校授权分别判定并审计；建议配置管理员显式获 `read/manage/publish`，安全管理员显式获 `read/review`，获目标学校授权的运营员显式获 `grant`，组合角色仍受明确委托上界和审计约束。模板登记不自动给任何新登录主体赋权。正式 API、前端菜单/按钮和受控 CLI 使用同一动作 key，已有 migration 不回改，只新增版本。首个测试 Agent 的后台服务主体也不得继承平台人员权限：它只在选定学校、选定服务/Skill 和有限有效期内获得显式执行 grant。
+
 ## Context
 
 范围见 [proposal](proposal.md)，验收语义见 [delta spec](specs/enterprise-oms-business-logic/spec.md)。[OMS 原型](../add-c1-oms-operations-prototype/design.md)已定义运营人员逐级列表→详情 IA、五类资源与 OMS/TMS 独立部署，但没有给出可实施的业务状态和事务边界。[现状审计](../add-c1-oms-operations-prototype/readiness-audit.md)、[设置属性清单](../add-c1-oms-operations-prototype/settings-attribute-inventory.md)与[资源作用域清单](../add-c1-oms-operations-prototype/resource-scope-inventory.md)是源码依据，不是运行能力已实现的证据。
@@ -23,7 +35,7 @@
 ## Goals / Non-Goals
 
 - 目标：给出能够推导 API、持久化、权限、服务准入与验收的稳定业务模型，并以 DeepTutor 真实设置/执行逻辑为核心；单次服务执行可以完整追溯供给、租户授予及用量。
-- 非目标：在 EduPlus2 仓库、Keycloak 或 OpenFGA 中增改 OMS 角色/client/relation、迁移或运行数据；不部署 OMS、采购真实供应商资源；不建设租户售价、费用、账单、欠费、支付或“停整个租户”的额度政策；不把 OMS 变成学员私有内容后台。
+- 非目标：在 EduPlus2 仓库、Keycloak 或 OpenFGA 中增改 OMS 角色/client/relation、迁移或运行数据；不由**本业务契约 change 单独**执行 OMS 发布或采购真实供应商资源（test-cn 独立前端/后端部署与联调须联合所属实施 change 和发布流程）；不建设租户售价、费用、账单、欠费、支付或“停整个租户”的额度政策；不把 OMS 变成学员私有内容后台。
 
 ## Decisions
 

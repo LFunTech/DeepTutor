@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 
 from deeptutor.runtime.externalized_providers import ObjectBlobRef, ObjectStoreError
@@ -20,6 +21,8 @@ class RecordingObjectStore:
         self.gets: list[str] = []
         self.deletes: list[str] = []
         self.fail_delete_once = False
+        self.on_delete = None
+        self.on_delete_failure = None
 
     def put_bytes(
         self,
@@ -52,7 +55,11 @@ class RecordingObjectStore:
         self.deletes.append(ref.key)
         if self.fail_delete_once:
             self.fail_delete_once = False
+            if self.on_delete_failure is not None:
+                self.on_delete_failure(ref.key)
             raise ObjectStoreError("objectstore_unavailable", retryable=True)
+        if self.on_delete is not None:
+            self.on_delete(ref.key)
         self.objects.pop(ref.key, None)
 
 
@@ -84,6 +91,354 @@ async def _upload_and_link(store, files, *, payload: bytes = b"actual bytes"):
         attachments=[{"id": "same", "url": url, "filename": "a.txt"}],
     )
     return url, key, message_id
+
+
+async def test_unknown_session_object_state_blocks_externalized_read_and_withdraw(
+    store, migrated_pg
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    _, object_id, _ = await _upload_and_link(store, files)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.get_operation(object_id)
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.list_operations()
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.read_attachment(session_id="s", attachment_id=object_id, filename="a.txt")
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.withdraw_operation(object_id)
+    assert object_store.gets == [] and object_store.deletes == []
+
+
+async def test_unknown_session_object_state_blocks_externalized_cleanup(
+    store, migrated_pg
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    _, object_id, message_id = await _upload_and_link(store, files)
+    await store.delete_message(message_id)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.list_cleanup()
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.cleanup_pending()
+    assert object_store.deletes == []
+
+
+@pytest.mark.parametrize(
+    ("constraint", "mutation", "message"),
+    [
+        ("resource_objects_state_check", "state='future-state'", "resource state is unknown"),
+        (
+            "resource_objects_retention_check",
+            "retention='future-retention'",
+            "resource retention is unknown",
+        ),
+    ],
+)
+async def test_unknown_resource_business_state_blocks_externalized_attachment_read(
+    store, migrated_pg, constraint, mutation, message
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    _, object_id, _ = await _upload_and_link(store, files)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.resource_objects SET {mutation} "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (*store._owner, object_id),
+            )
+    with pytest.raises(ValueError, match=message):
+        await files.read_attachment(session_id="s", attachment_id=object_id, filename="a.txt")
+    assert object_store.gets == []
+
+
+@pytest.mark.parametrize(
+    ("constraint", "mutation", "message"),
+    [
+        ("resource_objects_state_check", "state='future-state'", "resource state is unknown"),
+        (
+            "resource_objects_retention_check",
+            "retention='future-retention'",
+            "resource retention is unknown",
+        ),
+    ],
+)
+async def test_unknown_resource_business_state_blocks_externalized_cleanup(
+    store, migrated_pg, constraint, mutation, message
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    _, object_id, message_id = await _upload_and_link(store, files)
+    await store.delete_message(message_id)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.resource_objects SET {mutation} "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (*store._owner, object_id),
+            )
+    with pytest.raises(ValueError, match=message):
+        await files.list_cleanup()
+    with pytest.raises(ValueError, match=message):
+        await files.cleanup_pending()
+    assert object_store.deletes == []
+
+
+async def test_upload_publish_does_not_overwrite_unknown_session_object_state(
+    store, migrated_pg, monkeypatch
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    await store.create_session(session_id="s")
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+        )
+    original_put = object_store.put_bytes
+
+    def put_and_corrupt(*args, **kwargs):
+        ref = original_put(*args, **kwargs)
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, ref.key.rsplit("/", 1)[-1]),
+            )
+        return ref
+
+    monkeypatch.setattr(object_store, "put_bytes", put_and_corrupt)
+    with pytest.raises(ValueError, match="session object state is unknown") as failure:
+        await files.put(session_id="s", attachment_id="a", filename="a.txt", data=b"bytes")
+    object_id = failure.value.resource_operation_id
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT state FROM enterprise.session_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+        ).fetchone()
+    assert row["state"] == "future-state"
+    assert object_store.deletes == []
+
+
+async def test_unknown_cleanup_job_state_blocks_externalized_attachment_deletion(
+    store, migrated_pg
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    _, object_id, message_id = await _upload_and_link(store, files)
+    await store.delete_message(message_id)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "INSERT INTO enterprise.resource_cleanup_jobs(tenant_id,owner_id,object_id) "
+                "VALUES(%s,%s,%s)",
+                (*store._owner, object_id),
+            )
+            await connection.execute(
+                "ALTER TABLE enterprise.resource_cleanup_jobs "
+                "DROP CONSTRAINT IF EXISTS resource_cleanup_jobs_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.resource_cleanup_jobs SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+    with pytest.raises(ValueError, match="resource cleanup job state is unknown"):
+        await files.list_cleanup()
+    with pytest.raises(ValueError, match="resource cleanup job state is unknown"):
+        await files.cleanup_pending()
+    assert object_store.deletes == []
+
+
+@pytest.mark.parametrize(
+    ("table", "key_column", "constraint", "message"),
+    [
+        (
+            "session_objects",
+            "object_id",
+            "session_objects_state_check",
+            "session object state is unknown",
+        ),
+        (
+            "resource_objects",
+            "id",
+            "resource_objects_state_check",
+            "resource state is unknown",
+        ),
+        (
+            "resource_cleanup_jobs",
+            "object_id",
+            "resource_cleanup_jobs_state_check",
+            "resource cleanup job state is unknown",
+        ),
+    ],
+)
+async def test_externalized_cleanup_rechecks_state_after_object_delete(
+    store, migrated_pg, table, key_column, constraint, message,
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    _, object_id, message_id = await _upload_and_link(store, files)
+    await store.delete_message(message_id)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(f"ALTER TABLE enterprise.{table} DROP CONSTRAINT IF EXISTS {constraint}")
+
+    def corrupt_after_delete(_key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                f"UPDATE enterprise.{table} SET state='future-state' "
+                f"WHERE tenant_id=%s AND owner_id=%s AND {key_column}=%s",
+                (*store._owner, object_id),
+            )
+
+    object_store.on_delete = corrupt_after_delete
+    with pytest.raises(ValueError, match=message):
+        await files.cleanup_pending()
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT o.state AS session_state,r.state AS resource_state,j.state AS job_state "
+                "FROM enterprise.session_objects o "
+                "JOIN enterprise.resource_objects r "
+                "ON (r.tenant_id,r.owner_id,r.id)=(o.tenant_id,o.owner_id,o.object_id) "
+                "JOIN enterprise.resource_cleanup_jobs j "
+                "ON (j.tenant_id,j.owner_id,j.object_id)=(o.tenant_id,o.owner_id,o.object_id) "
+                "WHERE o.tenant_id=%s AND o.owner_id=%s AND o.object_id=%s",
+                (*store._owner, object_id),
+            )
+        ).fetchone()
+    assert row == {
+        "session_state": "future-state" if table == "session_objects" else "cleanup",
+        "resource_state": "future-state" if table == "resource_objects" else "delete-pending",
+        "job_state": "future-state" if table == "resource_cleanup_jobs" else "running",
+    }
+
+
+@pytest.mark.parametrize(
+    ("table", "key_column", "constraint", "message"),
+    [
+        (
+            "session_objects",
+            "object_id",
+            "session_objects_state_check",
+            "session object state is unknown",
+        ),
+        (
+            "resource_objects",
+            "id",
+            "resource_objects_state_check",
+            "resource state is unknown",
+        ),
+        (
+            "resource_cleanup_jobs",
+            "object_id",
+            "resource_cleanup_jobs_state_check",
+            "resource cleanup job state is unknown",
+        ),
+    ],
+)
+async def test_externalized_cleanup_failure_rechecks_state_after_object_error(
+    store, migrated_pg, table, key_column, constraint, message,
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    _, object_id, message_id = await _upload_and_link(store, files)
+    await store.delete_message(message_id)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(f"ALTER TABLE enterprise.{table} DROP CONSTRAINT IF EXISTS {constraint}")
+
+    def corrupt_on_delete_error(_key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                f"UPDATE enterprise.{table} SET state='future-state' "
+                f"WHERE tenant_id=%s AND owner_id=%s AND {key_column}=%s",
+                (*store._owner, object_id),
+            )
+
+    object_store.fail_delete_once = True
+    object_store.on_delete_failure = corrupt_on_delete_error
+    with pytest.raises(ValueError, match=message):
+        await files.cleanup_pending()
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT o.state AS session_state,r.state AS resource_state,j.state AS job_state "
+                "FROM enterprise.session_objects o "
+                "JOIN enterprise.resource_objects r "
+                "ON (r.tenant_id,r.owner_id,r.id)=(o.tenant_id,o.owner_id,o.object_id) "
+                "JOIN enterprise.resource_cleanup_jobs j "
+                "ON (j.tenant_id,j.owner_id,j.object_id)=(o.tenant_id,o.owner_id,o.object_id) "
+                "WHERE o.tenant_id=%s AND o.owner_id=%s AND o.object_id=%s",
+                (*store._owner, object_id),
+            )
+        ).fetchone()
+    assert row == {
+        "session_state": "future-state" if table == "session_objects" else "cleanup",
+        "resource_state": "future-state" if table == "resource_objects" else "delete-pending",
+        "job_state": "future-state" if table == "resource_cleanup_jobs" else "running",
+    }
+    assert list(object_store.objects.values()) == [b"actual bytes"]
+
+
+async def test_externalized_delete_attachment_does_not_overwrite_unknown_state(
+    store, migrated_pg
+):
+    object_store = RecordingObjectStore()
+    files = externalized_store(store, object_store)
+    await store.create_session(session_id="s")
+    url = await files.put(session_id="s", attachment_id="a", filename="a.txt", data=b"bytes")
+    object_id = url.split("/")[-2]
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.delete_attachment("s", object_id)
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT state FROM enterprise.session_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+        ).fetchone()
+    assert row["state"] == "future-state"
+    assert object_store.deletes == []
 
 
 async def test_externalized_attachment_writes_objectstore_and_pg_metadata_before_read(

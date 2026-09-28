@@ -568,6 +568,95 @@ async def test_bad_reading_session_reference_rolls_back_all_sources(
     assert reading_count[0] == 0
 
 
+@pytest.mark.parametrize("column,value", [
+    ("source_kind", "future-source"),
+    ("status", "future-state"),
+    ("progress", 0),
+])
+async def test_reading_import_rejects_unknown_or_inconsistent_material_state_in_program(
+    tmp_path: Path, migrated_pg, business_actors, column, value,
+) -> None:
+    from deeptutor.persistence.postgres.offline_import.learning_reading_sqlite import (
+        SQLiteLearningReadingImporter,
+    )
+
+    actor = business_actors.tenants[0].owners[0]
+    source = _make_reading_source(tmp_path / "invalid-reading")
+    with sqlite3.connect(source) as c:
+        c.execute(f"UPDATE reading_materials SET {column}=?", (value,))
+    manifest = _snapshot(
+        source, tmp_path / "invalid-artifact", source_id="invalid-reading",
+        source_version="reading_catalog_sqlite/v1", tenant_id=actor.tenant_id,
+        source_owner="legacy-user", target_owner=actor.user_id,
+    )
+    with pytest.raises(ValueError, match="source|state|progress"):
+        await SQLiteLearningReadingImporter(migrated_pg.admin_dsn).import_manifest(
+            manifest, operator="unit-test"
+        )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as c:
+        row = await (
+            await c.execute(
+                "SELECT count(*) FROM enterprise.reading_materials "
+                "WHERE tenant_id=%s AND owner_id=%s",
+                (actor.tenant_id, actor.user_id),
+            )
+        ).fetchone()
+        assert row == (0,)
+
+
+@pytest.mark.parametrize(
+    ("table", "column", "value", "constraint", "message"),
+    [
+        ("mastery_interactions", "status", "future-state", "mastery_interactions_status_check", "interaction status is unknown"),
+        ("mastery_topic_meta", "status", "future-state", "mastery_topic_meta_status_check", "topic status is unknown"),
+        ("mastery_topic_sources", "kind", "future-kind", "mastery_topic_sources_kind_check", "source kind is unknown"),
+        ("mastery_topic_sources", "external_id", "", "mastery_topic_sources_check", "chat source id is required"),
+    ],
+)
+async def test_mastery_import_rejects_unknown_business_state_without_database_checks(
+    tmp_path: Path,
+    migrated_pg,
+    business_actors,
+    pg_session_store_factory,
+    table,
+    column,
+    value,
+    constraint,
+    message,
+) -> None:
+    from deeptutor.persistence.postgres.offline_import.learning_reading_sqlite import (
+        SQLiteLearningReadingImporter,
+    )
+
+    actor = business_actors.tenants[0].owners[0]
+    await _seed_existing_mapping(migrated_pg, actor, pg_session_store_factory)
+    source = _make_mastery_v2_source(tmp_path / "mastery")
+    with sqlite3.connect(source) as connection:
+        predicate = " WHERE source_id='source-chat'" if table == "mastery_topic_sources" else ""
+        connection.execute(f"UPDATE {table} SET {column}=?{predicate}", (value,))
+    manifest = _snapshot(
+        source,
+        tmp_path / "mastery-artifact",
+        source_id="invalid-mastery",
+        source_version="mastery_sqlite/v2",
+        tenant_id=actor.tenant_id,
+        source_owner="legacy-user",
+        target_owner=actor.user_id,
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(f"ALTER TABLE enterprise.{table} DROP CONSTRAINT IF EXISTS {constraint}")
+    with pytest.raises(ValueError, match=message):
+        await SQLiteLearningReadingImporter(migrated_pg.admin_dsn).import_manifest(
+            manifest, operator="unit-test"
+        )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        result = await connection.execute(
+            "SELECT count(*) FROM enterprise.mastery_paths WHERE tenant_id=%s AND owner_id=%s",
+            (actor.tenant_id, actor.user_id),
+        )
+        assert await result.fetchone() == (0,)
+
+
 async def test_different_reading_sources_with_conflicting_material_id_are_rejected_atomically(
     tmp_path: Path, migrated_pg, business_actors
 ) -> None:
@@ -610,3 +699,45 @@ async def test_different_reading_sources_with_conflicting_material_id_are_reject
             )
         ).fetchone()
     assert row[0] == 0
+
+
+async def test_reading_import_rejects_unknown_existing_target_before_conflict_comparison(
+    tmp_path: Path, migrated_pg, business_actors, business_sync_database,
+) -> None:
+    from deeptutor.persistence.postgres.offline_import.learning_reading_sqlite import (
+        SQLiteLearningReadingImporter,
+    )
+    from deeptutor.persistence.postgres.reading import AsyncReadingCatalogStore
+
+    actor = business_actors.tenants[0].owners[0]
+    target = AsyncReadingCatalogStore(business_sync_database, actor.scope)
+    await target.run(
+        lambda unit: unit.upsert_material(
+            content_id="content-A", material_id="dup-material", filename="A.pdf",
+            title="A", source_kind="file", status="ready",
+        )
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.reading_materials "
+                "DROP CONSTRAINT IF EXISTS reading_materials_source_kind_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.reading_materials SET source_kind='future-source' "
+                "WHERE tenant_id=%s AND owner_id=%s AND material_id='dup-material'",
+                (actor.tenant_id, actor.user_id),
+            )
+    manifest = _snapshot(
+        _make_reading_duplicate_source(tmp_path / "existing-target", title="A"),
+        tmp_path / "existing-target-artifact",
+        source_id="existing-target",
+        source_version="reading_catalog_sqlite/v1",
+        tenant_id=actor.tenant_id,
+        source_owner="legacy-user",
+        target_owner=actor.user_id,
+    )
+    with pytest.raises(ValueError, match="source|state"):
+        await SQLiteLearningReadingImporter(migrated_pg.admin_dsn).import_manifest(
+            manifest, operator="unit-test"
+        )

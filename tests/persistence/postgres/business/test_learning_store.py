@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import threading
 
+import psycopg
 import pytest
 
 from deeptutor.learning.event_hub import mastery_topic_event_hub
@@ -187,6 +188,157 @@ async def test_interaction_state_machine_event_cursor_and_redaction(
     with pytest.raises(LearningStoreError, match="transition"):
         await store.run(reopen)
     assert await store.run(lambda unit: unit.get_active_interaction("p")) is None
+
+
+async def test_unknown_persisted_interaction_status_cannot_hide_from_active_or_new_write(
+    business_sync_database, business_actors, pg_scope_factory, pg_dsn,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store = _factory(business_sync_database, pg_scope_factory, actor)
+
+    def create(unit):
+        with unit.transaction("p", create=True) as tx:
+            tx.progress.modules = _modules()
+            tx.put_topic(TopicMetadata(path_id="p"), [])
+            tx.put_interaction(
+                MasteryInteraction(
+                    interaction_id="old",
+                    path_id="p",
+                    question=PendingQuestion(question_id="old", knowledge_point_id="kp"),
+                )
+            )
+
+    await store.run(create)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.mastery_interactions "
+                "DROP CONSTRAINT IF EXISTS mastery_interactions_status_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.mastery_interactions SET status='future-status' "
+                "WHERE tenant_id=%s AND owner_id=%s AND path_id='p' AND interaction_id='old'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    with pytest.raises(ValueError, match="interaction status is unknown"):
+        await store.run(lambda unit: unit.get_active_interaction("p"))
+    with pytest.raises(ValueError, match="interaction status is unknown"):
+        await store.run(lambda unit: unit.get_topic_snapshot("p"))
+    with pytest.raises(ValueError, match="interaction status is unknown"):
+        await store.run(lambda unit: unit.list_topic_page())
+
+    def abandon(unit):
+        with unit.transaction("p") as transaction:
+            transaction.abandon_active_interactions()
+
+    with pytest.raises(ValueError, match="interaction status is unknown"):
+        await store.run(abandon)
+
+    def create_another(unit):
+        with unit.transaction("p") as tx:
+            tx.put_interaction(
+                MasteryInteraction(
+                    interaction_id="new",
+                    path_id="p",
+                    question=PendingQuestion(question_id="new", knowledge_point_id="kp"),
+                )
+            )
+
+    with pytest.raises(ValueError, match="interaction status is unknown"):
+        await store.run(create_another)
+    assert await store.run(lambda unit: unit.get_interaction("p", "new")) is None
+
+
+async def test_unknown_topic_status_cannot_hide_from_active_queries(
+    business_sync_database, business_actors, pg_scope_factory, pg_dsn,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store = _factory(business_sync_database, pg_scope_factory, actor)
+    await store.run(lambda unit: unit.save(LearningProgress(book_id="p")))
+    await store.run(lambda unit: unit.put_topic(TopicMetadata(path_id="p", goal="Synthetic"), []))
+    assert await store.run(lambda unit: unit.has_active_topics()) is True
+    assert len((await store.run(lambda unit: unit.list_topic_page())).items) == 1
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.mastery_topic_meta "
+                "DROP CONSTRAINT IF EXISTS mastery_topic_meta_status_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.mastery_topic_meta SET status='future-status' "
+                "WHERE tenant_id=%s AND owner_id=%s AND path_id='p'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    with pytest.raises(ValueError, match="topic status is unknown"):
+        await store.run(lambda unit: unit.has_active_topics())
+    with pytest.raises(ValueError, match="topic status is unknown"):
+        await store.run(lambda unit: unit.list_topic_page())
+    with pytest.raises(ValueError, match="topic status is unknown"):
+        await store.run(
+            lambda unit: unit.put_topic(TopicMetadata(path_id="p", goal="Must not overwrite"), [])
+        )
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        result = await connection.execute(
+            "SELECT status,goal FROM enterprise.mastery_topic_meta "
+            "WHERE tenant_id=%s AND owner_id=%s AND path_id='p'",
+            (actor.tenant_id, actor.user_id),
+        )
+        assert await result.fetchone() == ("future-status", "Synthetic")
+
+
+@pytest.mark.parametrize(
+    ("constraint", "corruption", "message"),
+    [
+        ("mastery_topic_sources_kind_check", "kind='future-kind'", "source kind is unknown"),
+        ("mastery_topic_sources_check", "kind='chat',external_id=''", "chat source id is required"),
+    ],
+)
+async def test_unknown_topic_source_cannot_be_read_or_overwritten(
+    constraint,
+    corruption,
+    message,
+    business_sync_database,
+    business_actors,
+    pg_scope_factory,
+    pg_dsn,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store = _factory(business_sync_database, pg_scope_factory, actor)
+    await store.run(lambda unit: unit.save(LearningProgress(book_id="p")))
+    await store.run(
+        lambda unit: unit.put_topic(
+            TopicMetadata(path_id="p"),
+            [TopicSource(id="source", kind=TopicSourceKind.GOAL, label="Existing")],
+        )
+    )
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.mastery_topic_sources DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.mastery_topic_sources SET {corruption} "
+                "WHERE tenant_id=%s AND owner_id=%s AND path_id='p' AND id='source'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    for operation in (
+        lambda unit: unit.get_topic("p"),
+        lambda unit: unit.list_topic_page(),
+        lambda unit: unit.put_topic(TopicMetadata(path_id="p"), []),
+    ):
+        with pytest.raises(ValueError, match=message):
+            await store.run(operation)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        result = await connection.execute(
+            "SELECT id FROM enterprise.mastery_topic_sources "
+            "WHERE tenant_id=%s AND owner_id=%s AND path_id='p'",
+            (actor.tenant_id, actor.user_id),
+        )
+        assert await result.fetchone() == ("source",)
 
 
 async def test_transaction_handles_expire_and_cannot_cross_threads(
@@ -461,8 +613,10 @@ async def test_two_connections_only_one_active_question_and_cross_path_id_reject
 
 
 async def test_all_learning_tables_are_private_to_owner_even_for_admin(
-    migrated_pg, business_sync_database, business_actors, pg_scope_factory, pg_session_store_factory
+    migrated_pg, business_sync_database, business_actors, pg_scope_factory,
+    pg_session_store_factory, restricted_business_dsn,
 ):
+    from deeptutor.persistence.postgres.connection import SyncDatabase
     from deeptutor.persistence.postgres.executor import ExecutorLease
     from deeptutor.persistence.postgres.learning import AsyncLearningStore, ExecutionAuthority
 
@@ -505,30 +659,34 @@ async def test_all_learning_tables_are_private_to_owner_even_for_admin(
             "mastery_path_operations",
             "mastery_path_leases",
         ]
-        for other in (
-            business_actors.tenants[0].owners[1],
-            business_actors.tenants[0].admin,
-            business_actors.tenants[1].owners[0],
-        ):
+        # 同时以独立非 owner 角色验收，避免只依赖 FORCE RLS 的表 owner 路径。
+        async with SyncDatabase(
+            restricted_business_dsn, resource="learning-rls-negative"
+        ) as restricted_db:
+            for other in (
+                business_actors.tenants[0].owners[1],
+                business_actors.tenants[0].admin,
+                business_actors.tenants[1].owners[0],
+            ):
 
-            def query(c):
-                from psycopg import sql
+                def query(c):
+                    from psycopg import sql
 
-                for table in tables:
-                    assert (
-                        c.execute(
-                            sql.SQL("SELECT * FROM enterprise.{}").format(sql.Identifier(table))
-                        ).fetchall()
-                        == []
-                    )
-                    assert (
-                        c.execute(
-                            sql.SQL("DELETE FROM enterprise.{}").format(sql.Identifier(table))
-                        ).rowcount
-                        == 0
-                    )
+                    for table in tables:
+                        assert (
+                            c.execute(
+                                sql.SQL("SELECT * FROM enterprise.{}").format(sql.Identifier(table))
+                            ).fetchall()
+                            == []
+                        )
+                        assert (
+                            c.execute(
+                                sql.SQL("DELETE FROM enterprise.{}").format(sql.Identifier(table))
+                            ).rowcount
+                            == 0
+                        )
 
-            await business_sync_database.run(pg_scope_factory(other), query)
+                await restricted_db.run(pg_scope_factory(other), query)
         assert (await store.run(lambda u: u.load("p"))).version == 1
     finally:
         await executor.close()

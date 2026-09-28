@@ -25,6 +25,7 @@ from .notebook_upsert import (
     reading_reference_query,
     require_mastery_reference,
     require_reading_reference,
+    validate_notebook_values,
 )
 
 
@@ -37,6 +38,7 @@ class PostgresNotebookMixin(PostgresNotebookCategoryMixin):
 
     @staticmethod
     def _serialize_notebook_entry(row: dict[str, Any]) -> dict[str, Any]:
+        validate_notebook_values(row)
         images = row.get("user_answer_images")
         return {
             "id": int(row["id"]),
@@ -107,6 +109,21 @@ class PostgresNotebookMixin(PostgresNotebookCategoryMixin):
                     if prepared is None:
                         continue
                     source, params = prepared
+                    existing = await (
+                        await connection.execute(
+                            "SELECT source,score_trend,material_id "
+                            "FROM enterprise.notebook_entries "
+                            "WHERE tenant_id=%s AND owner_id=%s AND session_id=%s "
+                            "AND turn_id=%s AND question_id=%s FOR UPDATE",
+                            (
+                                *self._owner, session_id,
+                                str(item.get("turn_id") or "").strip(),
+                                str(item.get("question_id") or "").strip(),
+                            ),
+                        )
+                    ).fetchone()
+                    if existing is not None:
+                        validate_notebook_values(existing)
                     if item.get("followup_session_id"):
                         await self._check_followup_session(connection, item["followup_session_id"])
                     if source == "mastery_path":
@@ -304,65 +321,80 @@ class PostgresNotebookMixin(PostgresNotebookCategoryMixin):
 
     async def question_bank_stats(self, session_ids: Sequence[str] | None = None) -> dict[str, int]:
         session_filter, params = self._session_scope_clause(session_ids)
+        totals = {key: 0 for key in ("total", "wrong", "unresolved", "bookmarked", "uncategorized")}
         async with self.db.transaction(self.scope) as connection:
-            row = await (
-                await connection.execute(
-                    """
-                    SELECT count(*) AS total,
-                      count(*) FILTER (WHERE NOT n.is_correct) AS wrong,
-                      count(*) FILTER (WHERE NOT n.is_correct AND NOT n.resolved) AS unresolved,
-                      count(*) FILTER (WHERE n.bookmarked) AS bookmarked,
-                      count(*) FILTER (WHERE NOT EXISTS(
+            rows = await connection.execute(
+                """
+                    SELECT n.source,n.score_trend,n.material_id,
+                      n.is_correct,n.resolved,n.bookmarked,
+                      NOT EXISTS(
                         SELECT 1 FROM enterprise.notebook_entry_categories ec
                         WHERE ec.tenant_id=n.tenant_id AND ec.owner_id=n.owner_id
-                          AND ec.entry_id=n.id)) AS uncategorized
+                          AND ec.entry_id=n.id) AS uncategorized
                     FROM enterprise.notebook_entries n
                     WHERE n.tenant_id=%s AND n.owner_id=%s
-                    """
-                    + session_filter,
-                    (*self._owner, *params),
-                )
-            ).fetchone()
-        return {
-            key: int(row[key] if row else 0)
-            for key in ("total", "wrong", "unresolved", "bookmarked", "uncategorized")
-        }
+                """
+                + session_filter,
+                (*self._owner, *params),
+            )
+            async for row in rows:
+                validate_notebook_values(row)
+                wrong = not row["is_correct"]
+                totals["total"] += 1
+                totals["wrong"] += wrong
+                totals["unresolved"] += wrong and not row["resolved"]
+                totals["bookmarked"] += bool(row["bookmarked"])
+                totals["uncategorized"] += bool(row["uncategorized"])
+        return totals
 
     async def list_question_bank_materials(
         self, session_ids: Sequence[str] | None = None
     ) -> list[dict[str, Any]]:
         session_filter, params = self._session_scope_clause(session_ids)
+        groups: dict[tuple[str, str], dict[str, Any]] = {}
         async with self.db.transaction(self.scope) as connection:
-            rows = await (
-                await connection.execute(
-                    """
-                    SELECT n.source,n.material_id,
-                      coalesce(nullif(max(n.material_title),''),n.material_id,'Unnamed material')
-                        AS material_title,
-                      count(*) AS entry_count,
-                      count(*) FILTER (WHERE NOT n.is_correct AND NOT n.resolved)
-                        AS unresolved_count
+            rows = await connection.execute(
+                """
+                    SELECT n.source,n.score_trend,n.material_id,
+                      coalesce(nullif(max(n.material_title) OVER (
+                        PARTITION BY n.source,n.material_id),''),
+                        n.material_id,'Unnamed material') AS material_title,
+                      n.is_correct,n.resolved
                     FROM enterprise.notebook_entries n
-                    WHERE n.tenant_id=%s AND n.owner_id=%s AND n.material_id<>''
-                    """
-                    + session_filter
-                    + " GROUP BY n.source,n.material_id"
-                    + " ORDER BY translate(coalesce(nullif(max(n.material_title),''),n.material_id),"
-                    + " 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz') COLLATE \"C\","
-                    + " n.source,n.material_id",
-                    (*self._owner, *params),
+                    WHERE n.tenant_id=%s AND n.owner_id=%s
+                """
+                + session_filter,
+                (*self._owner, *params),
+            )
+            async for row in rows:
+                validate_notebook_values(row)
+                material_id = row["material_id"]
+                if not material_id:
+                    continue
+                key = (row["source"], material_id)
+                if key not in groups:
+                    groups[key] = {
+                        "source": row["source"],
+                        "material_id": material_id,
+                        "material_title": row["material_title"],
+                        "entry_count": 0,
+                        "unresolved_count": 0,
+                    }
+                groups[key]["entry_count"] += 1
+                groups[key]["unresolved_count"] += (
+                    not row["is_correct"] and not row["resolved"]
                 )
-            ).fetchall()
-        return [
-            {
-                "source": row["source"],
-                "material_id": row["material_id"],
-                "material_title": row["material_title"],
-                "entry_count": int(row["entry_count"]),
-                "unresolved_count": int(row["unresolved_count"]),
-            }
-            for row in rows
-        ]
+        ascii_fold = str.maketrans(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+        )
+        return sorted(
+            groups.values(),
+            key=lambda item: (
+                item["material_title"].translate(ascii_fold),
+                item["source"],
+                item["material_id"],
+            ),
+        )
 
     async def _entry_with_categories(self, connection, where: str, params: Sequence[Any]):
         row = await (
@@ -476,6 +508,16 @@ class PostgresNotebookMixin(PostgresNotebookCategoryMixin):
                 await self._lock_notebook_export_scope(connection)
                 if fields.get("followup_session_id"):
                     await self._check_followup_session(connection, fields["followup_session_id"])
+                existing = await (
+                    await connection.execute(
+                        "SELECT source,score_trend,material_id "
+                        "FROM enterprise.notebook_entries "
+                        "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                        (*self._owner, entry_id),
+                    )
+                ).fetchone()
+                if existing is not None:
+                    validate_notebook_values(existing)
                 row = await (
                     await connection.execute(
                         f"UPDATE enterprise.notebook_entries SET {assignments},"
@@ -511,6 +553,16 @@ class PostgresNotebookMixin(PostgresNotebookCategoryMixin):
         try:
             async with self.db.transaction(self.scope) as connection:
                 await self._lock_notebook_export_scope(connection)
+                existing = await (
+                    await connection.execute(
+                        "SELECT source,score_trend,material_id "
+                        "FROM enterprise.notebook_entries "
+                        "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                        (*self._owner, entry_id),
+                    )
+                ).fetchone()
+                if existing is not None:
+                    validate_notebook_values(existing)
                 deleted = await (
                     await connection.execute(
                         "DELETE FROM enterprise.notebook_entries"

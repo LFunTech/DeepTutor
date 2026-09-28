@@ -13,6 +13,7 @@ from psycopg.types.json import Jsonb
 
 from deeptutor.learning.contracts import LearningReferenceError, LearningStoreError
 from deeptutor.learning.event_hub import publish_topic_signal
+from deeptutor.learning.models import InteractionStatus, TopicSourceKind
 from deeptutor.persistence.postgres._ownership import Lease
 from deeptutor.persistence.postgres.connection import CommitCompletedAfterCancellation, SyncDatabase
 from deeptutor.persistence.postgres.scope import TenantScope
@@ -27,6 +28,47 @@ def validate_id(value):
     if not value or any(part in value for part in ("/", "\\", "..", ":")):
         raise ValueError("invalid mastery path ID")
     return value
+
+
+def validate_topic_source_row(row):
+    if row["kind"] not in {kind.value for kind in TopicSourceKind}:
+        raise ValueError("mastery topic source kind is unknown")
+    if row["kind"] == TopicSourceKind.CHAT.value and not row["external_id"]:
+        raise ValueError("mastery chat source id is required")
+
+
+def validate_topic_status(value):
+    if value not in {"active", "archived"}:
+        raise ValueError("mastery topic status is unknown")
+    return value
+
+
+def validate_interaction_status(value):
+    try:
+        return InteractionStatus(value)
+    except ValueError as exc:
+        raise ValueError("mastery interaction status is unknown") from exc
+
+
+def validate_path_operation_row(row):
+    if row["status"] not in {"active", "completed", "failed", "interrupted"}:
+        raise ValueError("mastery path operation status is unknown")
+    if row["status"] == "active" and row["path_ref"] is None:
+        raise ValueError("active operation requires a path reference")
+
+
+def validate_path_lease_row(row):
+    kind = row["kind"]
+    if kind == "turn":
+        required = ("session_id", "turn_id", "worker_id", "fencing_token")
+        if any(row[name] is None for name in required) or row["operation_id"] is not None:
+            raise ValueError("mastery turn lease shape is invalid")
+    elif kind == "operation":
+        absent = ("session_id", "turn_id", "worker_id", "fencing_token")
+        if any(row[name] is not None for name in absent) or row["operation_id"] is None:
+            raise ValueError("mastery operation lease shape is invalid")
+    else:
+        raise ValueError("mastery path lease kind is unknown")
 
 
 def redact(value):

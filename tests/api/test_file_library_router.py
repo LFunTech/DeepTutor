@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
+
+pytest_plugins = ("tests.fixtures.postgres",)
 
 from deeptutor.services.auth import TokenPayload
 from deeptutor.services.storage.file_library import reset_file_library_store
@@ -16,39 +19,135 @@ LibraryAppFactory = Callable[..., tuple[TestClient, Path]]
 
 
 @pytest.fixture
-def library_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> LibraryAppFactory:
-    """Build a standalone FastAPI app with the file_library router.
+def library_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pg_dsn: str) -> LibraryAppFactory:
+    """Build a standalone FastAPI app with the PostgreSQL file_library router."""
+    from uuid import uuid4
 
-    Each test gets an isolated per-user workspace tree under ``tmp_path`` and
-    a fresh FileLibraryStore singleton (reset on teardown, since the store
-    cache is a process-wide module-level dict). Auth is disabled by default
-    so most tests don't need JWT tokens; pass ``auth_enabled=True`` and
-    ``tokens`` (mirroring ``tests/api/test_output_files.py``) to exercise
-    per-user isolation.
-    """
-    from deeptutor.api.routers import auth as auth_router
+    import psycopg
+
     from deeptutor.api.routers import file_library
-    from deeptutor.multi_user import paths as multi_user_paths
+    from deeptutor.multi_user.context import get_current_user
+    from deeptutor.persistence.postgres.connection import SyncDatabase
+    from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
+    from deeptutor.persistence.postgres.scope import TenantScope
+    from deeptutor.services.storage.file_library import FileLibraryStore
+    from tests.fixtures.postgres import single_database_user_dsn
 
-    admin_root = tmp_path / "data"
-    users_root = admin_root / "users"
-    monkeypatch.setattr(multi_user_paths, "ADMIN_WORKSPACE_ROOT", admin_root)
-    monkeypatch.setattr(multi_user_paths, "USERS_ROOT", users_root)
-    monkeypatch.setattr(multi_user_paths, "_path_services", {})
+    asyncio.run(MigrationRunner(pg_dsn).apply())
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    tenant_id = str(uuid4())
+    seeded_users = {
+        "u_default": ("default", "tenant_admin"),
+        "u_alice": ("alice", "user"),
+        "u_bob": ("bob", "user"),
+    }
+    with psycopg.connect(pg_dsn) as connection:
+        with connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO enterprise.tenants(
+                    id, external_eligibility, local_enabled, provisioning_status,
+                    auth_epoch, bootstrap_completed
+                ) VALUES (%s,'not_required',true,'ready','file-library-api-test',true)
+                """,
+                (tenant_id,),
+            )
+            for user_id, (username, role) in seeded_users.items():
+                connection.execute(
+                    """
+                    INSERT INTO enterprise.users(tenant_id,id,username,role)
+                    VALUES (%s,%s,%s,%s)
+                    """,
+                    (tenant_id, user_id, username, role),
+                )
+
+    sync_db = SyncDatabase(
+        runtime_dsn,
+        resource=f"file-library-api-{uuid4().hex[:8]}",
+        max_size=4,
+        max_waiting=8,
+    )
+    sync_db.__enter__()
+    stores: dict[str, FileLibraryStore] = {}
+
+    def current_store() -> FileLibraryStore:
+        user = get_current_user()
+        key = f"{user.scope.tenant_id}:{user.id}"
+        if key not in stores:
+            stores[key] = FileLibraryStore(
+                sync_db,
+                TenantScope(user.scope.tenant_id, user.id),
+                root=tmp_path / "library-files" / user.id,
+            )
+        return stores[key]
+
+    monkeypatch.setattr(file_library._fl, "get_file_library_store", current_store)
+
+    default_tokens = {
+        "default-token": TokenPayload(
+            username="default",
+            role="tenant_admin",
+            user_id="u_default",
+            tenant_id=tenant_id,
+        ),
+        "alice-token": TokenPayload(
+            username="alice",
+            role="user",
+            user_id="u_alice",
+            tenant_id=tenant_id,
+        ),
+        "bob-token": TokenPayload(
+            username="bob",
+            role="user",
+            user_id="u_bob",
+            tenant_id=tenant_id,
+        ),
+    }
+
+    class _AuthProvider:
+        cookie_secure = False
+
+        def __init__(self, payloads: dict[str, TokenPayload | None]) -> None:
+            self.payloads = payloads
+
+        async def decode(self, token: str) -> TokenPayload:
+            payload = self.payloads.get(token)
+            if payload is None:
+                raise PermissionError("invalid token")
+            return payload
 
     def make_app(
         auth_enabled: bool = False,
         tokens: dict[str, TokenPayload | None] | None = None,
     ) -> tuple[TestClient, Path]:
-        monkeypatch.setattr(auth_router, "AUTH_ENABLED", auth_enabled)
-        if tokens is not None:
-            monkeypatch.setattr(auth_router, "decode_token", lambda token: tokens.get(token))
+        del auth_enabled
+        if tokens is None:
+            payloads = default_tokens
+        else:
+            payloads = {}
+            for token, payload in tokens.items():
+                if payload is None or payload.tenant_id:
+                    payloads[token] = payload
+                else:
+                    payloads[token] = TokenPayload(
+                        username=payload.username,
+                        role=payload.role,
+                        user_id=payload.user_id,
+                        tenant_id=tenant_id,
+                    )
         app = FastAPI()
+        app.state.auth_provider = _AuthProvider(payloads)
         app.include_router(file_library.router, prefix="/files/library")
-        return TestClient(app), admin_root
+        client = TestClient(app)
+        if "default-token" in payloads:
+            client.cookies.set("dt_token", "default-token")
+        return client, tmp_path
 
-    yield make_app
-    reset_file_library_store()
+    try:
+        yield make_app
+    finally:
+        reset_file_library_store()
+        sync_db.__exit__(None, None, None)
 
 
 # ── tests ─────────────────────────────────────────────────────────────────

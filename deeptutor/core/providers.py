@@ -16,6 +16,7 @@ class ApplicationProviders:
     auth: Any = None
     resources: Any = None
     object_store: Any = None
+    skill_service_factory: Any = None
     learning: Any = None
     reading: Any = None
 

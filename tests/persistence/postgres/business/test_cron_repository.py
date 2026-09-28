@@ -107,6 +107,98 @@ async def test_schedule_shapes_revision_and_trusted_owner_isolation(
     ]
 
 
+@pytest.mark.parametrize(
+    ("schedule", "last_status"),
+    [
+        (CronSchedule(kind="unknown", every_seconds=60), None),
+        (CronSchedule(kind="every", every_seconds=60, at_ms=123), None),
+        (CronSchedule(kind="cron", expr=""), None),
+        (CronSchedule(kind="every", every_seconds=60), "unknown"),
+    ],
+)
+async def test_cron_upsert_rejects_invalid_program_owned_enum_or_shape_before_sql(
+    business_sync_database, business_actors, pg_scope_factory, schedule, last_status
+):
+    from deeptutor.persistence.postgres.cron import AsyncPostgresCronRepository
+
+    repo = AsyncPostgresCronRepository(
+        business_sync_database, pg_scope_factory(business_actors.tenants[0].owners[0])
+    )
+    payload = _payload("invalid-cron", schedule=schedule, next_run_at_ms=None)
+    payload["state"]["last_status"] = last_status
+    with pytest.raises(ValueError, match="cron"):
+        await repo.run(lambda r: r.upsert(payload))
+    assert await repo.run(lambda r: r.list_payloads()) == []
+
+
+async def test_cron_read_rejects_unknown_persisted_last_status_without_db_enum_check(
+    business_sync_database, business_actors, pg_scope_factory, migrated_pg
+):
+    import psycopg
+
+    from deeptutor.persistence.postgres.cron import (
+        AsyncPostgresCronRepository,
+        CronRepositoryError,
+    )
+
+    actor = business_actors.tenants[0].owners[0]
+    repo = AsyncPostgresCronRepository(business_sync_database, pg_scope_factory(actor))
+    await repo.run(
+        lambda r: r.upsert(
+            _payload(
+                "unknown-last-status",
+                schedule=CronSchedule(kind="every", every_seconds=60),
+                next_run_at_ms=_now_ms() + 60_000,
+            )
+        )
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as c:
+        await c.execute(
+            "ALTER TABLE enterprise.cron_jobs DROP CONSTRAINT IF EXISTS cron_jobs_last_status_check"
+        )
+        await c.execute(
+            "UPDATE enterprise.cron_jobs SET last_status='unknown' WHERE job_id='unknown-last-status'"
+        )
+    with pytest.raises(CronRepositoryError, match="status"):
+        await repo.run(lambda r: r.list_payloads())
+
+
+async def test_cron_execution_read_rejects_unknown_persisted_status_without_db_enum_check(
+    business_sync_database, business_actors, pg_scope_factory, migrated_pg
+):
+    import psycopg
+
+    from deeptutor.persistence.postgres.cron import (
+        AsyncPostgresCronRepository,
+        CronRepositoryError,
+    )
+
+    actor = business_actors.tenants[0].owners[0]
+    repo = AsyncPostgresCronRepository(business_sync_database, pg_scope_factory(actor))
+    await repo.run(
+        lambda r: r.upsert(
+            _payload(
+                "unknown-execution",
+                schedule=CronSchedule(kind="every", every_seconds=60),
+                next_run_at_ms=_now_ms() - 1_000,
+            )
+        )
+    )
+    assert len(await repo.run(lambda r: r.claim_due(_now_ms(), worker_id="test-worker"))) == 1
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as c:
+        await c.execute(
+            "ALTER TABLE enterprise.cron_executions "
+            "DROP CONSTRAINT IF EXISTS cron_executions_status_check"
+        )
+        await c.execute(
+            "UPDATE enterprise.cron_executions SET status='unknown',completed_at_ms=%s "
+            "WHERE job_id='unknown-execution'",
+            (_now_ms(),),
+        )
+    with pytest.raises(CronRepositoryError, match="status"):
+        await repo.run(lambda r: r.list_executions("unknown-execution"))
+
+
 async def test_claim_due_jobs_is_atomic_and_completion_reschedules_with_execution_record(
     business_sync_database, business_actors, pg_scope_factory
 ):

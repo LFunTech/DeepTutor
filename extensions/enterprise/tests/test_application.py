@@ -12,9 +12,13 @@ import uuid
 from deeptutor_enterprise.configuration import DeploymentConfig
 from deeptutor_enterprise.migrations.runner import MigrationRunner
 import httpx
+import psycopg
 import pytest
+import pytest_asyncio
 
 from tests.fixtures.postgres import single_database_user_dsn
+
+pytestmark = pytest.mark.asyncio
 
 
 def test_enterprise_core_version_falls_back_to_source_tree_version(monkeypatch):
@@ -34,7 +38,7 @@ def test_enterprise_core_version_falls_back_to_source_tree_version(monkeypatch):
     assert bootstrap._core_version() == __version__
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def app(pg_dsn, monkeypatch):
     assert importlib.util.find_spec("deeptutor_enterprise.bootstrap"), "企业组合入口尚未实现"
     from deeptutor_enterprise.bootstrap import create_application
@@ -161,6 +165,312 @@ async def test_enterprise_health_ready_is_public_for_kubernetes_probe(app):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "ready"
+
+
+async def test_oms_me_rejects_tenant_token_and_unconfigured_platform_identity(app):
+    enterprise = app.state.enterprise
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        missing = await client.get("/api/v1/oms/me")
+        tenant = await client.get(
+            "/api/v1/oms/me", headers={"Authorization": "Bearer tenant-token"}
+        )
+    assert missing.status_code == 401
+    assert tenant.status_code == 503
+    assert enterprise.oms_platform_verifier is None
+
+
+async def test_oms_me_uses_verified_platform_identity_and_local_action(app, pg_dsn):
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "valid-platform-token":
+                raise PermissionError("bad platform token")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="operator",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        active = True
+
+        async def check(self, token, *, issuer, subject):
+            assert token == "valid-platform-token"
+            assert (issuer, subject) == ("https://issuer.example", "operator")
+            return self.active
+
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    status = AccountStatus()
+    enterprise.oms_account_status = status
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        no_local_grant = await client.get(
+            "/api/v1/oms/me", headers={"Authorization": "Bearer valid-platform-token"}
+        )
+        assert no_local_grant.status_code == 403
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            principal = uuid.uuid4()
+            await c.execute(
+                "INSERT INTO management.principals"
+                "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+                (principal, "https://issuer.example", "operator"),
+            )
+            await c.execute(
+                "INSERT INTO management.assignments"
+                "(id,application,principal_id,role_key,role_version,scope_kind,"
+                "valid_from,expires_at,command_id,created_by) "
+                "VALUES(%s,'oms',%s,'platform_security_admin',2,'platform',"
+                "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+                (uuid.uuid4(), principal, uuid.uuid4()),
+            )
+        granted = await client.get(
+            "/api/v1/oms/me", headers={"Authorization": "Bearer valid-platform-token"}
+        )
+        assert granted.status_code == 200, granted.text
+        assert granted.json()["subject"] == "operator"
+        assert granted.json()["application"] == "oms"
+        assert "tenant_id" not in granted.json()
+        denied_models = await client.get(
+            "/api/v1/oms/models",
+            headers={"Authorization": "Bearer valid-platform-token"},
+        )
+        assert denied_models.status_code == 403
+        denied_write = await client.post(
+            "/api/v1/oms/models/draft",
+            json={
+                "expected_version": 0,
+                "reason": "无权尝试",
+                "models": [
+                    {
+                        "profile_id": "chat",
+                        "model_id": "primary",
+                        "model": "example",
+                        "base_url": "https://model.example/v1",
+                        "secret": "env:DT_TEST_MODEL",
+                    }
+                ],
+            },
+            headers={
+                "Authorization": "Bearer valid-platform-token",
+                "Origin": "https://school.example",
+            },
+        )
+        assert denied_write.status_code == 403
+        status.active = False
+        disabled = await client.get(
+            "/api/v1/oms/me", headers={"Authorization": "Bearer valid-platform-token"}
+        )
+        assert disabled.status_code == 403
+        forged = await client.get(
+            "/api/v1/oms/me", headers={"Authorization": "Bearer tenant-token"}
+        )
+        assert forged.status_code == 401
+
+
+async def test_oms_model_inventory_requires_provider_read_and_redacts_credentials(app, pg_dsn):
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "config-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="config-admin",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "config-token" and subject == "config-admin"
+
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "config-admin"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_config_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        response = await client.get(
+            "/api/v1/oms/models", headers={"Authorization": "Bearer config-token"}
+        )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "models": [
+            {
+                "profile_id": "chat",
+                "model_id": "primary",
+                "model": "some-model",
+                "provider": "openai",
+                "source": "deployment",
+                "managed": False,
+                "status": "readiness_unverified",
+            }
+        ]
+    }
+    assert "model-secret" not in response.text
+    assert "DT_TEST_MODEL" not in response.text
+    assert "base_url" not in response.text
+
+
+async def test_oms_model_draft_is_versioned_audited_and_never_active_without_publish(
+    app, pg_dsn, monkeypatch
+):
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    from deeptutor.persistence.postgres.scope import GlobalScope
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "config-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="config-admin",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "config-token" and subject == "config-admin"
+
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    original_transaction = enterprise.db.transaction
+
+    def platform_only_transaction(scope):
+        if scope.user_id == "@oms-model-draft":
+            assert isinstance(scope, GlobalScope), "OMS global model catalog must not borrow tenant scope"
+        return original_transaction(scope)
+
+    monkeypatch.setattr(enterprise.db, "transaction", platform_only_transaction)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "config-admin"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_config_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+    command = {
+        "expected_version": 0,
+        "reason": "为测试学校准备首个 Agent 模型",
+        "models": [
+            {
+                "profile_id": "chat",
+                "model_id": "next",
+                "model": "next-model",
+                "provider": "openai",
+                "base_url": "https://model.example/v1",
+                "secret": "env:DT_TEST_MODEL",
+                "allowed_roles": ["user"],
+            }
+        ],
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        response = await client.post(
+            "/api/v1/oms/models/draft",
+            json=command,
+            headers={"Authorization": "Bearer config-token", "Origin": "https://school.example"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"version": 1, "status": "saved"}
+        visible = await client.get(
+            "/api/v1/oms/models/draft",
+            headers={"Authorization": "Bearer config-token"},
+        )
+        assert visible.status_code == 200, visible.text
+        assert visible.json() == {
+            "version": 1,
+            "status": "saved",
+            "models": [
+                {
+                    "profile_id": "chat",
+                    "model_id": "next",
+                    "model": "next-model",
+                    "provider": "openai",
+                    "source": "oms_draft",
+                    "managed": True,
+                    "status": "not_active",
+                }
+            ],
+        }
+        assert "DT_TEST_MODEL" not in visible.text
+        assert "base_url" not in visible.text
+        stale = await client.post(
+            "/api/v1/oms/models/draft",
+            json=command,
+            headers={"Authorization": "Bearer config-token", "Origin": "https://school.example"},
+        )
+        assert stale.status_code == 409
+        literal = await client.post(
+            "/api/v1/oms/models/draft",
+            json={
+                **command,
+                "expected_version": 1,
+                "models": [{**command["models"][0], "secret": "plaintext"}],
+            },
+            headers={"Authorization": "Bearer config-token", "Origin": "https://school.example"},
+        )
+        assert literal.status_code == 422
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        setting = await (
+            await c.execute(
+                "SELECT desired,active,status FROM oms.model_catalog_config WHERE id='global'",
+            )
+        ).fetchone()
+        assert setting[0]["models"][0]["model"] == "next-model"
+        assert setting[1] == {}
+        assert setting[2] == "saved"
+        audit = await (
+            await c.execute(
+                "SELECT action_key,safe_summary FROM management.audit_events "
+                "WHERE application='oms' AND actor_subject='config-admin'"
+            )
+        ).fetchone()
+        assert audit[0] == "ops.providers.manage"
+        assert "DT_TEST_MODEL" not in json.dumps(audit[1])
 
 
 async def test_eduplus2_signed_webhook_demo_only_checks_delivery_without_state_change(app):
@@ -665,9 +975,17 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
         "/api/v1/tms/school-bootstrap/status",
         "/api/v1/tms/school-bootstrap/activate",
     }
+    assert {path for path in paths if path.startswith("/api/v1/oms/")} == {
+        "/api/v1/oms/me",
+        "/api/v1/oms/models",
+        "/api/v1/oms/models/draft",
+        "/api/v1/oms/skills/draft",
+        "/api/v1/oms/skills/revisions/{revision_id}/review",
+        "/api/v1/oms/skills/revisions/{revision_id}/publish",
+        "/api/v1/oms/skills/{name}/schools/{school_id}/grant",
+    }
     for prefix in (
         "/api/skills",
-        "/api/v1/oms",
         "/api/space/mcp",
         "/api/partners",
         "/api/system",
@@ -1080,6 +1398,33 @@ async def test_conversation_test_options_disable_kbs_when_rag_policy_is_not_enab
     assert kb["status"] == "unavailable"
     assert kb["disabled"] is True
     assert "知识库检索" in kb["description"]
+
+
+@pytest.mark.asyncio
+async def test_externalized_kb_listing_rejects_unknown_resource_state(app):
+    from deeptutor_enterprise.context import identity_context
+    from deeptutor_enterprise.knowledge_bases import list_externalized_knowledge_bases
+    from deeptutor_enterprise.scope import TenantScope
+
+    enterprise = app.state.enterprise
+    token = await enterprise.identity.login("admin", "long-password-1", client="kb-state")
+    identity = await enterprise.identity.authenticate(token)
+    await seed_externalized_kb(app, owner_id=identity.user_id, kb_id="unknown-state-kb")
+    async with enterprise.db.transaction(
+        TenantScope(str(enterprise.deployment.tenant_id), identity.user_id)
+    ) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS resource_objects_state_check"
+        )
+        await connection.execute(
+            "UPDATE enterprise.resource_objects SET state='future-state' "
+            "WHERE tenant_id=%s AND owner_id=%s AND resource_id='unknown-state-kb'",
+            (enterprise.deployment.tenant_id, identity.user_id),
+        )
+
+    with identity_context(identity, token):
+        with pytest.raises(ValueError, match="resource state is unknown"):
+            await list_externalized_knowledge_bases(enterprise.store_provider.get())
 
 
 async def test_conversation_test_options_show_skill_names_as_labels(app):
@@ -1620,6 +1965,60 @@ async def test_enterprise_turn_environment_loads_multi_model_catalog_from_pg(app
     assert prepared.llm_config.model == "qwen3.8-max"
     assert prepared.llm_config.api_key == "advanced-secret"
     assert "advanced-secret" not in json.dumps(catalog)
+
+
+async def test_model_draft_never_becomes_runtime_active_before_confirmation(app):
+    from deeptutor_enterprise.context import identity_context
+    from deeptutor_enterprise.model_catalog import load_runtime_model_deployments
+
+    enterprise = app.state.enterprise
+    token = await enterprise.identity.login("admin", "long-password-1", client="draft-gate")
+    identity = await enterprise.identity.authenticate(token)
+    draft = {
+        "models": [
+            {
+                "profile_id": "chat",
+                "model_id": "draft",
+                "model": "unconfirmed-model",
+                "base_url": "https://model.example/v1",
+                "secret": "env:DT_TEST_MODEL",
+                "provider": "openai",
+                "allowed_roles": ["user"],
+            }
+        ]
+    }
+    active = {
+        "models": [
+            {
+                "profile_id": "chat",
+                "model_id": "confirmed",
+                "model": "confirmed-model",
+                "base_url": "https://model.example/v1",
+                "secret": "env:DT_TEST_MODEL",
+                "provider": "openai",
+                "allowed_roles": ["user"],
+            }
+        ]
+    }
+    with identity_context(identity, token):
+        store = enterprise.store_provider.get()
+        async with store.db.transaction(store.scope) as c:
+            await c.execute(
+                "INSERT INTO enterprise.runtime_settings"
+                "(tenant_id,scope_kind,scope_id,key,version,desired,active,status,updated_by)"
+                " VALUES(%s,'tenant','','model_catalog',1,%s,'{}'::jsonb,'saved',%s)",
+                (store.scope.tenant_id, psycopg.types.json.Jsonb(draft), identity.user_id),
+            )
+        before = await load_runtime_model_deployments(store, enterprise.deployment.models)
+        assert before == enterprise.deployment.models
+        async with store.db.transaction(store.scope) as c:
+            await c.execute(
+                "UPDATE enterprise.runtime_settings SET active=%s,status='saved',version=2 "
+                "WHERE tenant_id=%s AND scope_kind='tenant' AND key='model_catalog'",
+                (psycopg.types.json.Jsonb(active), store.scope.tenant_id),
+            )
+        after = await load_runtime_model_deployments(store, enterprise.deployment.models)
+    assert [(model.model_id, model.model) for model in after] == [("confirmed", "confirmed-model")]
 
 
 async def test_websocket_auth_refresh_updates_copied_turn_execution_context(app, monkeypatch):

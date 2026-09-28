@@ -16,7 +16,8 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_two_tenants_six_actors_same_ids_and_composite_references(
-    business_sync_database, business_actors, pg_scope_factory, pg_session_store_factory
+    business_sync_database, business_actors, pg_scope_factory, pg_session_store_factory,
+    restricted_business_dsn,
 ):
     actors = [a for t in business_actors.tenants for a in (t.admin, *t.owners)]
     stores = []
@@ -51,14 +52,237 @@ async def test_two_tenants_six_actors_same_ids_and_composite_references(
                 )
             )
         assert await store.run(lambda u: u.get_workspace("w")) == before
-    # 不给 admin 绕过 private owner RLS；也不允许修改 scope 列伪造他人数据。
-    with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        await stores[0].run(
-            lambda u: u._execute(
-                "UPDATE enterprise.reading_materials SET owner_id=%s WHERE tenant_id=%s AND owner_id=%s AND material_id=%s",
-                (actors[1].user_id, *u._owner, "same"),
+    # 使用非表 owner 的受限角色验收 RLS，避免只依赖迁移 owner 路径。
+    from deeptutor.persistence.postgres.connection import SyncDatabase
+
+    async with SyncDatabase(restricted_business_dsn, resource="reading-rls-negative") as db:
+        restricted_store = factory(db, pg_scope_factory, actors[0])
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await restricted_store.run(
+                lambda u: u._execute(
+                    "UPDATE enterprise.reading_materials SET owner_id=%s WHERE tenant_id=%s AND owner_id=%s AND material_id=%s",
+                    (actors[1].user_id, *u._owner, "only0"),
+                )
+            )
+        assert await restricted_store.run(lambda u: u.get_material("only0")) is not None
+
+
+async def test_reading_material_unknown_persisted_state_cannot_be_read_or_overwritten(
+    business_sync_database, business_actors, pg_scope_factory, pg_dsn,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store = factory(business_sync_database, pg_scope_factory, actor)
+    await store.run(
+        lambda u: u.upsert_material(
+            content_id="unknown-state", filename="m", title="m",
+            source_kind="file", status="queued",
+        )
+    )
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "ALTER TABLE enterprise.reading_materials "
+            "DROP CONSTRAINT IF EXISTS reading_materials_source_kind_check"
+        )
+        await c.execute(
+            "UPDATE enterprise.reading_materials SET source_kind='future-source' "
+            "WHERE tenant_id=%s AND owner_id=%s AND material_id='unknown-state'",
+            (actor.tenant_id, actor.user_id),
+        )
+    with pytest.raises(ReadingError, match="source|state"):
+        await store.run(lambda u: u.get_material("unknown-state"))
+    with pytest.raises(ReadingError, match="source|state"):
+        await store.run(
+            lambda u: u.upsert_material(
+                content_id="unknown-state", material_id="unknown-state",
+                filename="m", title="overwrite", source_kind="file", status="ready",
             )
         )
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        row = await (
+            await c.execute(
+                "SELECT source_kind,title FROM enterprise.reading_materials "
+                "WHERE tenant_id=%s AND owner_id=%s AND material_id='unknown-state'",
+                (actor.tenant_id, actor.user_id),
+            )
+        ).fetchone()
+        assert row == ("future-source", "m")
+        await c.execute(
+            "ALTER TABLE enterprise.reading_materials "
+            "DROP CONSTRAINT IF EXISTS reading_materials_status_check"
+        )
+        await c.execute(
+            "UPDATE enterprise.reading_materials SET source_kind='file',status='future-state' "
+            "WHERE tenant_id=%s AND owner_id=%s AND material_id='unknown-state'",
+            (actor.tenant_id, actor.user_id),
+        )
+    with pytest.raises(ReadingError, match="source|state"):
+        await store.run(lambda u: u.get_material("unknown-state"))
+    with pytest.raises(ReadingError, match="source|state"):
+        await store.run(
+            lambda u: u.upsert_material(
+                content_id="unknown-state", material_id="unknown-state",
+                filename="m", title="overwrite", source_kind="file", status="ready",
+            )
+        )
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "ALTER TABLE enterprise.reading_materials "
+            "DROP CONSTRAINT IF EXISTS reading_materials_check"
+        )
+        await c.execute(
+            "UPDATE enterprise.reading_materials SET status='ready',progress=0 "
+            "WHERE tenant_id=%s AND owner_id=%s AND material_id='unknown-state'",
+            (actor.tenant_id, actor.user_id),
+        )
+    with pytest.raises(ReadingError, match="progress"):
+        await store.run(lambda u: u.get_material("unknown-state"))
+
+
+@pytest.mark.parametrize(
+    ("constraint", "mutation"),
+    [
+        ("reading_materials_source_kind_check", "source_kind='future-source'"),
+        ("reading_materials_status_check", "status='future-state'"),
+        ("reading_materials_check", "status='ready',progress=0"),
+    ],
+)
+async def test_reading_library_counts_rejects_unknown_material_state(
+    migrated_pg, business_sync_database, business_actors, pg_scope_factory,
+    constraint, mutation,
+) -> None:
+    """聚合计数不能将未知状态的材料当正常材料计入。"""
+
+    actor = business_actors.tenants[0].owners[0]
+    store = factory(business_sync_database, pg_scope_factory, actor)
+    await store.run(
+        lambda u: u.upsert_material(
+            content_id="count-unknown", material_id="count-unknown",
+            filename="m", title="m", source_kind="file",
+        )
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.reading_materials "
+                f"DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.reading_materials SET {mutation} "
+                "WHERE tenant_id=%s AND owner_id=%s AND material_id='count-unknown'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    with pytest.raises(ReadingError, match="source|state"):
+        await store.run(lambda u: u.library_counts())
+
+
+async def test_reading_library_counts_keeps_independent_media_dimensions(
+    business_sync_database, business_actors, pg_scope_factory,
+) -> None:
+    """旧统计允许来源与呈现模式同时命中不同媒体类别。"""
+
+    actor = business_actors.tenants[0].owners[0]
+    store = factory(business_sync_database, pg_scope_factory, actor)
+
+    def seed(unit):
+        unit.upsert_material(
+            content_id="video-audio", material_id="video-audio",
+            filename="v", title="v", source_kind="video", render_mode="audio",
+        )
+        unit.upsert_material(
+            content_id="audio-video", material_id="audio-video",
+            filename="a", title="a", source_kind="audio", render_mode="video",
+        )
+        return unit.library_counts()
+
+    counts = await store.run(seed)
+    assert counts["all"] == 2
+    assert counts["by_kind"] == {"document": 0, "web": 0, "video": 2, "audio": 2}
+
+
+async def test_reading_summary_workspace_creation_rejects_unknown_material_source(
+    migrated_pg, business_sync_database, business_actors, pg_scope_factory,
+) -> None:
+    actor = business_actors.tenants[0].owners[0]
+    store = factory(business_sync_database, pg_scope_factory, actor)
+    await store.run(
+        lambda u: u.upsert_material(
+            content_id="unknown-workspace", material_id="unknown-workspace",
+            filename="m", title="m", source_kind="file",
+        )
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.reading_materials "
+                "DROP CONSTRAINT IF EXISTS reading_materials_source_kind_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.reading_materials SET source_kind='future-source' "
+                "WHERE tenant_id=%s AND owner_id=%s AND material_id='unknown-workspace'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    with pytest.raises(ReadingError, match="source|state"):
+        await store.run(
+            lambda u: u.create_workspace(
+                "Synthetic", ["unknown-workspace"], workspace_id="reject-unknown",
+                return_summary=True,
+            )
+        )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT 1 FROM enterprise.reading_workspaces "
+                "WHERE tenant_id=%s AND owner_id=%s AND workspace_id='reject-unknown'",
+                (actor.tenant_id, actor.user_id),
+            )
+        ).fetchone()
+    assert row is None
+
+
+async def test_reading_summary_active_material_rejects_unknown_existing_source(
+    migrated_pg, business_sync_database, business_actors, pg_scope_factory,
+) -> None:
+    actor = business_actors.tenants[0].owners[0]
+    store = factory(business_sync_database, pg_scope_factory, actor)
+
+    def seed(unit):
+        unit.upsert_material(
+            content_id="active-unknown", material_id="active-unknown",
+            filename="m", title="m", source_kind="file",
+        )
+        unit.create_workspace("Synthetic", ["active-unknown"], workspace_id="active-workspace")
+
+    await store.run(seed)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.reading_materials "
+                "DROP CONSTRAINT IF EXISTS reading_materials_source_kind_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.reading_materials SET source_kind='future-source' "
+                "WHERE tenant_id=%s AND owner_id=%s AND material_id='active-unknown'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    with pytest.raises(ReadingError, match="source|state"):
+        await store.run(
+            lambda u: u.set_active_material(
+                "active-workspace", "active-unknown", expected_version=1,
+                return_summary=True,
+            )
+        )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT version FROM enterprise.reading_workspaces "
+                "WHERE tenant_id=%s AND owner_id=%s AND workspace_id='active-workspace'",
+                (actor.tenant_id, actor.user_id),
+            )
+        ).fetchone()
+    assert row == (1,)
 
 
 @pytest.mark.parametrize("other", ["reorder", "add", "remove", "active", "update"])

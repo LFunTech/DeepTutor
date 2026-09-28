@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 _PG_SNAPSHOT_PAGE_SIZE = 200
 
 
+class InvalidQuizPersistence(ValueError):
+    """PG 题库值域异常；刷新快照必须中止而非误记为全部删除。"""
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -145,7 +149,7 @@ def _quiz_pages(connection, scope) -> list[dict[str, Any]]:
             SELECT n.id,n.session_id,n.turn_id,n.question_id,n.question,
                    n.question_type,n.options,n.correct_answer,n.explanation,
                    n.difficulty,n.user_answer,n.is_correct,n.bookmarked,
-                   n.created_at
+                   n.source,n.score_trend,n.material_id,n.created_at
             FROM enterprise.notebook_entries n
             {where}
             ORDER BY n.created_at DESC,n.id DESC
@@ -155,6 +159,13 @@ def _quiz_pages(connection, scope) -> list[dict[str, Any]]:
         ).fetchall()
         if not page:
             break
+        from deeptutor.persistence.postgres.notebook_upsert import validate_notebook_values
+
+        for row in page:
+            try:
+                validate_notebook_values(row)
+            except ValueError as exc:
+                raise InvalidQuizPersistence(str(exc)) from exc
         rows.extend(page)
         if len(page) < _page_size():
             break
@@ -597,6 +608,8 @@ def read_quiz_entities() -> list[Entity]:
                         fingerprint=_sha1(question, user_answer, correct, is_correct),
                     )
                 )
+    except InvalidQuizPersistence:
+        raise
     except Exception as exc:
         logger.warning("quiz snapshot scan failed: %s", exc)
         return []
@@ -682,6 +695,8 @@ def read_entities(surface: Surface) -> list[Entity]:
         return []
     try:
         return reader()
+    except InvalidQuizPersistence:
+        raise
     except Exception as exc:
         logger.warning("snapshot adapter failed surface=%s: %s", surface, exc)
         return []

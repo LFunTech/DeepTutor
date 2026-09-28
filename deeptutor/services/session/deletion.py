@@ -39,9 +39,13 @@ async def delete_session_lifecycle(store, cancel_turn, session_id):
 
 async def cleanup_session_resources(store):
     from deeptutor.core.providers import get_providers
+    from deeptutor.persistence.postgres.session_resources import (
+        validate_scoped_session_object_states,
+    )
     from deeptutor.services.storage import get_attachment_store
 
     async with store.db.transaction(store.scope) as c:
+        await validate_scoped_session_object_states(store, c)
         pending = await (
             await c.execute(
                 "SELECT count(*) AS count FROM enterprise.session_objects WHERE tenant_id=%s AND owner_id=%s AND state='cleanup'",

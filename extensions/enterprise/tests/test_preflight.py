@@ -6,6 +6,7 @@ import uuid
 from deeptutor_enterprise.bootstrap import Enterprise
 from deeptutor_enterprise.configuration import DeploymentConfig
 from deeptutor_enterprise.migrations.runner import MigrationRunner
+from deeptutor_enterprise.scope import TenantScope
 import psycopg
 import pytest
 
@@ -74,6 +75,72 @@ async def test_startup_requires_initialized_tenant_and_matching_epoch(
             await changed.start()
     finally:
         await changed.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "constraint"),
+    [
+        ("external_eligibility", "tenants_external_eligibility_check"),
+        ("provisioning_status", "tenants_provisioning_status_check"),
+        ("recovery_state", "tenants_recovery_state_check"),
+    ],
+)
+async def test_receiver_startup_rejects_unknown_tenant_business_value(
+    pg_dsn, deployment, field, constraint
+):
+    await MigrationRunner(os.environ["PREFLIGHT_DB"]).apply()
+    enterprise = Enterprise(deployment)
+    async with enterprise.db:
+        await enterprise.identity.bootstrap("admin", "long-password-1", secret="b" * 48)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(f"ALTER TABLE enterprise.tenants DROP CONSTRAINT IF EXISTS {constraint}")
+        await c.execute(
+            f"UPDATE enterprise.tenants SET {field}='future-value' WHERE id=%s",
+            (deployment.tenant_id,),
+        )
+    enterprise = Enterprise(deployment)
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+
+    async def verified_migration_for_corrupted_row_test():
+        # 此用例故意去 CHECK 注入未知值，只隔离测试启动前的应用校验。
+        return None
+
+    enterprise.migrations.verify = verified_migration_for_corrupted_row_test
+    try:
+        with pytest.raises(ValueError, match=f"tenant {field} has unknown persisted value"):
+            await enterprise.start()
+    finally:
+        await enterprise.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "constraint"),
+    [
+        ("external_eligibility", "tenants_external_eligibility_check"),
+        ("provisioning_status", "tenants_provisioning_status_check"),
+        ("recovery_state", "tenants_recovery_state_check"),
+    ],
+)
+async def test_lifecycle_proof_rejects_unknown_local_tenant_value_without_check(
+    pg_dsn, deployment, field, constraint
+):
+    await MigrationRunner(os.environ["PREFLIGHT_DB"]).apply()
+    enterprise = Enterprise(deployment)
+    async with enterprise.db:
+        await enterprise.identity.bootstrap("admin", "long-password-1", secret="b" * 48)
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(f"ALTER TABLE enterprise.tenants DROP CONSTRAINT IF EXISTS {constraint}")
+        await c.execute(
+            f"UPDATE enterprise.tenants SET {field}='future-value' WHERE id=%s",
+            (deployment.tenant_id,),
+        )
+    enterprise = Enterprise(deployment)
+    async with enterprise.db:
+        async with enterprise.db.transaction(
+            TenantScope(str(deployment.tenant_id), "@proof-test")
+        ) as c:
+            with pytest.raises(ValueError, match=f"tenant {field} has unknown persisted value"):
+                await enterprise._require_current_lifecycle_proof(c)
 
 
 def test_missing_secret_fails_closed_without_revealing_value(deployment, monkeypatch):

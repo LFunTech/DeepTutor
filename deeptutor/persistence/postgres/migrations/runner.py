@@ -55,6 +55,38 @@ def _enum_check(column, values):
     return f"CHECK (({column} = ANY (ARRAY[{members}])))"
 
 
+
+_BUSINESS_CHECK_DEFINITIONS_WITHOUT_ANY = frozenset(
+    {
+        "CHECK ((((status = 'claimed'::text) AND (completed_at_ms IS NULL)) OR ((status <> 'claimed'::text) AND (completed_at_ms IS NOT NULL))))",
+        "CHECK ((((schedule_kind = 'at'::text) AND (at_ms IS NOT NULL) AND (every_seconds IS NULL) AND (cron_expr IS NULL)) OR ((schedule_kind = 'every'::text) AND (at_ms IS NULL) AND (every_seconds IS NOT NULL) AND (every_seconds > 0) AND (cron_expr IS NULL)) OR ((schedule_kind = 'cron'::text) AND (at_ms IS NULL) AND (every_seconds IS NULL) AND (cron_expr IS NOT NULL) AND (length(cron_expr) > 0))))",
+        "CHECK ((((kind = 'turn'::text) AND (session_id IS NOT NULL) AND (turn_id IS NOT NULL) AND (worker_id IS NOT NULL) AND (fencing_token IS NOT NULL) AND (operation_id IS NULL)) OR ((kind = 'operation'::text) AND (session_id IS NULL) AND (turn_id IS NULL) AND (worker_id IS NULL) AND (fencing_token IS NULL) AND (operation_id IS NOT NULL))))",
+        "CHECK (((status <> 'active'::text) OR (path_ref IS NOT NULL)))",
+        "CHECK (((kind <> 'chat'::text) OR (external_id <> ''::text)))",
+        "CHECK (((source <> 'immersive_reading'::text) OR (material_id <> ''::text)))",
+        "CHECK (((source <> 'mastery_path'::text) OR (material_id <> ''::text)))",
+        "CHECK ((((status = 'deleted'::text) AND (request IS NULL) AND (session_id IS NULL) AND (turn_id IS NULL)) OR ((status = 'registered'::text) AND (request IS NOT NULL) AND (session_id IS NOT NULL) AND (turn_id IS NOT NULL))))",
+        "CHECK (((status = 'ready'::text) = (progress = 100)))",
+    }
+)
+
+
+def _without_database_business_checks(constraints):
+    return {
+        table: {
+            definition
+            for definition in definitions
+            if not (
+                definition.startswith("CHECK")
+                and (
+                    "ANY (ARRAY" in definition
+                    or definition in _BUSINESS_CHECK_DEFINITIONS_WITHOUT_ANY
+                )
+            )
+        }
+        for table, definitions in constraints.items()
+    }
+
 _CONSTRAINTS = {
     "schema_history": {"PRIMARY KEY (version)"},
     "tenants": {
@@ -534,6 +566,11 @@ _CONSTRAINTS_V14 = {
     },
 }
 _CATALOGS["0014_externalized_runtime"] = (_COLUMNS_V14, _CONSTRAINTS_V14)
+_CATALOGS["0015_remove_legacy_database_functions"] = (_COLUMNS_V14, _CONSTRAINTS_V14)
+_CATALOGS["0016_relocate_database_business_rules"] = (
+    _COLUMNS_V14,
+    _without_database_business_checks(_CONSTRAINTS_V14),
+)
 _OWNER_TABLES = _OWNER_TABLES | frozenset({"resource_objects", "resource_cleanup_jobs"})
 
 _MIGRATION_STAGE_COLUMNS = {
@@ -641,6 +678,31 @@ class MigrationRunner:
         if version not in _CATALOGS:
             raise RuntimeError("unsupported schema catalog version")
         expected_columns, expected_constraints = _CATALOGS[version]
+        if int(version.split("_", 1)[0]) >= 15:
+            routines = await (
+                await c.execute(
+                    "SELECT p.proname FROM pg_proc p JOIN pg_namespace n "
+                    "ON n.oid=p.pronamespace WHERE n.nspname='enterprise' "
+                    "AND p.prokind IN ('f','p')"
+                )
+            ).fetchall()
+            triggers = await (
+                await c.execute(
+                    "SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid "
+                    "JOIN pg_namespace n ON n.oid=r.relnamespace "
+                    "WHERE n.nspname='enterprise' AND NOT t.tgisinternal"
+                )
+            ).fetchall()
+            if routines or triggers:
+                raise RuntimeError("schema drift: enterprise database routines or triggers remain")
+            enum_types = await (
+                await c.execute(
+                    "SELECT t.typname FROM pg_type t JOIN pg_namespace n "
+                    "ON n.oid=t.typnamespace WHERE n.nspname='enterprise' AND t.typtype='e'"
+                )
+            ).fetchall()
+            if enum_types:
+                raise RuntimeError("schema drift: enterprise database ENUM types remain")
         tenant_tables = frozenset(expected_columns) - {"schema_history", "executor_state"}
         # 明确 search_path，避免连接设置影响目录表达式反解或同名函数解析。
         await c.execute("SET LOCAL search_path = pg_catalog")

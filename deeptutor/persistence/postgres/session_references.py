@@ -14,6 +14,21 @@ SNAPSHOT_REFERENCE_KEYS = {
     "readingMaterialId": "reading_material_id",
 }
 
+SOURCE_KINDS = frozenset({"preferences", "message", "turn"})
+
+
+async def validate_persisted_reference_kinds(store, connection, session_id):
+    rows = await connection.execute(
+        "SELECT DISTINCT kind,source_kind FROM enterprise.session_references "
+        "WHERE tenant_id=%s AND owner_id=%s AND session_id=%s",
+        (*store._owner, session_id),
+    )
+    async for row in rows:
+        if row["kind"] not in REFERENCE_TABLES:
+            raise ValueError("session reference kind is unknown")
+        if row["source_kind"] not in SOURCE_KINDS:
+            raise ValueError("session reference source kind is unknown")
+
 
 def references(value, *, _snapshot=False):
     if isinstance(value, list):
@@ -31,6 +46,8 @@ def references(value, *, _snapshot=False):
 
 
 async def record_references(store, c, session_id, source_kind, source_id, value, *, replace=False):
+    if source_kind not in SOURCE_KINDS:
+        raise ValueError("session reference source kind is unknown")
     if replace:
         await c.execute(
             "DELETE FROM enterprise.session_references WHERE tenant_id=%s AND owner_id=%s AND session_id=%s AND source_kind=%s AND source_id=%s",

@@ -4,14 +4,17 @@ import uuid
 
 import psycopg
 import pytest
+import pytest_asyncio
 
 from deeptutor.persistence.postgres.connection import Database
 from deeptutor.persistence.postgres.identity.service import IdentityService
 from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
 from tests.fixtures.postgres import single_database_user_dsn
 
+pytestmark = pytest.mark.asyncio
 
-@pytest.fixture
+
+@pytest_asyncio.fixture
 async def accounts(pg_dsn):
     await MigrationRunner(pg_dsn).apply()
     async with Database(
@@ -59,6 +62,39 @@ async def test_profile_preset_and_management(accounts):
     assert (await service.authenticate(fresh)).role == "tenant_admin"
     with pytest.raises(ValueError):
         await service.set_role(admin, "admin", "user")
+
+
+async def test_unknown_persisted_account_role_and_preset_fail_closed_without_db_enum_checks(
+    accounts, pg_dsn
+):
+    service, admin = accounts
+    learner = await service.create_user(admin, "unknown-state", "learner-password", preset="learner")
+    token = await service.login("unknown-state", "learner-password", client="unknown-state")
+    with psycopg.connect(pg_dsn) as c:
+        c.execute("ALTER TABLE enterprise.users DROP CONSTRAINT IF EXISTS users_role_check")
+        c.execute("ALTER TABLE enterprise.users DROP CONSTRAINT IF EXISTS users_preset_check")
+        c.execute(
+            "UPDATE enterprise.users SET role='unknown' WHERE tenant_id=%s AND id=%s",
+            (service.tenant_id, learner["id"]),
+        )
+    with pytest.raises(PermissionError):
+        await service.authenticate(token)
+    with pytest.raises(PermissionError):
+        await service.login("unknown-state", "learner-password", client="unknown-state-role")
+    with pytest.raises(ValueError, match="account"):
+        await service.set_role(admin, "unknown-state", "user")
+    with psycopg.connect(pg_dsn) as c:
+        c.execute(
+            "UPDATE enterprise.users SET role='user',preset='unknown' "
+            "WHERE tenant_id=%s AND id=%s",
+            (service.tenant_id, learner["id"]),
+        )
+    with pytest.raises(PermissionError):
+        await service.authenticate(token)
+    with pytest.raises(PermissionError):
+        await service.login("unknown-state", "learner-password", client="unknown-state-preset")
+    with pytest.raises(ValueError, match="account"):
+        await service.list_users(admin)
 
 
 async def test_deleted_account_cannot_be_reenabled_and_name_can_be_reused(accounts):

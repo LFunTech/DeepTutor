@@ -331,3 +331,38 @@ async def test_bad_sqlite_references_fail_without_partial_visible_rows(
             )
         ).fetchone()
     assert row[0] == 0
+
+
+@pytest.mark.parametrize("column,value", [
+    ("source", "future-source"),
+    ("score_trend", "future-trend"),
+])
+async def test_chat_import_rejects_unknown_notebook_business_values_before_pg_constraint(
+    tmp_path: Path, migrated_pg, business_actors, column, value,
+) -> None:
+    from deeptutor.persistence.postgres.offline_import.chat_sqlite import (
+        SQLiteChatHistoryImporter,
+    )
+
+    actor = business_actors.tenants[0].owners[0]
+    source = tmp_path / "unknown-notebook.db"
+    _make_legacy_source(source)
+    with sqlite3.connect(source) as c:
+        c.execute(f"UPDATE notebook_entries SET {column}=?", (value,))
+    result = _snapshot(
+        source, tmp_path / "unknown-artifact",
+        tenant_id=actor.tenant_id, source_owner="legacy-user", target_owner=actor.user_id,
+    )
+    with pytest.raises(ValueError, match="source|trend"):
+        await SQLiteChatHistoryImporter(migrated_pg.admin_dsn).import_manifest(
+            result.manifest_path, operator="unit-test"
+        )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as c:
+        row = await (
+            await c.execute(
+                "SELECT count(*) FROM enterprise.notebook_entries "
+                "WHERE tenant_id=%s AND owner_id=%s",
+                (actor.tenant_id, actor.user_id),
+            )
+        ).fetchone()
+        assert row == (0,)

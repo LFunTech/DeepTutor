@@ -10,6 +10,8 @@ import json
 import re
 from typing import Any
 
+from deeptutor.persistence.postgres.tenant_state import validate_tenant_business_values
+
 from ..scope import TenantScope
 
 SUPPORTED_EVENTS = frozenset(
@@ -23,6 +25,21 @@ SUPPORTED_EVENTS = frozenset(
         "subscription.expiring",
         "subscription.plan_changed",
     }
+)
+LIFECYCLE_INBOX_PROCESSING_STATUSES = frozenset(
+    {
+        "pending_binding",
+        "pending_reconcile",
+        "reconciling",
+        "verified",
+        "denied",
+        "retry",
+        "rejected",
+    }
+)
+LIFECYCLE_TARGET_ELIGIBILITIES = frozenset({"unknown", "allowed", "denied"})
+LIFECYCLE_ACTOR_CANDIDATE_STATUSES = frozenset(
+    {"pending_verification", "consumed", "revoked"}
 )
 
 
@@ -48,6 +65,63 @@ class LifecycleEvent:
     tenant_type: str
     school_code: str
     semantic_digest: str
+
+
+def _row_get(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, TypeError):
+        if hasattr(row, "get"):
+            return row.get(key, default)
+        return default
+
+
+def validate_lifecycle_inbox_row(row) -> None:
+    status = str(_row_get(row, "processing_status") or "").strip()
+    if status not in LIFECYCLE_INBOX_PROCESSING_STATUSES:
+        raise RuntimeError("lifecycle inbox processing status is invalid")
+
+
+def validate_lifecycle_target_row(row) -> None:
+    eligibility = str(_row_get(row, "eligibility") or "").strip()
+    if eligibility not in LIFECYCLE_TARGET_ELIGIBILITIES:
+        raise RuntimeError("lifecycle target eligibility is invalid")
+    if eligibility != "allowed":
+        return
+    checked_at = _row_get(row, "proof_checked_at")
+    expires_at = _row_get(row, "proof_expires_at")
+    verified_client_id = str(_row_get(row, "verified_client_id") or "").strip()
+    binding_version = _row_get(row, "binding_version", 0)
+    if (
+        checked_at is None
+        or expires_at is None
+        or expires_at <= checked_at
+        or not verified_client_id
+        or type(binding_version) is not int
+        or binding_version <= 0
+    ):
+        raise RuntimeError("lifecycle target proof is invalid")
+
+
+def validate_lifecycle_actor_candidate_row(row) -> None:
+    status = str(_row_get(row, "status") or "").strip()
+    if status not in LIFECYCLE_ACTOR_CANDIDATE_STATUSES:
+        raise RuntimeError("lifecycle actor candidate status is invalid")
+    resolved_at = _row_get(row, "resolved_at")
+    if (status == "pending_verification" and resolved_at is not None) or (
+        status in {"consumed", "revoked"} and resolved_at is None
+    ):
+        raise RuntimeError("lifecycle actor candidate resolution is invalid")
+
+
+def validate_webhook_school_state_row(row) -> None:
+    eligibility = str(_row_get(row, "eligibility") or "").strip()
+    if eligibility not in LIFECYCLE_TARGET_ELIGIBILITIES:
+        raise RuntimeError("webhook school projection eligibility is invalid")
+    onboarding_event_id = _row_get(row, "onboarding_event_id")
+    onboarding_completed_at = _row_get(row, "onboarding_completed_at")
+    if (onboarding_event_id is None) != (onboarding_completed_at is None):
+        raise RuntimeError("webhook school projection onboarding proof is invalid")
 
 
 def _positive_id(value: Any) -> int:
@@ -203,6 +277,18 @@ async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_
                 ).fetchone()
                 if conflicting_client:
                     raise LifecycleConflict("client conflicts with registered school target")
+            bound = await (
+                await c.execute(
+                    "SELECT t.id,t.external_eligibility,t.provisioning_status,t.recovery_state "
+                    "FROM oms.school_bindings b "
+                    "JOIN enterprise.tenants t ON t.id=b.tenant_id "
+                    "WHERE b.eduplus_tenant_id=%s AND b.status='verified' "
+                    "AND t.external_tid=%s FOR UPDATE OF b,t",
+                    (event.external_tenant_id, str(event.external_tenant_id)),
+                )
+            ).fetchone()
+            if bound is not None:
+                validate_tenant_business_values(bound)
             await c.execute(
                 """
                 INSERT INTO eduplus2.lifecycle_targets(
@@ -221,24 +307,13 @@ async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_
                     event.external_app_id,
                 ),
             )
-            await c.execute(
-                "UPDATE enterprise.tenants t SET external_eligibility='denied',"
-                "external_version=external_version+1 "
-                "FROM oms.school_bindings b "
-                "WHERE b.tenant_id=t.id AND b.eduplus_tenant_id=%s "
-                "AND b.status='verified' AND t.external_tid=%s "
-                "AND t.external_eligibility='allowed'",
-                (event.external_tenant_id, str(event.external_tenant_id)),
-            )
-            bound = await (
+            if bound is not None and bound["external_eligibility"] == "allowed":
                 await c.execute(
-                    "SELECT 1 FROM oms.school_bindings b "
-                    "JOIN enterprise.tenants t ON t.id=b.tenant_id "
-                    "WHERE b.eduplus_tenant_id=%s AND b.status='verified' "
-                    "AND t.external_tid=%s LIMIT 1",
-                    (event.external_tenant_id, str(event.external_tenant_id)),
+                    "UPDATE enterprise.tenants SET external_eligibility='denied',"
+                    "external_version=external_version+1 "
+                    "WHERE id=%s AND external_tid=%s",
+                    (bound["id"], str(event.external_tenant_id)),
                 )
-            ).fetchone()
             if bound:
                 await c.execute(
                     "UPDATE eduplus2.lifecycle_inbox SET processing_status='pending_reconcile' "
@@ -248,11 +323,13 @@ async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_
             return "pending_reconcile" if bound else "pending_binding"
         previous = await (
             await c.execute(
-                "SELECT semantic_digest FROM eduplus2.lifecycle_inbox "
+                "SELECT semantic_digest,processing_status FROM eduplus2.lifecycle_inbox "
                 "WHERE tenant_id=%s AND event_id=%s",
                 (enterprise.deployment.tenant_id, event.event_id),
             )
         ).fetchone()
+        if previous:
+            validate_lifecycle_inbox_row(previous)
         if not previous or not hmac.compare_digest(
             previous["semantic_digest"], event.semantic_digest
         ):
@@ -326,11 +403,15 @@ async def _reconcile_lifecycle_target_locked(
     async with enterprise.db.transaction(scope) as c:
         target = await (
             await c.execute(
-                "SELECT generation FROM eduplus2.lifecycle_targets WHERE tenant_id=%s "
+                "SELECT generation,eligibility,verified_client_id,proof_checked_at,"
+                "proof_expires_at,binding_version "
+                "FROM eduplus2.lifecycle_targets WHERE tenant_id=%s "
                 "AND external_tenant_id=%s AND external_app_id=%s",
                 (enterprise.deployment.tenant_id, external_tenant_id, external_app_id),
             )
         ).fetchone()
+        if target:
+            validate_lifecycle_target_row(target)
         binding = await (
             await c.execute(
                 "SELECT b.tenant_id,b.version FROM oms.school_bindings b "
@@ -419,11 +500,15 @@ async def _reconcile_lifecycle_target_locked(
             proof_expires_at = None
         current = await (
             await c.execute(
-                "SELECT generation,proof_checked_at FROM eduplus2.lifecycle_targets "
+                "SELECT generation,proof_checked_at,eligibility,verified_client_id,"
+                "proof_expires_at,binding_version "
+                "FROM eduplus2.lifecycle_targets "
                 "WHERE tenant_id=%s AND external_tenant_id=%s AND external_app_id=%s FOR UPDATE",
                 (enterprise.deployment.tenant_id, external_tenant_id, external_app_id),
             )
         ).fetchone()
+        if current:
+            validate_lifecycle_target_row(current)
         still_bound = await (
             await c.execute(
                 "SELECT version FROM oms.school_bindings WHERE tenant_id=%s "
@@ -440,6 +525,16 @@ async def _reconcile_lifecycle_target_locked(
             or still_bound["version"] != binding["version"]
         ):
             return "stale"
+        tenant = await (
+            await c.execute(
+                "SELECT external_eligibility,provisioning_status,recovery_state "
+                "FROM enterprise.tenants WHERE id=%s AND external_tid=%s FOR UPDATE",
+                (binding["tenant_id"], str(external_tenant_id)),
+            )
+        ).fetchone()
+        if tenant is None:
+            return "stale"
+        validate_tenant_business_values(tenant)
         await c.execute(
             "UPDATE eduplus2.lifecycle_targets SET eligibility=%s,verified_client_id=%s,"
             "resolve_etag=%s,proof_checked_at=%s,proof_expires_at=%s,binding_version=%s,"
@@ -526,6 +621,15 @@ async def reconcile_due_lifecycle_targets(enterprise, *, batch_size: int = 32) -
         raise ValueError("invalid lifecycle batch size")
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@eduplus2-reconcile")
     async with enterprise.db.transaction(scope) as c:
+        target_rows = await (
+            await c.execute(
+                "SELECT eligibility,verified_client_id,proof_checked_at,proof_expires_at,"
+                "binding_version FROM eduplus2.lifecycle_targets WHERE tenant_id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchall()
+        for row in target_rows:
+            validate_lifecycle_target_row(row)
         registrations = await (
             await c.execute(
                 "SELECT b.eduplus_tenant_id,r.external_app_id "
@@ -585,6 +689,32 @@ async def snapshot_lifecycle_reconcile_metrics(enterprise) -> dict[str, int]:
 
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@eduplus2-metrics")
     async with enterprise.db.transaction(scope) as c:
+        target_rows = await (
+            await c.execute(
+                "SELECT eligibility,verified_client_id,proof_checked_at,proof_expires_at,"
+                "binding_version FROM eduplus2.lifecycle_targets WHERE tenant_id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchall()
+        for row in target_rows:
+            validate_lifecycle_target_row(row)
+        inbox_rows = await (
+            await c.execute(
+                "SELECT processing_status FROM eduplus2.lifecycle_inbox WHERE tenant_id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchall()
+        for row in inbox_rows:
+            validate_lifecycle_inbox_row(row)
+        actor_rows = await (
+            await c.execute(
+                "SELECT status,resolved_at FROM eduplus2.lifecycle_actor_candidates "
+                "WHERE tenant_id=%s",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchall()
+        for row in actor_rows:
+            validate_lifecycle_actor_candidate_row(row)
         targets = await (
             await c.execute(
                 "SELECT "

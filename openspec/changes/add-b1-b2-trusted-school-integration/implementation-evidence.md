@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | OIDC/JWKS、普通 user JWT 与 client resolve | 已归档 `enterprise-eduplus2-federated-access` 及 2026-09-18 test/本地只读证据；当前 `eduplus2/client.py` 验 JWT，`service.py` 校验注册/resolve/profile/permission | 可复用普通换票机制；不是 OMS/TMS 独立管理会话或权威学校绑定验收。 |
 | 本人 Profile / 学校目录 | 开发者文档只读证明 `/api/v1/me/profile` 是本人；学校成员目录另需授权码用户令牌、订阅和策略范围 | 不能把本人 Profile、M2M `/api/v1/users` 示例或目录结果直接当作外部学校权威/学校负责人资格。 |
-| 账号在线状态、学校稳定 ID/类型/状态、改码与解绑 | 本仓库现无可脱敏引用的已交付管理适用性实测合同；`oms/0011_school_binding.sql` 仅假设数字外部 ID、表内尚无当前权威接口证明 | 学校绑定创建/撤权、管理敏感写和真实 B1 门禁保持关闭；不改变 `0011` checksum，也不从 `school_code`/`external_tid` 推断。 |
-| 生命周期 Webhook | test-cn `智能体基座` 控制台签名 mock 8/8 HTTP 204；真实事件未受理 | 只证明 demo URL/验签，不提供稳定学校 ID、账号状态、管理员资格或 G2 撤权证据。 |
+| 账号在线状态、学校稳定 ID/类型/状态、改码与解绑 | 当前 Webhook 真 created 已按稳定外部学校 ID 建立一个绑定；独立账号在线状态、改码/解绑与正式 B1/B2 入口仍无完整实测合同 | Webhook 已建 PG 学校锚点不等于用户登录/资源授权；管理敏感写和 B1/G2 门禁继续独立验收，不从 `school_code` 推断。 |
+| 生命周期 Webhook | test-cn `智能体基座` 控制台签名 mock 8/8 HTTP 204；`rc.53` 真实 terminated/created 亦 204，PG inbox/绑定/client/onboarding/投影只读核对，见 Webhook change 证据 | 可消费已投影学校事实，但仍不提供账号状态、管理员本人权限、双校 AI 资源隔离或 G2 撤权证据。 |
 
 后续核验必须记录接口版本、环境、调用身份、脱敏响应、学校 ID 类型、失效/故障及撤权窗口；未验证项不得用 fixture 代替。
 

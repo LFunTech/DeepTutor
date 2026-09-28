@@ -206,6 +206,43 @@ async def test_signed_created_directly_creates_school_without_online_resolve(app
     }
 
 
+async def test_webhook_does_not_accept_unknown_school_binding_version_without_db_check(app):
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    created = await _deliver(
+        app,
+        event_id="synthetic-binding-version-created",
+        event_type="subscription.created",
+        status="active",
+    )
+    assert created.status_code == 204
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@binding-version-test")
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "ALTER TABLE oms.school_bindings DROP CONSTRAINT IF EXISTS school_bindings_version_check"
+        )
+        await c.execute(
+            "UPDATE oms.school_bindings SET version=0 WHERE eduplus_tenant_id=10001"
+        )
+    denied = await _deliver(
+        app,
+        event_id="synthetic-binding-version-suspended",
+        event_type="subscription.suspended",
+        status="suspended",
+    )
+    assert denied.status_code == 409
+    async with enterprise.db.transaction(scope) as c:
+        row = await (
+            await c.execute(
+                "SELECT binding_version,eligibility FROM eduplus2.webhook_school_state "
+                "WHERE external_tenant_id=10001"
+            )
+        ).fetchone()
+    assert row == {"binding_version": 1, "eligibility": "allowed"}
+
+
 async def test_webhook_authority_startup_does_not_require_online_resolver(monkeypatch, app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_resolver = None
@@ -253,6 +290,15 @@ async def test_tms_bootstrap_http_uses_verified_token_and_signed_school_binding(
             client_id="synthetic-other-app-client",
         )
     ).status_code == 204
+    async with enterprise.db.transaction(
+        TenantScope(str(enterprise.deployment.tenant_id), "@synthetic-eligibility-check")
+    ) as connection:
+        school = await (
+            await connection.execute(
+                "SELECT external_eligibility FROM enterprise.tenants WHERE external_tid='10001'"
+            )
+        ).fetchone()
+    assert school == {"external_eligibility": "allowed"}
     issued_at = int(time.time())
     claims = {
         "iss": enterprise.eduplus2_issuer,
@@ -367,8 +413,12 @@ async def test_authorized_oms_freeze_survives_webhook_reactivation(app):
             "role_version,scope_kind,school_id,school_binding_version,valid_from,"
             "expires_at,command_id,created_by) VALUES(%s,'oms',%s,"
             "'synthetic_reconciler',1,'school',%s,1,now(),"
-            "'infinity'::timestamptz,%s,'synthetic-approval')",
+                "now()+interval '100 years',%s,'synthetic-approval')",
             (uuid.uuid4(), operator_id, school_id, uuid.uuid4()),
+        )
+        await c.execute(
+            "UPDATE management.principals SET policy_version=policy_version+1 WHERE id=%s",
+            (operator_id,),
         )
     now = datetime.now(timezone.utc)
     actor = ManagementIdentity(
@@ -1251,3 +1301,185 @@ async def test_signed_webhook_drives_existing_school_login_and_session_gate(app)
     )
     assert resumed.status_code == 204
     assert await enterprise.identity.login("admin", "long-password-1", client="synthetic-three")
+
+
+async def test_duplicate_webhook_rejects_unknown_inbox_status_without_db_check(app):
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    event_id = "synthetic-inbox-status-" + uuid.uuid4().hex
+    assert (
+        await _deliver(
+            app,
+            event_id=event_id,
+            event_type="subscription.created",
+            status="active",
+        )
+    ).status_code == 204
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-value-test")
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_inbox "
+            "DROP CONSTRAINT IF EXISTS lifecycle_inbox_processing_status_check"
+        )
+        await c.execute(
+            "UPDATE eduplus2.lifecycle_inbox SET processing_status='future-status' "
+            "WHERE tenant_id=%s AND event_id=%s",
+            (enterprise.deployment.tenant_id, event_id),
+        )
+
+    duplicate = await _deliver(
+        app,
+        event_id=event_id,
+        event_type="subscription.created",
+        status="active",
+    )
+    assert duplicate.status_code == 503
+
+
+async def test_actor_handoff_rejects_unknown_status_and_resolution_without_db_checks(app):
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    event_id = "synthetic-actor-status-" + uuid.uuid4().hex
+    assert (
+        await _deliver(
+            app,
+            event_id=event_id,
+            event_type="subscription.created",
+            status="active",
+            actor={"type": "user", "user_id": "synthetic-actor"},
+        )
+    ).status_code == 204
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-value-test")
+    async with enterprise.db.transaction(scope) as c:
+        binding = await (
+            await c.execute(
+                "SELECT tenant_id,version FROM oms.school_bindings WHERE eduplus_tenant_id=10001"
+            )
+        ).fetchone()
+        school_id = binding["tenant_id"]
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_actor_candidates "
+            "DROP CONSTRAINT IF EXISTS lifecycle_actor_candidate_status_check"
+        )
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_actor_candidates "
+            "DROP CONSTRAINT IF EXISTS lifecycle_actor_candidate_resolution_check"
+        )
+        await c.execute(
+            "UPDATE eduplus2.lifecycle_actor_candidates SET status='future-status' "
+            "WHERE tenant_id=%s AND event_id=%s",
+            (enterprise.deployment.tenant_id, event_id),
+        )
+    identity = ManagementIdentity(
+        application="tms",
+        issuer=enterprise.eduplus2_issuer,
+        subject="synthetic-actor",
+        school_id=school_id,
+        policy_version=1,
+        school_binding_version=binding["version"],
+        webhook_app_id=51,
+        external_active=True,
+        external_checked_at=datetime.now(timezone.utc),
+        external_verified_until=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+    with pytest.raises(RuntimeError, match="actor candidate status"):
+        await find_pending_actor_candidates(enterprise, identity)
+
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "UPDATE eduplus2.lifecycle_actor_candidates "
+            "SET status='consumed', resolved_at=NULL "
+            "WHERE tenant_id=%s AND event_id=%s",
+            (enterprise.deployment.tenant_id, event_id),
+        )
+    with pytest.raises(RuntimeError, match="actor candidate resolution"):
+        await find_pending_actor_candidates(enterprise, identity)
+
+
+async def test_webhook_projection_rejects_unknown_existing_eligibility_without_db_check(app):
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    prefix = "synthetic-projection-status-" + uuid.uuid4().hex
+    assert (
+        await _deliver(
+            app,
+            event_id=prefix + "created",
+            event_type="subscription.created",
+            status="active",
+        )
+    ).status_code == 204
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-value-test")
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "ALTER TABLE eduplus2.webhook_school_state "
+            "DROP CONSTRAINT IF EXISTS webhook_school_state_eligibility_check"
+        )
+        await c.execute(
+            "UPDATE eduplus2.webhook_school_state SET eligibility='future-status' "
+            "WHERE tenant_id=%s AND external_tenant_id=10001",
+            (enterprise.deployment.tenant_id,),
+        )
+    response = await _deliver(
+        app,
+        event_id=prefix + "reactivated",
+        event_type="subscription.reactivated",
+        status="active",
+    )
+    assert response.status_code == 503
+    async with enterprise.db.transaction(scope) as c:
+        state = await (
+            await c.execute(
+                "SELECT eligibility FROM eduplus2.webhook_school_state "
+                "WHERE tenant_id=%s AND external_tenant_id=10001",
+                (enterprise.deployment.tenant_id,),
+            )
+        ).fetchone()
+    assert state == {"eligibility": "future-status"}
+
+
+async def test_lifecycle_target_metrics_reject_unknown_eligibility_and_bad_proof_without_db_checks(
+    app,
+):
+    from deeptutor_enterprise.eduplus2.lifecycle import snapshot_lifecycle_reconcile_metrics
+
+    enterprise = app.state.enterprise
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-value-test")
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_targets "
+            "DROP CONSTRAINT IF EXISTS lifecycle_targets_eligibility_check"
+        )
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_targets "
+            "DROP CONSTRAINT IF EXISTS lifecycle_targets_check3"
+        )
+        await c.execute(
+            "ALTER TABLE eduplus2.lifecycle_targets "
+            "DROP CONSTRAINT IF EXISTS lifecycle_allowed_requires_binding_version"
+        )
+        await c.execute(
+            "INSERT INTO eduplus2.lifecycle_targets("
+            "tenant_id,external_tenant_id,external_app_id,generation,eligibility"
+            ") VALUES(%s,10001,51,1,'future-status')",
+            (enterprise.deployment.tenant_id,),
+        )
+
+    with pytest.raises(RuntimeError, match="lifecycle target eligibility"):
+        await snapshot_lifecycle_reconcile_metrics(enterprise)
+
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "UPDATE eduplus2.lifecycle_targets SET eligibility='allowed',"
+            "verified_client_id='', proof_checked_at=NULL, proof_expires_at=NULL,"
+            "binding_version=0 WHERE tenant_id=%s AND external_tenant_id=10001",
+            (enterprise.deployment.tenant_id,),
+        )
+    with pytest.raises(RuntimeError, match="lifecycle target proof"):
+        await snapshot_lifecycle_reconcile_metrics(enterprise)

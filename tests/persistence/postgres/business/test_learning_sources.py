@@ -171,6 +171,26 @@ async def test_shared_upsert_preserves_full_fields_and_atomicity(
         first = await sessions.find_notebook_entry(session["id"], "q", turn_id=turn["id"])
         for key, value in item.items():
             assert first[key] == value
+        import psycopg
+
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as c:
+            await c.execute(
+                "ALTER TABLE enterprise.notebook_entries "
+                "DROP CONSTRAINT IF EXISTS notebook_entries_score_trend_check"
+            )
+            await c.execute(
+                "UPDATE enterprise.notebook_entries SET score_trend='future-trend' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, first["id"]),
+            )
+        with pytest.raises(ValueError, match="trend"):
+            await write([dict(item, user_answer="不得覆盖未知趋势")])
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as c:
+            await c.execute(
+                "UPDATE enterprise.notebook_entries SET score_trend='new' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, first["id"]),
+            )
         update = dict(item, is_correct=True, user_answer="A")
         update.pop("user_answer_images")
         assert await write([update]) == 1

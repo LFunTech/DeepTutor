@@ -7,12 +7,14 @@ import pytest
 
 from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
 
+pytestmark = pytest.mark.asyncio
+
 
 @pytest.mark.parametrize("source", [1, 2])
 async def test_accounts_upgrade_from_verified_schema_one(pg_dsn, source):
     runner = MigrationRunner(pg_dsn)
     migrations = runner._migrations()
-    assert len(migrations) == 12, "账号后续迁移必须保持 0001–0012 连续历史"
+    assert len(migrations) == 16, "账号后续迁移必须保持 0001–0016 连续历史"
     first = migrations[:source]
     runner._migrations = lambda: first
     await runner.apply()
@@ -58,7 +60,7 @@ async def test_accounts_upgrade_from_verified_schema_one(pg_dsn, source):
 async def test_upgrade_rejects_source_drift_before_new_ddl(pg_dsn, source):
     runner = MigrationRunner(pg_dsn)
     migrations = runner._migrations()
-    assert len(migrations) == 12, "账号后续迁移必须保持 0001–0012 连续历史"
+    assert len(migrations) == 16, "账号后续迁移必须保持 0001–0016 连续历史"
     runner._migrations = lambda: migrations[:source]
     await runner.apply()
     with psycopg.connect(pg_dsn) as c:

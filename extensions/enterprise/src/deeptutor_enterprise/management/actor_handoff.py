@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from ..eduplus2.lifecycle import (
+    validate_lifecycle_actor_candidate_row,
+    validate_webhook_school_state_row,
+)
 from ..scope import TenantScope
 from .authorization import ManagementIdentity, _identity_is_current
 
@@ -40,6 +44,26 @@ async def find_pending_actor_candidates(
     owner_id = enterprise.deployment.tenant_id
     scope = TenantScope(str(owner_id), "@eduplus2-actor-handoff")
     async with enterprise.db.transaction(scope) as c:
+        candidate_rows = await (
+            await c.execute(
+                "SELECT status,resolved_at FROM eduplus2.lifecycle_actor_candidates "
+                "WHERE tenant_id=%s AND school_id=%s AND external_app_id=%s "
+                "AND actor_issuer=%s AND actor_subject=%s",
+                (owner_id, identity.school_id, app_id, identity.issuer, identity.subject),
+            )
+        ).fetchall()
+        for row in candidate_rows:
+            validate_lifecycle_actor_candidate_row(row)
+        projection_rows = await (
+            await c.execute(
+                "SELECT eligibility,onboarding_event_id,onboarding_completed_at "
+                "FROM eduplus2.webhook_school_state "
+                "WHERE tenant_id=%s AND school_id=%s AND external_app_id=%s",
+                (owner_id, identity.school_id, app_id),
+            )
+        ).fetchall()
+        for row in projection_rows:
+            validate_webhook_school_state_row(row)
         rows = await (
             await c.execute(
                 "SELECT a.event_id,a.external_subscription_id,a.school_id,a.binding_version "

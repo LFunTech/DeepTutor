@@ -140,8 +140,7 @@ async def test_turn_upload_failure_in_objectstore_attachment_store_fails_turn_wi
     terminal_errors = [str(event.get("content") or "") for event in events if event["type"] == "error"]
     assert terminal_errors
     assert "objectstore_unavailable" in terminal_errors[-1]
-    assert events[-1]["type"] == "done"
-    assert events[-1]["metadata"]["status"] == "failed"
+    assert events[-1]["type"] == "error"
     assert "should not be reached" not in "\n".join(str(event.get("content") or "") for event in events)
     detail = await store.get_session_with_messages(session["id"])
     assert detail is not None
@@ -378,11 +377,13 @@ async def test_ws_start_turn_uploads_attachment_through_container_objectstore(
                     application_container=container,
                 )
             )
+            self.headers = {}
             self.sent: list[dict] = []
             self._sent_start = False
             self._done = asyncio.Event()
 
-        async def accept(self) -> None:
+        async def accept(self, subprotocol=None) -> None:
+            self.accepted_subprotocol = subprotocol
             return None
 
         async def receive_text(self) -> str:

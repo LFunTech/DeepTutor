@@ -96,7 +96,7 @@ async def test_learning_upgrade_verifies_source_and_rolls_back_target(pg_dsn, so
         "ALTER TABLE enterprise.mastery_topic_sources ALTER COLUMN entry_ref DROP EXPRESSION",
         "DROP INDEX enterprise.mastery_one_active_question",
         "DROP INDEX enterprise.mastery_events_cursor",
-        "ALTER TABLE enterprise.mastery_path_operations DROP CONSTRAINT mastery_path_operations_version_check",
+        "ALTER TABLE enterprise.mastery_path_operations DROP CONSTRAINT IF EXISTS mastery_path_operations_version_check",
     ],
 )
 async def test_learning_catalog_rejects_drift(pg_dsn, mutation):

@@ -1,10 +1,97 @@
 """删除门禁、既有跨域 FK 受控拒绝与代际回调。"""
 
+import psycopg
 import pytest
 
 from deeptutor.services.session.question_bank import QuestionBankReferenceConflict
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_session_delete_rejects_unknown_attachment_state_before_detach(
+    pg_session_store_factory, business_actors, tmp_path, migrated_pg
+):
+    from deeptutor.persistence.postgres.session_resources import PostgresAttachmentStore
+    from deeptutor.persistence.resources import OwnerResourceProvider
+
+    store = pg_session_store_factory(business_actors.tenants[0].owners[0])
+    files = PostgresAttachmentStore(store, OwnerResourceProvider(tmp_path.absolute()))
+    await store.create_session(session_id="s")
+    url = await files.put(session_id="s", attachment_id="a", filename="a.txt", data=b"bytes")
+    object_id = url.split("/")[-2]
+    physical = list(tmp_path.rglob("*.blob"))[0]
+    token = await store.claim_deletion("s")
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await store.delete_session("s", deletion_token=token)
+    assert (await store.get_session("s"))["deleting"] is True
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT state,session_ref FROM enterprise.session_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, object_id),
+            )
+        ).fetchone()
+    assert row == {"state": "future-state", "session_ref": "s"}
+    assert physical.read_bytes() == b"bytes"
+
+
+async def test_cleanup_coordinator_rejects_unknown_attachment_state(
+    pg_session_store_factory, business_actors, tmp_path, migrated_pg
+):
+    from deeptutor.persistence.postgres.session_resources import PostgresAttachmentStore
+    from deeptutor.persistence.resources import OwnerResourceProvider
+    from deeptutor.services.session.deletion import cleanup_session_resources
+
+    store = pg_session_store_factory(business_actors.tenants[0].owners[0])
+    files = PostgresAttachmentStore(store, OwnerResourceProvider(tmp_path.absolute()))
+    await store.create_session(session_id="s")
+    url = await files.put(session_id="s", attachment_id="a", filename="a.txt", data=b"bytes")
+    object_id = url.split("/")[-2]
+    physical = list(tmp_path.rglob("*.blob"))[0]
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+        )
+        await connection.execute(
+            "UPDATE enterprise.session_objects SET state='future-state' "
+            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+            (*store._owner, object_id),
+        )
+
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await cleanup_session_resources(store)
+    assert physical.read_bytes() == b"bytes"
+
+
+async def test_restricted_runtime_role_cannot_delete_another_owners_session(
+    restricted_business_dsn, pg_session_store_factory, business_actors, pg_scope_factory
+):
+    from deeptutor.persistence.postgres.connection import Database
+    from deeptutor.persistence.postgres.session import PostgresSessionStore
+
+    first, second = business_actors.tenants[0].owners
+    await pg_session_store_factory(first).create_session(session_id="private")
+    async with Database(restricted_business_dsn, resource="session-rls-negative") as db:
+        other = PostgresSessionStore(db, pg_scope_factory(second))
+        assert await other.get_session("private") is None
+        async with db.transaction(pg_scope_factory(second)) as connection:
+            deleted = await connection.execute(
+                "DELETE FROM enterprise.sessions WHERE tenant_id=%s AND id=%s",
+                (first.tenant_id, "private"),
+            )
+            assert deleted.rowcount == 0
+    assert await pg_session_store_factory(first).get_session("private") is not None
 
 
 async def test_known_reference_conflict_releases_gate_without_losing_reference(

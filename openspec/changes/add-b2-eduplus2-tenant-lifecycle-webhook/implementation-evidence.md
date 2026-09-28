@@ -1,6 +1,28 @@
 # EduPlus2 生命周期 Webhook 实施证据
 
-## 2026-09-27 静态目标应用 ID 退役（本地已实现，未发布）
+## 2026-09-27 独立测试学校新增订阅→暂停→恢复（3.1 完成）
+
+- 用户明确指定并确认在 EduPlus2 **test** 对独立测试学校新增“智能体基座”订阅并完成暂停→恢复；没有修改 EduPlus2 仓库、学校账号或超级管理员。前一所候选测试学校的订阅请求被 EduPlus2 以“须先设置学校超级管理员”拒绝；DeepTutor 只读核对无相应绑定、inbox 或投影，未绕过该前置条件。本次成功学校的操作前 DeepTutor 对该学校绑定、inbox、投影均为 0。
+- EduPlus2 运营 UI 显示仅新增目标“智能体基座”订阅成功并启用；DeepTutor 运行时低权 PG、只读事务核对：学校绑定 `verified`，`subscription.created` 为 `verified/active`，投影 `allowed/generation=1` 且 PG onboarding 完成。该动作实际创建了 test 学校的应用订阅及 OAuth Client，不是纯只读操作；未记录学校/订阅/Client/actor 具体标识或凭据。
+- 随后只操作该目标应用的开关：暂停操作结果显示 Webhook 回调 **成功 1、跳过 0**；PG inbox 新增 `subscription.suspended` (`denied/suspended`)，投影 `denied/generation=2`。恢复操作结果同样显示 Webhook 回调 **成功 1、跳过 0**；PG inbox 新增 `subscription.reactivated` (`verified/active`)，投影 `allowed/generation=3`。EduPlus2 UI 最终为“已启用”，不是留在暂停态；全程没有手工补库。
+- 最终学校本地状态仍为 `local_enabled=false`、`provisioning_status=pending`、`bootstrap_completed=false`，人工冻结控制 `frozen=false`；created actor 候选仍只有 1 条 `pending_verification`。恢复仅改变外部资格，不开放 AI 新调用、不把候选变为管理员。此前隔离合成双校测试覆盖本地开关关闭、人工冻结跨恢复保持、TMS 管理入口与 AI 资源门禁区分、Bearer 激活正负例；因此 3.1 的 Webhook 数据库链路与本地隔离已验收，但真实本人 TMS 登录/激活与 AI 多学校运行时仍属其他提案。
+- 页面恢复结果已在操作当时截图核对；DB 查询均 `SET TRANSACTION READ ONLY`，未读取/输出签名 Secret、原始请求体、OAuth Secret、actor subject、事件 ID 或学校内部 UUID。来源无单调版本或受信快照，不能从本次顺序成功推断漏送/迟到场景会自动纠正。3.2 完整回归和上游兼容审查仍待完成。
+
+## 2026-09-27 3.2 回归与上游兼容审查进度（尚未勾选）
+
+- 当前工作树下重新运行企业测试全集：`PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests --tb=short` → **504 passed, 3 skipped**（199.80s）；覆盖迁移重复执行/漂移、Webhook-TMS/OMS 授权、HTTP/WS、双校 session owner 及审计请求关联。三份受影响 change 的 OpenSpec strict validation 和 `git diff --check` 均通过。
+- 同一配置运行 core 定向认证/PG/WS/session 集合：**12 failed, 32 passed**。12 个失败均在既有 `tests/api/test_unified_ws_turn_runtime.py` 的 `runtime.start_turn`，进入业务断言前由 `apply_learning_policy` 抛出 `authenticated identity is required`；此问题在此前 Webhook 验证中已出现，本轮没有修改 `deeptutor/`、`deeptutor_cli/` 或 core 测试。不能将企业测试通过写成 core 全面回归通过；该测试装配/身份上下文需独立修复并复跑。
+- 只读执行 `git merge-tree --write-tree HEAD upstream/main` 仍报 **63 个既存冲突**，其中 `extensions/enterprise/` 为 0；相对 Webhook 接收代码提交 `522f3ff4`，工作树无 core runtime 路径改动。未实际 merge/rebase 或覆盖用户改动。此检查可支持“Webhook 切片没有新增 core 补丁/直接 enterprise 冲突”的窄结论，不能证明整个分支可无冲突合并 upstream/main。故 3.2 保持未完成，也不归档。
+
+## 2026-09-27 `rc.53` 真实投递与学校 PG 接入（当前状态）
+
+- `deploy/test-cn/v1.4.0-rc.53` 经 Woodpecker #64 部署；后端 1/1 Ready，迁移 apply/verify 成功。test-cn 运行时 `DT_EDUPLUS2_LIFECYCLE_RECEIVER_ENABLED=true`，Webhook 签名 Secret 和独立 inbox 摘要密钥已注入，静态 `DT_EDUPLUS2_WEBHOOK_APP_ID` 不存在；只核对键与开关，不读取/输出密钥值。部署后的隔离签名无效业务类型探针返回 422 而非旧 503，且不会写入学校状态。
+- 部署后的首次运营后台重试虽返回受理，详情却显示 `TenantApp 初始化状态非 pending（状态=failed），跳过 Webhook 分发`；test-cn ingress 当时只有 demo 204，没有新的真实请求。此前 503 是旧版本投递，不能据控制台历史错误判断新版仍返回 503。后续实际非 mock 调用于 21:27:50、21:28:13（北京时间）到达 ingress，均返回 204；后端无事务失败告警。
+- 目标 PG 使用运行时低权连接、`SET TRANSACTION READ ONLY` 与部署 owner RLS scope 核对：同一学校/应用先有 `subscription.terminated` (`denied/terminated`)，后有 `subscription.created` (`verified/active`)；两者均有正数订阅 ID。created 有非空应用 Client、`actor.type=user` 与非空候选主体；稳定学校绑定 `verified`、Webhook 投影 `allowed`、PG onboarding 完成、Client 登记 `active`，1 条 actor 候选为 `pending_verification`。未输出学校/订阅/client/actor 标识、原始请求体、签名或 Secret；未直接修改数据库。
+- 学校 AI 状态仍为 `local_enabled=false`、`provisioning_status=pending`、`bootstrap_completed=false`，符合“Webhook PG 接入不等于 AI 资源 ready 或管理员已获权”。正式 TMS 尚未交付，真实 actor 本人登录/激活由管理授权/TMS 提案验收；本 Webhook change 保留候选持久交接及隔离合成 JWT 激活 API 正负例，不以未实现的 TMS UI 阻断收件箱验收。该节点的暂停/恢复尚未验证；后续独立测试学校验收见上节。不能把两次 204 当作整个提案或真实学校放行完成。
+- [八类字段/重试合同及实际证据边界](external-contract-audit-2026-09-27.md)已只读核对：文档描述 `actor.user_id` 为 Keycloak User ID，但尚无真实本人 OIDC `sub` 匹配证据；另外六类实际投递也未验证。缺来源单调版本/受信快照的漏送、迟到风险不变。不修改 EduPlus2、Keycloak、OpenFGA 或真实学校数据。
+
+## 2026-09-27 静态目标应用 ID 退役（发布前历史证据）
 
 - HTTP 收件箱先验证 HMAC，再从受签名保护的 body 解析正整数 `app.id` 并持久写入学校—应用 inbox/投影；不再读取静态应用 ID 环境参数或 Enterprise 属性。非法 `app.id` 仍拒绝。TMS 的目标应用由已验签 JWT `azp` 精确匹配学校 active client，再核对对应 Webhook 投影与人工冻结；另一应用停用不覆盖本应用的 TMS 资格。actor 候选/激活和 OMS 冻结均使用受信身份携带的应用 ID，而非全局配置。固定租户旧会话无应用身份，若出现多个学校—应用投影则失败关闭。
 - test-cn 受控发布先同步签名与稳定摘要密钥、滚动部署新版后端，成功 rollout 后再移除运行时 Secret 的旧应用 ID 键；旧 `rc.51` 仍依赖该键，**发布前不能提前删除**。当前 K8s 键仍存在，新版代码/流水线尚未提交或发布。测试覆盖发布前保留、发布后删除、其余 Secret 字段不变与无密钥输出。

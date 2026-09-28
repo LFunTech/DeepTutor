@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 
 from deeptutor.core.providers import ApplicationProviders, provider_context
@@ -117,5 +118,48 @@ async def test_memory_chat_quiz_snapshot_and_probe_read_pg_without_sqlite(
 
             assert await store.delete_notebook_entry(int(entry["id"])) is True
             assert adapters.read_quiz_entities() == []
+    finally:
+        reset_current_user(token)
+
+
+async def test_invalid_pg_quiz_row_blocks_snapshot_refresh_without_erasing_state(
+    tmp_path, monkeypatch, migrated_pg, business_database, business_sync_database,
+    business_actors,
+) -> None:
+    from deeptutor.services.memory import snapshot
+
+    actor = business_actors.tenants[0].owners[0]
+    store = PostgresSessionStore(business_database, actor.scope)
+    await store.create_session("Quiz", session_id="invalid-quiz-snapshot")
+    await store.upsert_notebook_entries(
+        "invalid-quiz-snapshot",
+        [{"question_id": "q1", "question": "Synthetic?", "source": "book"}],
+    )
+    monkeypatch.setattr(snapshot.store, "memory_root", lambda: tmp_path)
+    token = set_current_user(user_from_token_payload(actor.identity))
+    try:
+        runtime = _Runtime(business_sync_database, actor.tenant_id)
+        with provider_context(ApplicationProviders(container=_Container(runtime))):
+            snapshot.refresh_snapshot("quiz")
+            before_state = snapshot.current_state("quiz")
+            before_changes = snapshot.read_changes("quiz")
+            assert before_state["fingerprints"]
+
+            async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+                async with connection.transaction():
+                    await connection.execute(
+                        "ALTER TABLE enterprise.notebook_entries "
+                        "DROP CONSTRAINT IF EXISTS notebook_entries_source_check"
+                    )
+                    await connection.execute(
+                        "UPDATE enterprise.notebook_entries SET source='future-source' "
+                        "WHERE tenant_id=%s AND owner_id=%s AND session_id='invalid-quiz-snapshot'",
+                        (actor.tenant_id, actor.user_id),
+                    )
+
+            with pytest.raises(ValueError, match="source"):
+                snapshot.refresh_snapshot("quiz")
+            assert snapshot.current_state("quiz") == before_state
+            assert snapshot.read_changes("quiz") == before_changes
     finally:
         reset_current_user(token)

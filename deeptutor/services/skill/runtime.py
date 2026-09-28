@@ -9,7 +9,7 @@ from typing import Any
 from deeptutor.core.providers import get_providers
 from deeptutor.runtime.data_gate import RuntimeMode
 from deeptutor.services.skill.externalized import ExternalizedSkillService
-from deeptutor.services.skill.service import BUILTIN_SKILLS_ROOT, SkillService, get_skill_service
+from deeptutor.services.skill.service import BUILTIN_SKILLS_ROOT, get_skill_service
 
 
 def _resolve_scoped_store(value: Any) -> Any | None:
@@ -36,9 +36,7 @@ def _resolve_object_store(value: Any) -> Any | None:
     return value
 
 
-def get_runtime_skill_service(
-    *, builtin_root: Path | None = BUILTIN_SKILLS_ROOT
-) -> SkillService | ExternalizedSkillService:
+def get_runtime_skill_service(*, builtin_root: Path | None = BUILTIN_SKILLS_ROOT) -> Any:
     """Return the active skill service for this request/scope.
 
     When a PG store and S3-compatible ObjectStore are bound, dynamic skills are
@@ -49,6 +47,13 @@ def get_runtime_skill_service(
 
     providers = get_providers()
     if providers is not None:
+        if providers.skill_service_factory is not None:
+            if not callable(providers.skill_service_factory):
+                raise RuntimeError("configured skill service unavailable")
+            service = providers.skill_service_factory()
+            if service is None:
+                raise RuntimeError("configured skill service unavailable")
+            return service
         store = _resolve_scoped_store(providers.store)
         object_store = _resolve_object_store(providers.object_store)
         if store is not None and object_store is not None:

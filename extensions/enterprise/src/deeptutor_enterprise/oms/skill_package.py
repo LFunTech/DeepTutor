@@ -17,6 +17,9 @@ _MAX_FILE_BYTES = 1_000_000
 _MAX_FILES = 500
 _MAX_RATIO = 100
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_TAG = re.compile(r"^[a-z0-9][a-z0-9\- _]{0,31}$")
+_REQUIRED_BIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+_REQUIRED_ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)
 _ALLOWED_SUFFIXES = frozenset(
     {
@@ -61,12 +64,22 @@ class SkillPackageRejected(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class SkillRequirements:
+    bins: tuple[str, ...]
+    env: tuple[str, ...]
+    sandbox: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class SkillArchive:
     name: str
     description: str
     body: str
     files: tuple[tuple[str, bytes], ...]
     sha256: str
+    tags: tuple[str, ...]
+    always: bool
+    requires: SkillRequirements
 
 
 class _UniqueYamlLoader(yaml.SafeLoader):
@@ -95,7 +108,9 @@ def _safe_path(raw: str) -> str:
     return path.as_posix()
 
 
-def _frontmatter(skill_text: str) -> tuple[str, str, str]:
+def _frontmatter(
+    skill_text: str,
+) -> tuple[str, str, str, tuple[str, ...], bool, SkillRequirements]:
     match = _FRONTMATTER.match(skill_text)
     if match is None:
         raise SkillPackageRejected("SKILL.md requires YAML frontmatter")
@@ -114,7 +129,45 @@ def _frontmatter(skill_text: str) -> tuple[str, str, str]:
         raise SkillPackageRejected("SKILL.md description is invalid")
     if not body:
         raise SkillPackageRejected("SKILL.md body is empty")
-    return name, description.strip(), body
+    tags = metadata.get("tags", [])
+    if not isinstance(tags, list) or any(
+        not isinstance(tag, str) or not _TAG.fullmatch(tag) for tag in tags
+    ):
+        raise SkillPackageRejected("SKILL.md tags are invalid")
+    always = metadata.get("always", False)
+    if type(always) is not bool:
+        raise SkillPackageRejected("SKILL.md always must be a boolean")
+    raw_requires = metadata.get("requires", {})
+    if not isinstance(raw_requires, dict) or not set(raw_requires).issubset(
+        {"bins", "env", "sandbox"}
+    ):
+        raise SkillPackageRejected("SKILL.md requires are invalid")
+    bins = raw_requires.get("bins", [])
+    env = raw_requires.get("env", [])
+    if (
+        not isinstance(bins, list)
+        or any(not isinstance(item, str) or not _REQUIRED_BIN.fullmatch(item) for item in bins)
+        or not isinstance(env, list)
+        or any(not isinstance(item, str) or not _REQUIRED_ENV.fullmatch(item) for item in env)
+    ):
+        raise SkillPackageRejected("SKILL.md requires are invalid")
+    sandbox = raw_requires.get("sandbox")
+    if sandbox is True:
+        sandbox = "shell"
+    elif sandbox is False:
+        sandbox = None
+    elif sandbox is not None and (
+        not isinstance(sandbox, str) or not _REQUIRED_BIN.fullmatch(sandbox)
+    ):
+        raise SkillPackageRejected("SKILL.md sandbox requirement is invalid")
+    return (
+        name,
+        description.strip(),
+        body,
+        tuple(dict.fromkeys(tags)),
+        always,
+        SkillRequirements(tuple(dict.fromkeys(bins)), tuple(dict.fromkeys(env)), sandbox),
+    )
 
 
 def validate_skill_archive(payload: bytes) -> SkillArchive:
@@ -173,7 +226,9 @@ def validate_skill_archive(payload: bytes) -> SkillArchive:
     wrapper = parts[0] if len(parts) == 2 else ""
     if wrapper and any(not path.startswith(wrapper + "/") for path in files):
         raise SkillPackageRejected("ZIP has multiple package roots")
-    name, description, body = _frontmatter(files[skill_path].decode("utf-8"))
+    name, description, body, tags, always, requires = _frontmatter(
+        files[skill_path].decode("utf-8")
+    )
     if wrapper and wrapper != name:
         raise SkillPackageRejected("package directory differs from SKILL.md name")
     normalized = tuple(
@@ -187,4 +242,7 @@ def validate_skill_archive(payload: bytes) -> SkillArchive:
         body=body,
         files=normalized,
         sha256=hashlib.sha256(payload).hexdigest(),
+        tags=tags,
+        always=always,
+        requires=requires,
     )

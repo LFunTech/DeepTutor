@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 
+import psycopg
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -30,6 +31,120 @@ async def upload(store, files):
     )
     aid = url.split("/")[-2]
     return url, aid
+
+
+async def test_unknown_persisted_object_state_blocks_read_list_and_withdrawal(
+    store, tmp_path, migrated_pg
+):
+    files = provider(store, tmp_path)
+    url, key = await upload(store, files)
+    await store.add_message("s", "user", "x", attachments=[{"url": url}])
+    physical = list(tmp_path.rglob("*.blob"))[0]
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, key),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.get_operation(key)
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.list_operations()
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.read_attachment(session_id="s", attachment_id=key, filename="a.txt")
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.withdraw_operation(key)
+    assert physical.read_bytes() == b"actual bytes"
+
+
+async def test_unknown_persisted_object_state_blocks_cleanup_before_file_deletion(
+    store, tmp_path, migrated_pg
+):
+    files = provider(store, tmp_path)
+    _, key = await upload(store, files)
+    physical = list(tmp_path.rglob("*.blob"))[0]
+    await store.delete_session("s")
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, key),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.list_cleanup()
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.cleanup_pending()
+    assert physical.read_bytes() == b"actual bytes"
+
+
+async def test_delete_attachment_does_not_overwrite_unknown_object_state(
+    store, tmp_path, migrated_pg
+):
+    files = provider(store, tmp_path)
+    _, key = await upload(store, files)
+    physical = list(tmp_path.rglob("*.blob"))[0]
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, key),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await files.delete_attachment("s", key)
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT state FROM enterprise.session_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, key),
+            )
+        ).fetchone()
+    assert row["state"] == "future-state"
+    assert physical.read_bytes() == b"actual bytes"
+
+
+async def test_message_deletion_does_not_overwrite_unknown_linked_object_state(
+    store, tmp_path, migrated_pg
+):
+    files = provider(store, tmp_path)
+    url, key = await upload(store, files)
+    message_id = await store.add_message("s", "user", "x", attachments=[{"url": url}])
+    physical = list(tmp_path.rglob("*.blob"))[0]
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.session_objects DROP CONSTRAINT IF EXISTS session_objects_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.session_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, key),
+            )
+    with pytest.raises(ValueError, match="session object state is unknown"):
+        await store.delete_message(message_id)
+    assert [row["id"] for row in await store.get_messages("s")] == [message_id]
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT state FROM enterprise.session_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (*store._owner, key),
+            )
+        ).fetchone()
+    assert row["state"] == "future-state"
+    assert physical.read_bytes() == b"actual bytes"
 
 
 async def test_candidate_invisible_link_reopen_and_delete_physical(store, tmp_path):

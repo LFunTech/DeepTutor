@@ -39,6 +39,43 @@ def test_complete_skill_zip_reads_metadata_and_content_from_skill_md():
     assert len(package.sha256) == 64
 
 
+def test_skill_zip_preserves_runtime_metadata_from_skill_md():
+    from deeptutor_enterprise.oms.skill_package import validate_skill_archive
+
+    skill_md = (
+        "---\nname: socratic\ndescription: 引导式提问\n"
+        "tags: [style, teaching]\nalways: true\n"
+        "requires:\n  bins: [git]\n  env: [EDU_TOKEN]\n  sandbox: shell\n"
+        "---\n\n用问题引导学习。\n"
+    )
+    package = validate_skill_archive(_zip({"socratic/SKILL.md": skill_md}))
+    assert package.tags == ("style", "teaching")
+    assert package.always is True
+    assert package.requires.bins == ("git",)
+    assert package.requires.env == ("EDU_TOKEN",)
+    assert package.requires.sandbox == "shell"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "always: yes-please",
+        "tags: style",
+        "tags: [style, 42]",
+        "requires: [git]",
+        "requires:\n  bins: git",
+        "requires:\n  env: [42]",
+        "requires:\n  sandbox: [shell]",
+    ],
+)
+def test_skill_zip_rejects_runtime_metadata_that_would_be_misread(extra):
+    from deeptutor_enterprise.oms.skill_package import SkillPackageRejected, validate_skill_archive
+
+    body = _skill().replace("---\n\n", f"{extra}\n---\n\n", 1)
+    with pytest.raises(SkillPackageRejected):
+        validate_skill_archive(_zip({"socratic/SKILL.md": body}))
+
+
 @pytest.mark.parametrize(
     "files",
     [

@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
-import tempfile
 
 import pytest
+
+pytest_plugins = ("tests.fixtures.postgres",)
 
 from deeptutor.services.storage.file_library import (
     FileLibraryStore,
@@ -21,14 +22,86 @@ from deeptutor.services.storage.file_library import (
 
 
 @pytest.fixture
-def tmp_db_path(tmp_path: Path) -> Path:
-    return tmp_path / "file_library.db"
+def pg_file_library_runtime(pg_dsn: str, tmp_path: Path):
+    from uuid import uuid4
+
+    import psycopg
+
+    from deeptutor.persistence.postgres.connection import SyncDatabase
+    from deeptutor.persistence.postgres.migrations.runner import MigrationRunner
+    from deeptutor.persistence.postgres.scope import TenantScope
+    from tests.fixtures.postgres import single_database_user_dsn
+
+    asyncio.run(MigrationRunner(pg_dsn).apply())
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    tenant_id = str(uuid4())
+    owner_id = "file-library-owner"
+    with psycopg.connect(pg_dsn) as connection:
+        with connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO enterprise.tenants(
+                    id, external_eligibility, local_enabled, provisioning_status,
+                    auth_epoch, bootstrap_completed
+                ) VALUES (%s,'not_required',true,'ready','file-library-test',true)
+                """,
+                (tenant_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO enterprise.users(tenant_id,id,username,role)
+                VALUES (%s,%s,%s,'tenant_admin')
+                """,
+                (tenant_id, owner_id, owner_id),
+            )
+    with SyncDatabase(
+        runtime_dsn,
+        resource=f"file-library-{uuid4().hex[:8]}",
+        max_size=4,
+        max_waiting=8,
+    ) as db:
+        yield db, TenantScope(tenant_id, owner_id), tmp_path / "library-files"
 
 
 @pytest.fixture
-def store(tmp_db_path: Path) -> FileLibraryStore:
+def store(pg_file_library_runtime) -> FileLibraryStore:
+    db, scope, root = pg_file_library_runtime
     reset_file_library_store()
-    return FileLibraryStore(db_path=tmp_db_path)
+    return FileLibraryStore(db, scope, root=root)
+
+
+class _SingletonResources:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def owner_root(self, tenant_id: str, owner_id: str, kind: str) -> Path:
+        path = self.root / tenant_id / owner_id / kind
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+
+class _SingletonRuntime:
+    def __init__(self, db, scope, root: Path) -> None:
+        self.sync_db = db
+        self._scope = scope
+        self.resources = _SingletonResources(root)
+
+    def scope_for_current_user(self):
+        return self._scope
+
+
+class _SingletonContainer:
+    def __init__(self, runtime: _SingletonRuntime) -> None:
+        self.postgres_runtime = runtime
+        self.resources_provider = runtime.resources
+
+
+def _singleton_provider_context(pg_file_library_runtime):
+    from deeptutor.core.providers import ApplicationProviders, provider_context
+
+    db, scope, root = pg_file_library_runtime
+    runtime = _SingletonRuntime(db, scope, root / "singleton-resources")
+    return provider_context(ApplicationProviders(container=_SingletonContainer(runtime)))
 
 
 # ---------------------------------------------------------------------------
@@ -357,18 +430,20 @@ def test_resolve_path_nonexistent_returns_none(store: FileLibraryStore) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_get_file_library_store_returns_singleton(store: FileLibraryStore) -> None:
+def test_get_file_library_store_returns_singleton(pg_file_library_runtime) -> None:
     """get_file_library_store must return the process-wide singleton."""
     reset_file_library_store()
-    s1 = get_file_library_store()
-    s2 = get_file_library_store()
+    with _singleton_provider_context(pg_file_library_runtime):
+        s1 = get_file_library_store()
+        s2 = get_file_library_store()
     assert s1 is s2
 
 
-def test_reset_clears_singleton() -> None:
+def test_reset_clears_singleton(pg_file_library_runtime) -> None:
     """reset_file_library_store must clear the singleton so a new instance is created."""
     reset_file_library_store()
-    s1 = get_file_library_store()
-    reset_file_library_store()
-    s2 = get_file_library_store()
+    with _singleton_provider_context(pg_file_library_runtime):
+        s1 = get_file_library_store()
+        reset_file_library_store()
+        s2 = get_file_library_store()
     assert s1 is not s2

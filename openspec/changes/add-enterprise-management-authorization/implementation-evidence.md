@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | OMS 平台管理 Client ID | 2026-09-27 用户明确指定 `eduplus-platform-admin`；本仓库和已读取的公开 EduPlus2 用户数据/M2M/Webhook 文档未给出该 Client 的目标环境配置或授权码换票实测。 | 作为 OMS 预期 Client ID 进入配置与验证清单；尚不等于已核实的 token `azp`/`aud`、平台人员目录、在线账号状态或本产品 `ops.*` 授权。与每校 Webhook OAuth Client 分开。 |
 | OIDC discovery/JWKS、通用 M2M/client resolve | 2026-09-18 test/本地只读与交互验证，详见 `../add-enterprise-oms-business-logic/implementation-evidence.md`；旧 profile/permission M2M POST 为 404/405 | 只能证明机制；尚不能证明指定 `eduplus-platform-admin` Client 的登录能力、实际 token audience、管理者在线状态或平台会话。 |
-| Webhook 签名 demo | 2026-09-26 test-cn `智能体基座` 控制台 8/8 `subscription.*` mock 投递 HTTP 204；真实事件 503，见 `../add-b2-eduplus2-tenant-lifecycle-webhook/implementation-evidence.md` | 只证明签名 mock 接收，不证明学校负责人资格、管理员授权或撤权。无需重做已通过的 mock。 |
+| Webhook 签名 demo 与真实接收 | 2026-09-26 test-cn `智能体基座` 控制台 8/8 `subscription.*` mock 204；2026-09-27 `rc.53` 后真实 terminated/created 204，学校 PG 绑定和 actor 待核验候选已落库，见 `../add-b2-eduplus2-tenant-lifecycle-webhook/implementation-evidence.md` | 真实候选仅供后续本人匹配；未验证 TMS 登录、学校管理员授权或撤权。无需重做 mock。 |
 | Webhook `subscription.created.actor` | 2026-09-27 按用户指引只读核对 [事件类型](https://eduplus-test.f123.pub/docs/webhook/event-types/) 与 [Webhook 事件格式](https://eduplus-test.f123.pub/docs/webhook/)：`actor` 可选，`actor.user_id` 可为 null（系统/定时任务），表示触发事件的 Keycloak User ID；外部文档未声明其具有管理员角色。用户明确将真实 `subscription.created.actor.user_id` 定义为**本产品首位管理员身份来源**。 | 已验签非 mock、目标应用/学校绑定的真实事件可一次性登记待激活主体；本人 TMS 登录精确匹配后，DeepTutor Enterprise 程序才可作授权决策。mock/system/null/重复/恢复不得赋权。真实事件与本人激活未验收前入口关闭。 |
 | Webhook OAuth Client 与机器令牌 | 2026-09-27 只读获取 [Webhook 文档](https://eduplus-test.f123.pub/docs/webhook/) 和 [Client Credentials 文档](https://eduplus-test.f123.pub/docs/oauth-oidc/client-credentials/)：事件示例含 `oauth_client.client_id/client_secret`，M2M 示例能换 `client_credentials` token 并展示 `GET /api/v1/users` 的泛用代码片段。未使用真实凭据或调用用户接口。 | 凭据下发不等于人员目录授权。`/api/v1/users` 的适用 client、权限、学校范围、返回格式与在线状态未核实，不能作为 OMS/TMS 候选来源。Secret 仅可服务端保存，不得进入前端或证据。 |
 | 本人 Profile 与学校成员目录 | 2026-09-27 只读获取 [Me Profile 文档](https://eduplus-test.f123.pub/docs/user-data/me-profile-api/) 和 [User Data API 文档](https://eduplus-test.f123.pub/docs/user-data/user-data-api/)：`/api/v1/me/profile` 仅当前用户；`/api/v1/open/userdata/users` 需已审批第三方应用授权码用户 token、`azp=app_credentials.client_id`、有效学校订阅，返回受 Data/User Access Policy 约束的分页已有账号。未携令牌实测。 | TMS 可列为**待核验的条件性**成员发现能力；须实测 app/client、用户令牌、学校范围、策略、故障与失效，不得直接用 M2M 或学校后台 token。`dept_id` 当前不实际过滤，不能作隔离；目录 `user_id` 是 EduPlus2 ID，`k_user_id` 是 Keycloak `sub`，授予前仍须候选本人登录并核验 `(issuer,sub,school)`。OMS 不接学校目录。 |
@@ -128,3 +128,12 @@
 ### 2026-09-27 TMS actor 原型浏览器复核与文案修正
 
 - 浏览器核对 actor 待匹配、本人匹配、其他人、无有效 actor、控制台 mock 五态；mock/无 actor 均无激活按钮，本人匹配须二次确认且标注仅合成演示。发现无 actor/mock 时仍展示“已验签真实 actor 来源”，通过测试先红后绿修正为无可激活身份。桌面 1440×900、窄屏 390×844 截图与 Console 0 errors 见 [双端原型审计](../add-c1-oms-operations-prototype/prototype-browser-audit-2026-09-27.md)。全量前端 25 文件 **250 passed**，TMS typecheck、lint、build 均成功。此证据只完成 TMS 开发原型任务 3.11，不改变正式事件、身份及 API 未交付状态。
+
+### 2026-09-27 OMS Skill 动作目录增量迁移
+
+- 新增 `management/0004_oms_skill_actions.sql`，仅在本仓库 `management` schema 中登记 `ops.skills.read/manage/review/publish` 的 `platform` 范围和 `ops.skills.grant` 的目标 `school` 范围；`platform_security_admin`、`platform_config_admin`、`platform_operator` 增加各自 v2 **候选模板**，v1 assignment 不自动升级、主体不自动赋权。受限数据库 owner 仍受 FORCE RLS，迁移事务显式设置 OMS 应用域；`MigrationRunner.verify()` 检查五个动作的范围/敏感度/状态及 v2 模板是否漂移。
+- 测试先见新目录为空、后见受限 owner 在 RLS 下无法执行新增迁移，以及动作退役后 verify 未报错，逐项修复；临时 PG `test_management_authorization_migration.py` 与 `test_persistence.py` 合计 **64 passed**。此项是 3.2 的权限事实前置，不是应用层 PEP、正式 OMS API/UI 或外部平台登录已完成；3.2 仍未勾选。没有改 EduPlus2、OpenFGA、Keycloak 或真实学校数据。
+
+### 2026-09-28 OMS 受保护入口局部装配
+
+- 新增 `/api/v1/oms/me` 和模型清单/草稿的独立 Bearer 分流；每次请求调用已验签平台身份、显式在线状态检查器和 DeepTutor 本地 `ops.*` PEP。草稿写入在单 PG 事务内复核 `ops.providers.manage`、目标版本和审计，不能靠 PG role/JWT role 放行；无本产品角色或只有 `ops.oms.access` 均不能读写模型。默认 verifier/在线检查器不配置时返回 503，不复用租户会话。合成 PG/API 测试随企业套件 **521 passed、3 skipped**。真实 `eduplus-platform-admin` 授权码/账号状态合同、平台初始管理员、独立 OMS 会话和跨学校权限仍未验收，3.2/5.1 不勾选。

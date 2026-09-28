@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from psycopg.types.json import Jsonb
 
+from deeptutor.persistence.postgres.tenant_state import validate_tenant_business_values
+
+from ..eduplus2.lifecycle import (
+    validate_lifecycle_actor_candidate_row,
+    validate_webhook_school_state_row,
+)
 from ..scope import TenantScope
+from .assignment_rules import validate_assignment_relation
 from .authorization import ManagementAuthorizationDenied, ManagementIdentity, _identity_is_current
+from .policy_version import advance_principal_policy_version
+
+_SCHOOL_ADMIN_EXPIRES_AT = datetime(9998, 1, 1, tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,20 +55,27 @@ async def activate_first_school_administrator(
     async with enterprise.db.transaction(TenantScope(str(owner), "@school-activation")) as c:
         school = await (
             await c.execute(
-                "SELECT b.eduplus_tenant_id,b.version,t.bootstrap_completed "
+                "SELECT b.eduplus_tenant_id,b.version,t.bootstrap_completed,"
+                "t.external_eligibility,t.provisioning_status,t.recovery_state "
                 "FROM oms.school_bindings b JOIN enterprise.tenants t ON t.id=b.tenant_id "
                 "WHERE b.tenant_id=%s AND b.status='verified' "
                 "AND t.external_tid=b.eduplus_tenant_id::text "
-                "AND t.recovery_state='normal' "
                 "FOR UPDATE OF b,t",
                 (identity.school_id,),
             )
         ).fetchone()
         if not school or school["version"] != identity.school_binding_version:
             raise ManagementAuthorizationDenied("school lifecycle or binding is unavailable")
+        try:
+            validate_tenant_business_values(school)
+        except ValueError as exc:
+            raise ManagementAuthorizationDenied("school lifecycle or state is unavailable") from exc
+        if school["recovery_state"] != "normal" or school["external_eligibility"] != "allowed":
+            raise ManagementAuthorizationDenied("school lifecycle or state is unavailable")
         projection = await (
             await c.execute(
-                "SELECT 1 FROM eduplus2.webhook_school_state "
+                "SELECT eligibility,onboarding_event_id,onboarding_completed_at "
+                "FROM eduplus2.webhook_school_state "
                 "WHERE tenant_id=%s AND external_tenant_id=%s AND external_app_id=%s "
                 "AND school_id=%s AND binding_version=%s AND eligibility='allowed' "
                 "AND onboarding_event_id IS NOT NULL "
@@ -78,16 +96,21 @@ async def activate_first_school_administrator(
                 ),
             )
         ).fetchone()
+        if projection:
+            validate_webhook_school_state_row(projection)
         if not projection:
             raise ManagementAuthorizationDenied("school webhook projection is unavailable")
         candidate = await (
             await c.execute(
                 "SELECT school_id,external_tenant_id,external_app_id,binding_version,"
-                "actor_issuer,actor_subject,status FROM eduplus2.lifecycle_actor_candidates "
+                "actor_issuer,actor_subject,status,resolved_at "
+                "FROM eduplus2.lifecycle_actor_candidates "
                 "WHERE tenant_id=%s AND event_id=%s FOR UPDATE",
                 (owner, event_id),
             )
         ).fetchone()
+        if candidate:
+            validate_lifecycle_actor_candidate_row(candidate)
         if not candidate or (
             candidate["school_id"] != identity.school_id
             or candidate["external_tenant_id"] != school["eduplus_tenant_id"]
@@ -159,25 +182,53 @@ async def activate_first_school_administrator(
                 "status,external_evidence_ref) VALUES(%s,'tms',%s,%s,%s,'active',%s)",
                 (principal_id, identity.issuer, identity.subject, identity.school_id, event_id),
             )
+        role = await (
+            await c.execute(
+                "SELECT scope_kind FROM management.role_versions "
+                "WHERE application='tms' AND role_key='school_admin' AND version=1 FOR SHARE"
+            )
+        ).fetchone()
+        validate_assignment_relation(
+            application="tms",
+            principal_application="tms",
+            principal_school_id=identity.school_id,
+            role_application="tms" if role else None,
+            role_scope_kind=role["scope_kind"] if role else None,
+            assignment_scope_kind="school",
+            assignment_school_id=identity.school_id,
+        )
         assignment_id = uuid4()
         await c.execute(
             "INSERT INTO management.assignments(id,application,principal_id,role_key,"
             "role_version,scope_kind,school_id,school_binding_version,valid_from,"
             "expires_at,command_id,created_by) "
             "VALUES(%s,'tms',%s,'school_admin',1,'school',%s,%s,clock_timestamp(),"
-            "'infinity'::timestamptz,%s,'@webhook-actor-activation')",
-            (assignment_id, principal_id, identity.school_id, school["version"], command_id),
+            "%s,%s,'@webhook-actor-activation')",
+            (
+                assignment_id,
+                principal_id,
+                identity.school_id,
+                school["version"],
+                _SCHOOL_ADMIN_EXPIRES_AT,
+                command_id,
+            ),
+        )
+        next_policy_version = await advance_principal_policy_version(
+            c, principal_id, expected_before=identity.policy_version
         )
         await c.execute(
             "UPDATE enterprise.tenants SET bootstrap_completed=true WHERE id=%s",
             (identity.school_id,),
         )
         await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner),))
-        await c.execute(
+        consumed = await c.execute(
             "UPDATE eduplus2.lifecycle_actor_candidates SET status='consumed',"
-            "resolved_at=clock_timestamp() WHERE tenant_id=%s AND event_id=%s",
+            "resolved_at=clock_timestamp() WHERE tenant_id=%s AND event_id=%s "
+            "AND status='pending_verification' AND resolved_at IS NULL",
             (owner, event_id),
         )
+        if consumed.rowcount != 1:
+            raise ManagementAuthorizationDenied("school actor candidate changed during activation")
         await c.execute(
             "UPDATE eduplus2.lifecycle_actor_candidates SET status='revoked',"
             "resolved_at=clock_timestamp() WHERE tenant_id=%s AND school_id=%s "
@@ -199,10 +250,10 @@ async def activate_first_school_administrator(
                 str(identity.school_id),
                 request_id,
                 identity.policy_version,
-                identity.policy_version + 1,
+                next_policy_version,
                 Jsonb({"event_id": event_id}),
             ),
         )
         return FirstAdministratorActivation(
-            principal_id, assignment_id, identity.policy_version + 1, False
+            principal_id, assignment_id, next_policy_version, False
         )

@@ -1,0 +1,7 @@
+-- 业务副作用已由学习/阅读/会话服务在删除事务内完成；不改写已应用迁移。
+DROP TRIGGER detach_mastery_path_operations_before_path_delete ON enterprise.mastery_paths;
+DROP FUNCTION enterprise.detach_mastery_path_operations_before_path_delete();
+DROP TRIGGER detach_reading_active_material_before_membership_delete ON enterprise.reading_workspace_materials;
+DROP FUNCTION enterprise.detach_reading_active_material_before_membership_delete();
+DROP TRIGGER detach_session_objects_before_session_delete ON enterprise.sessions;
+DROP FUNCTION enterprise.detach_session_objects_before_session_delete();

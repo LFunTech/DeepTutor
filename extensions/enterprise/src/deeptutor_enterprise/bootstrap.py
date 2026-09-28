@@ -13,6 +13,7 @@ from packaging.specifiers import SpecifierSet
 from deeptutor.persistence.postgres.executor import ExecutorLease
 from deeptutor.persistence.postgres.identity.service import IdentityService
 from deeptutor.persistence.postgres.session import PostgresSessionStore
+from deeptutor.persistence.postgres.tenant_state import validate_tenant_business_values
 
 from . import CORE_COMPATIBILITY
 from .configuration import (
@@ -194,6 +195,9 @@ class Enterprise:
         self.eduplus2_lifecycle_proof_ttl_seconds = 30
         self.eduplus2_signing_key = ""
         self.eduplus2_issuer = ""
+        # OMS 身份服务必须由已核实的外部合同显式装配；缺配置时正式入口失败关闭。
+        self.oms_platform_verifier = None
+        self.oms_account_status = None
         self._configure_eduplus2_from_env()
 
     async def _require_current_lifecycle_proof(self, c):
@@ -201,12 +205,14 @@ class Enterprise:
 
         tenant = await (
             await c.execute(
-                "SELECT external_eligibility,external_tid FROM enterprise.tenants WHERE id=%s",
+                "SELECT external_eligibility,external_tid,provisioning_status,recovery_state "
+                "FROM enterprise.tenants WHERE id=%s",
                 (self.deployment.tenant_id,),
             )
         ).fetchone()
         if not tenant:
             raise PermissionError("school lifecycle unavailable")
+        validate_tenant_business_values(tenant)
         if not self.eduplus2_lifecycle_receiver_enabled and tenant["external_tid"] is None:
             return
         if tenant["external_eligibility"] == "not_required" and tenant["external_tid"] is None:
@@ -468,20 +474,28 @@ class Enterprise:
             ) as c:
                 tenant = await (
                     await c.execute(
-                        "SELECT 1 FROM enterprise.tenants WHERE id=%s AND bootstrap_completed "
-                        "AND auth_epoch=%s AND ("
-                        "%s OR external_tid IS NOT NULL OR "
-                        "(local_enabled AND provisioning_status='ready' "
-                        "AND recovery_state='normal' "
-                        "AND external_eligibility IN ('allowed','not_required')))",
-                        (
-                            str(self.deployment.tenant_id),
-                            self.identity.epoch,
-                            self.eduplus2_lifecycle_receiver_enabled,
-                        ),
+                        "SELECT bootstrap_completed,auth_epoch,external_tid,local_enabled,"
+                        "external_eligibility,provisioning_status,recovery_state "
+                        "FROM enterprise.tenants WHERE id=%s",
+                        (str(self.deployment.tenant_id),),
                     )
                 ).fetchone()
-                if not tenant:
+                if tenant:
+                    validate_tenant_business_values(tenant)
+                if not tenant or not (
+                    tenant["bootstrap_completed"]
+                    and tenant["auth_epoch"] == self.identity.epoch
+                    and (
+                        self.eduplus2_lifecycle_receiver_enabled
+                        or tenant["external_tid"] is not None
+                        or (
+                            tenant["local_enabled"]
+                            and tenant["provisioning_status"] == "ready"
+                            and tenant["recovery_state"] == "normal"
+                            and tenant["external_eligibility"] in {"allowed", "not_required"}
+                        )
+                    )
+                ):
                     raise RuntimeError("fixed tenant is not initialized or available")
             self.store_provider = StoreProvider(self)
             self.providers = ApplicationProviders(

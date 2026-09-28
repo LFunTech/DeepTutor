@@ -2,7 +2,7 @@
 
 ## Context
 
-已归档的联邦访问 change 提供第三方 JWT、resolve、profile、普通 `dt_token` 与部分 HTTP/WS/SDK guard；M1/PG scoped persistence 已提供稳定内部 ID 与 RLS 底座。这些均不证明最终学校 ID 合同、独立管理会话、双学校资源隔离或真实 G2。当前 `oms/0011_school_binding.sql` 是未完成的学校绑定基础迁移，不得原位改写；管理权限迁移 `management/0001` 只有未装配的事务原语。现有 test-cn Webhook 8/8 为 mock 签名 demo，真实生命周期合同未确认。
+已归档的联邦访问 change 提供第三方 JWT、resolve、profile、普通 `dt_token` 与部分 HTTP/WS/SDK guard；M1/PG scoped persistence 已提供稳定内部 ID 与 RLS 底座。这些均不证明最终学校 ID 合同、独立管理会话、双学校资源隔离或真实 G2。`oms/0011_school_binding.sql` 不得原位改写；管理权限迁移 `management/0001` 只有未装配的事务原语。test-cn 已有 8/8 mock demo，后续真实 created/terminated 也已 204 并完成一所学校的 Webhook PG 绑定；这仍不等于 B1 登录/资源及 B2 双学校隔离验收。
 
 ## Goals / Non-Goals
 

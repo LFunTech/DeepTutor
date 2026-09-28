@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from urllib.parse import quote
 
+import psycopg
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -16,8 +17,38 @@ class RecordingObjectStore:
         self.objects: dict[str, bytes] = {}
         self.puts: list[str] = []
         self.gets: list[str] = []
+        self.heads: list[str] = []
+        self.presigns: list[str] = []
         self.deletes: list[str] = []
         self.fail_delete_once = False
+        self.on_head = None
+        self.on_put = None
+        self.on_delete = None
+        self.on_delete_failure = None
+
+    def presign_put(self, key, *, expires_seconds, content_type, size_bytes, expected_sha256):
+        self.presigns.append(key)
+        return SimpleNamespace(
+            url=f"https://synthetic.invalid/{key}",
+            headers={},
+            expires_seconds=expires_seconds,
+        )
+
+    def head_object(self, key):
+        import hashlib
+
+        from deeptutor.runtime.externalized_providers import ObjectBlobRef
+
+        self.heads.append(key)
+        payload = self.objects[key]
+        if self.on_head is not None:
+            self.on_head(key)
+        return ObjectBlobRef(
+            key=key,
+            size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            content_type="application/octet-stream",
+        )
 
     def put_bytes(self, key, data, *, expected_sha256=None, content_type="application/octet-stream"):
         import hashlib
@@ -28,6 +59,8 @@ class RecordingObjectStore:
         assert expected_sha256 == digest
         self.puts.append(key)
         self.objects[key] = bytes(data)
+        if self.on_put is not None:
+            self.on_put(key)
         return ObjectBlobRef(key=key, size_bytes=len(data), sha256=digest, content_type=content_type)
 
     def get_bytes(self, ref):
@@ -40,8 +73,640 @@ class RecordingObjectStore:
         self.deletes.append(ref.key)
         if self.fail_delete_once:
             self.fail_delete_once = False
+            if self.on_delete_failure is not None:
+                self.on_delete_failure(ref.key)
             raise ObjectStoreError("objectstore_unavailable", retryable=True)
+        if self.on_delete is not None:
+            self.on_delete(ref.key)
         self.objects.pop(ref.key, None)
+
+
+@pytest.mark.parametrize(
+    ("constraint", "corruption", "message"),
+    [
+        ("resource_objects_state_check", "state='future-state'", "resource state is unknown"),
+        (
+            "resource_objects_retention_check",
+            "retention='future-retention'",
+            "resource retention is unknown",
+        ),
+    ],
+)
+async def test_presigned_completion_rejects_unknown_existing_business_state_before_head(
+    pg_session_store_factory, business_actors, migrated_pg, constraint, corruption, message,
+):
+    import hashlib
+
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    store = pg_session_store_factory(actor)
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(store, object_store)
+    payload = b"signed-payload"
+    intent = await resources.create_upload_intent(
+        modality="file",
+        mime_type="application/octet-stream",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        purpose="chat_turn",
+    )
+    object_store.objects[object_store.presigns[-1]] = payload
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.resource_objects SET {corruption} "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, intent["object_id"]),
+            )
+    with pytest.raises(ValueError, match=message):
+        await resources.complete_upload_intent(resource_id=intent["resource_id"])
+    assert object_store.heads == []
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT state,retention FROM enterprise.resource_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (*store._owner, intent["object_id"]),
+            )
+        ).fetchone()
+    assert row == {
+        "state": "future-state" if "state=" in corruption else "pending",
+        "retention": "future-retention" if "retention=" in corruption else "temporary",
+    }
+
+
+@pytest.mark.parametrize(
+    ("constraint", "corruption", "message"),
+    [
+        ("resource_objects_state_check", "state='future-state'", "resource state is unknown"),
+        (
+            "resource_objects_retention_check",
+            "retention='future-retention'",
+            "resource retention is unknown",
+        ),
+    ],
+)
+async def test_ready_reference_rejects_unknown_existing_business_state_before_head(
+    pg_session_store_factory, business_actors, migrated_pg, constraint, corruption, message,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    store = pg_session_store_factory(actor)
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(store, object_store)
+    handle = await resources.put(
+        resource_kind="turn_input",
+        resource_id="ready-reference",
+        filename="body.bin",
+        data=b"ready-reference-payload",
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.resource_objects SET {corruption} "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+    with pytest.raises(ValueError, match=message):
+        await resources.verify_ready_reference(resource_id="ready-reference")
+    assert object_store.heads == []
+
+
+async def test_presigned_completion_rechecks_retention_after_object_head(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    import hashlib
+
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    store = pg_session_store_factory(actor)
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(store, object_store)
+    payload = b"signed-race"
+    intent = await resources.create_upload_intent(
+        modality="file",
+        mime_type="application/octet-stream",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        purpose="chat_turn",
+    )
+    object_store.objects[object_store.presigns[-1]] = payload
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS resource_objects_retention_check"
+        )
+
+    def corrupt_after_head(_key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                "UPDATE enterprise.resource_objects SET retention='future-retention' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, intent["object_id"]),
+            )
+
+    object_store.on_head = corrupt_after_head
+    with pytest.raises(ValueError, match="resource retention is unknown"):
+        await resources.complete_upload_intent(resource_id=intent["resource_id"])
+    async with store.db.transaction(store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT state,retention FROM enterprise.resource_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (*store._owner, intent["object_id"]),
+            )
+        ).fetchone()
+    assert row == {"state": "pending", "retention": "future-retention"}
+
+
+async def test_object_publish_does_not_overwrite_unknown_state_during_cleanup_request(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS resource_objects_state_check"
+        )
+
+    def corrupt_after_put(key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                "UPDATE enterprise.resource_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_key=%s",
+                (actor.tenant_id, actor.user_id, key),
+            )
+
+    object_store.on_put = corrupt_after_put
+    with pytest.raises(ValueError, match="resource state is unknown"):
+        await resources.put(
+            resource_kind="workspace_output",
+            resource_id="publish-state-race",
+            filename="body.txt",
+            data=b"body",
+        )
+    async with resources.store.db.transaction(resources.store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT r.state,j.state AS job_state FROM enterprise.resource_objects r "
+                "LEFT JOIN enterprise.resource_cleanup_jobs j "
+                "ON (j.tenant_id,j.owner_id,j.object_id)=(r.tenant_id,r.owner_id,r.id) "
+                "WHERE r.tenant_id=%s AND r.owner_id=%s AND r.resource_id=%s",
+                (*resources.store._owner, "publish-state-race"),
+            )
+        ).fetchone()
+    assert row == {"state": "future-state", "job_state": None}
+    assert list(object_store.objects.values()) == [b"body"]
+
+
+async def test_ready_reference_rechecks_state_after_object_head(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="turn_input",
+        resource_id="reference-race",
+        filename="body.bin",
+        data=b"reference-race-payload",
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS resource_objects_state_check"
+        )
+
+    def corrupt_after_head(_key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                "UPDATE enterprise.resource_objects SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+
+    object_store.on_head = corrupt_after_head
+    with pytest.raises(ValueError, match="resource state is unknown"):
+        await resources.verify_ready_reference(resource_id="reference-race")
+
+
+async def test_ready_reference_rechecks_session_binding_after_object_head(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="turn_input",
+        resource_id="reference-binding-race",
+        filename="body.bin",
+        data=b"reference-payload",
+        metadata={"session_id": "original-session", "purpose": "chat_turn"},
+    )
+
+    def change_binding_after_head(_key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                "UPDATE enterprise.resource_objects "
+                "SET metadata=jsonb_set(metadata,'{session_id}','\"other-session\"') "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+
+    object_store.on_head = change_binding_after_head
+    with pytest.raises(PermissionError, match="not bound to this session"):
+        await resources.verify_ready_reference(
+            resource_id="reference-binding-race",
+            session_id="original-session",
+            purpose="chat_turn",
+        )
+
+
+async def test_object_resource_rejects_unknown_retention_before_persisting_or_uploading(
+    pg_session_store_factory, business_actors,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    with pytest.raises(ValueError, match="resource retention is unknown"):
+        await resources.put(
+            resource_kind="workspace_output",
+            resource_id="invalid-retention",
+            filename="body.txt",
+            data=b"body",
+            retention="future-retention",
+        )
+    assert object_store.puts == []
+    assert await resources.list(resource_kind="workspace_output", resource_id="invalid-retention") == []
+
+
+@pytest.mark.parametrize(
+    ("constraint", "corruption", "message"),
+    [
+        ("resource_objects_state_check", "state='future-state'", "resource state is unknown"),
+        ("resource_objects_retention_check", "retention='future-retention'", "resource retention is unknown"),
+    ],
+)
+async def test_unknown_persisted_resource_cannot_be_listed_or_deleted(
+    pg_session_store_factory,
+    business_actors,
+    migrated_pg,
+    constraint,
+    corruption,
+    message,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="invalid-stored-resource",
+        filename="body.txt",
+        data=b"body",
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.resource_objects SET {corruption} "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+    with pytest.raises(ValueError, match=message):
+        await resources.list(
+            resource_kind="workspace_output", resource_id="invalid-stored-resource"
+        )
+    with pytest.raises(ValueError, match=message):
+        await resources.read(handle, filename="body.txt")
+    with pytest.raises(ValueError, match=message):
+        await resources.delete(handle)
+    assert object_store.deletes == []
+    assert list(object_store.objects.values()) == [b"body"]
+
+
+async def test_unknown_cleanup_job_state_blocks_retry_before_objectstore_delete(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="invalid-cleanup-job",
+        filename="body.txt",
+        data=b"body",
+    )
+    object_store.fail_delete_once = True
+    await resources.delete(handle)
+    assert object_store.deletes and list(object_store.objects.values()) == [b"body"]
+    before_deletes = list(object_store.deletes)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.resource_cleanup_jobs "
+                "DROP CONSTRAINT IF EXISTS resource_cleanup_jobs_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.resource_cleanup_jobs SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+    with pytest.raises(ValueError, match="resource cleanup job state is unknown"):
+        await resources.list_cleanup(resource_kind="workspace_output")
+    with pytest.raises(ValueError, match="resource cleanup job state is unknown"):
+        await resources.cleanup_pending(resource_kind="workspace_output")
+    assert object_store.deletes == before_deletes
+    assert list(object_store.objects.values()) == [b"body"]
+
+
+async def test_cleanup_listing_rejects_unknown_resource_state_with_pending_job(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="unknown-state-pending-job",
+        filename="body.txt",
+        data=b"body",
+    )
+    object_store.fail_delete_once = True
+    await resources.delete(handle)
+    before_deletes = list(object_store.deletes)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.resource_objects "
+            "DROP CONSTRAINT IF EXISTS resource_objects_state_check"
+        )
+        await connection.execute(
+            "UPDATE enterprise.resource_objects SET state='future-state' "
+            "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+            (actor.tenant_id, actor.user_id, handle.object_id),
+        )
+
+    with pytest.raises(ValueError, match="resource state is unknown"):
+        await resources.list_cleanup(resource_kind="workspace_output")
+    assert object_store.deletes == before_deletes
+
+
+async def test_delete_request_cannot_overwrite_unknown_cleanup_job_state(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="delete-unknown-job",
+        filename="body.txt",
+        data=b"body",
+    )
+    object_store.fail_delete_once = True
+    await resources.delete(handle)
+    before_deletes = list(object_store.deletes)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.resource_cleanup_jobs "
+                "DROP CONSTRAINT IF EXISTS resource_cleanup_jobs_state_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.resource_cleanup_jobs SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+    with pytest.raises(ValueError, match="resource cleanup job state is unknown"):
+        await resources.delete(handle)
+    assert object_store.deletes == before_deletes
+    assert list(object_store.objects.values()) == [b"body"]
+
+
+async def test_cleanup_rechecks_job_state_after_listing_before_side_effect(
+    pg_session_store_factory, business_actors, migrated_pg, monkeypatch,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="cleanup-race",
+        filename="body.txt",
+        data=b"body",
+    )
+    object_store.fail_delete_once = True
+    await resources.delete(handle)
+    before_deletes = list(object_store.deletes)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.resource_cleanup_jobs "
+            "DROP CONSTRAINT IF EXISTS resource_cleanup_jobs_state_check"
+        )
+    original_list = resources.list_cleanup
+
+    async def corrupt_after_listing(*args, **kwargs):
+        items = await original_list(*args, **kwargs)
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            await connection.execute(
+                "UPDATE enterprise.resource_cleanup_jobs SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+        return items
+
+    monkeypatch.setattr(resources, "list_cleanup", corrupt_after_listing)
+    with pytest.raises(ValueError, match="resource cleanup job state is unknown"):
+        await resources.cleanup_pending(resource_kind="workspace_output")
+    assert object_store.deletes == before_deletes
+    assert list(object_store.objects.values()) == [b"body"]
+
+
+@pytest.mark.parametrize(
+    ("table", "constraint", "message"),
+    [
+        ("resource_objects", "resource_objects_state_check", "resource state is unknown"),
+        (
+            "resource_cleanup_jobs",
+            "resource_cleanup_jobs_state_check",
+            "resource cleanup job state is unknown",
+        ),
+    ],
+)
+async def test_cleanup_rechecks_business_state_after_objectstore_delete(
+    pg_session_store_factory, business_actors, migrated_pg, table, constraint, message,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="cleanup-after-io-race",
+        filename="body.txt",
+        data=b"body",
+    )
+    object_store.fail_delete_once = True
+    await resources.delete(handle)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            f"ALTER TABLE enterprise.{table} DROP CONSTRAINT IF EXISTS {constraint}"
+        )
+
+    def corrupt_after_delete(_key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                f"UPDATE enterprise.{table} SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND "
+                + ("id=%s" if table == "resource_objects" else "object_id=%s"),
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+
+    object_store.on_delete = corrupt_after_delete
+    with pytest.raises(ValueError, match=message):
+        await resources.cleanup_pending(resource_kind="workspace_output")
+    async with resources.store.db.transaction(resources.store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT r.state AS resource_state,j.state AS job_state "
+                "FROM enterprise.resource_objects r "
+                "JOIN enterprise.resource_cleanup_jobs j "
+                "ON (j.tenant_id,j.owner_id,j.object_id)=(r.tenant_id,r.owner_id,r.id) "
+                "WHERE r.tenant_id=%s AND r.owner_id=%s AND r.id=%s",
+                (*resources.store._owner, handle.object_id),
+            )
+        ).fetchone()
+    assert row == {
+        "resource_state": "future-state" if table == "resource_objects" else "delete-pending",
+        "job_state": "future-state" if table == "resource_cleanup_jobs" else "running",
+    }
+
+
+@pytest.mark.parametrize(
+    ("table", "constraint", "message"),
+    [
+        ("resource_objects", "resource_objects_state_check", "resource state is unknown"),
+        (
+            "resource_cleanup_jobs",
+            "resource_cleanup_jobs_state_check",
+            "resource cleanup job state is unknown",
+        ),
+    ],
+)
+async def test_cleanup_failure_does_not_overwrite_unknown_state_after_objectstore_error(
+    pg_session_store_factory, business_actors, migrated_pg, table, constraint, message,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="cleanup-error-race",
+        filename="body.txt",
+        data=b"body",
+    )
+    object_store.fail_delete_once = True
+    await resources.delete(handle)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            f"ALTER TABLE enterprise.{table} DROP CONSTRAINT IF EXISTS {constraint}"
+        )
+
+    def corrupt_on_delete_error(_key):
+        with psycopg.connect(migrated_pg.admin_dsn) as connection:
+            connection.execute(
+                f"UPDATE enterprise.{table} SET state='future-state' "
+                "WHERE tenant_id=%s AND owner_id=%s AND "
+                + ("id=%s" if table == "resource_objects" else "object_id=%s"),
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+
+    object_store.fail_delete_once = True
+    object_store.on_delete_failure = corrupt_on_delete_error
+    with pytest.raises(ValueError, match=message):
+        await resources.cleanup_pending(resource_kind="workspace_output")
+    async with resources.store.db.transaction(resources.store.scope) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT r.state AS resource_state,j.state AS job_state "
+                "FROM enterprise.resource_objects r "
+                "JOIN enterprise.resource_cleanup_jobs j "
+                "ON (j.tenant_id,j.owner_id,j.object_id)=(r.tenant_id,r.owner_id,r.id) "
+                "WHERE r.tenant_id=%s AND r.owner_id=%s AND r.id=%s",
+                (*resources.store._owner, handle.object_id),
+            )
+        ).fetchone()
+    assert row == {
+        "resource_state": "future-state" if table == "resource_objects" else "delete-pending",
+        "job_state": "future-state" if table == "resource_cleanup_jobs" else "running",
+    }
+    assert list(object_store.objects.values()) == [b"body"]
+
+
+async def test_cleanup_rejects_unknown_resource_retention_before_delete(
+    pg_session_store_factory, business_actors, migrated_pg,
+):
+    from deeptutor.persistence.postgres.object_resources import PostgresObjectResourceStore
+
+    actor = business_actors.tenants[0].admin
+    object_store = RecordingObjectStore()
+    resources = PostgresObjectResourceStore(pg_session_store_factory(actor), object_store)
+    handle = await resources.put(
+        resource_kind="workspace_output",
+        resource_id="cleanup-unknown-retention",
+        filename="body.txt",
+        data=b"body",
+    )
+    object_store.fail_delete_once = True
+    await resources.delete(handle)
+    before_deletes = list(object_store.deletes)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.resource_objects "
+                "DROP CONSTRAINT IF EXISTS resource_objects_retention_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.resource_objects SET retention='future-retention' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, handle.object_id),
+            )
+    with pytest.raises(ValueError, match="resource retention is unknown"):
+        await resources.list_cleanup(resource_kind="workspace_output")
+    with pytest.raises(ValueError, match="resource retention is unknown"):
+        await resources.cleanup_pending(resource_kind="workspace_output")
+    assert object_store.deletes == before_deletes
+    assert list(object_store.objects.values()) == [b"body"]
 
 
 async def test_object_resource_store_round_trips_required_a2_file_kinds(

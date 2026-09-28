@@ -17,6 +17,7 @@ from deeptutor_enterprise.stores.postgres.connection import Database
 import httpx
 from jose import jwt
 import pytest
+import pytest_asyncio
 from test_application import app as app
 
 from tests.fixtures.postgres import single_database_user_dsn
@@ -29,7 +30,7 @@ BOOTSTRAP_SECRET = "b" * 48
 ISSUER = "https://eduplus2.test"
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def enterprise_db(pg_dsn):
     await MigrationRunner(pg_dsn).apply()
     async with Database(
@@ -38,7 +39,7 @@ async def enterprise_db(pg_dsn):
         yield db
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def identity(enterprise_db):
     from deeptutor_enterprise.identity.service import IdentityService
 
@@ -102,6 +103,8 @@ async def test_eduplus2_migration_is_versioned_and_redacts_secret_material(enter
             "0009_school_projection_management_read",
             "0010_school_database_onboarding",
             "0011_webhook_school_controls",
+            "0012_remove_legacy_database_function",
+            "0013_relocate_database_business_rules",
         ]
         await c.execute(
             """

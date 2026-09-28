@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 
+import psycopg
 import pytest
 
 from deeptutor.learning.models import LearningProgress
@@ -256,3 +257,212 @@ async def test_management_delete_fk_failure_restores_operation_and_lease(
         ] == "failed"
     finally:
         await executor.close()
+
+
+@pytest.mark.parametrize(
+    ("constraint", "corruption", "message"),
+    [
+        ("mastery_path_operations_status_check", "status='future-state'", "operation status is unknown"),
+        ("mastery_path_operations_check1", "path_ref=NULL", "active operation requires a path reference"),
+    ],
+)
+async def test_invalid_persisted_operation_cannot_be_read_or_delete_path(
+    migrated_pg,
+    business_sync_database,
+    business_actors,
+    pg_scope_factory,
+    constraint,
+    corruption,
+    message,
+):
+    from deeptutor.persistence.postgres.learning import AsyncLearningStore, ExecutionAuthority
+
+    actor = business_actors.tenants[0].owners[0]
+    scope = pg_scope_factory(actor)
+    executor = ExecutorLease(migrated_pg.runtime_dsn, resource=business_sync_database.resource)
+    await executor.acquire()
+    try:
+        authority = ExecutionAuthority(executor)
+        store = AsyncLearningStore(business_sync_database, scope, authority=authority)
+        lease = await store.run(lambda unit: unit.begin_path_operation("p"))
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    f"ALTER TABLE enterprise.mastery_path_operations DROP CONSTRAINT IF EXISTS {constraint}"
+                )
+                await connection.execute(
+                    f"UPDATE enterprise.mastery_path_operations SET {corruption} "
+                    "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s",
+                    (actor.tenant_id, actor.user_id, lease.operation_id),
+                )
+        with pytest.raises(ValueError, match=message):
+            await store.run(lambda unit: unit.get_path_operation(lease.operation_id))
+        bound = AsyncLearningStore(
+            business_sync_database, scope, authority=authority.for_operation(lease)
+        )
+        with pytest.raises(ValueError, match=message):
+            await bound.run(lambda unit: unit.delete("p"))
+        assert (await store.run(lambda unit: unit.load("p"))) is not None
+    finally:
+        await executor.close()
+
+
+async def test_unknown_terminal_operation_cannot_be_detached_by_path_delete(
+    migrated_pg, business_sync_database, business_actors, pg_scope_factory,
+):
+    from deeptutor.persistence.postgres.learning import AsyncLearningStore, ExecutionAuthority
+
+    actor = business_actors.tenants[0].owners[0]
+    scope = pg_scope_factory(actor)
+    executor = ExecutorLease(migrated_pg.runtime_dsn, resource=business_sync_database.resource)
+    await executor.acquire()
+    try:
+        authority = ExecutionAuthority(executor)
+        store = AsyncLearningStore(business_sync_database, scope, authority=authority)
+        lease = await store.run(lambda unit: unit.begin_path_operation("p"))
+        bound = AsyncLearningStore(
+            business_sync_database, scope, authority=authority.for_operation(lease)
+        )
+        await bound.run(lambda unit: unit.finish_path_operation(lease))
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "ALTER TABLE enterprise.mastery_path_operations "
+                    "DROP CONSTRAINT IF EXISTS mastery_path_operations_status_check"
+                )
+                await connection.execute(
+                    "UPDATE enterprise.mastery_path_operations SET status='future-state' "
+                    "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s",
+                    (actor.tenant_id, actor.user_id, lease.operation_id),
+                )
+        with pytest.raises(ValueError, match="operation status is unknown"):
+            await store.run(lambda unit: unit.delete("p"))
+        assert await store.run(lambda unit: unit.load("p")) is not None
+    finally:
+        await executor.close()
+
+
+@pytest.mark.parametrize(
+    ("constraint", "corruption", "message"),
+    [
+        ("mastery_path_leases_kind_check", "kind='future-kind'", "lease kind is unknown"),
+        ("mastery_path_leases_check", "turn_id='unexpected'", "operation lease shape is invalid"),
+    ],
+)
+async def test_invalid_persisted_path_lease_blocks_read_and_finish(
+    migrated_pg,
+    business_sync_database,
+    business_actors,
+    pg_scope_factory,
+    constraint,
+    corruption,
+    message,
+):
+    from deeptutor.persistence.postgres.learning import AsyncLearningStore, ExecutionAuthority
+
+    actor = business_actors.tenants[0].owners[0]
+    scope = pg_scope_factory(actor)
+    executor = ExecutorLease(migrated_pg.runtime_dsn, resource=business_sync_database.resource)
+    await executor.acquire()
+    try:
+        authority = ExecutionAuthority(executor)
+        store = AsyncLearningStore(business_sync_database, scope, authority=authority)
+        lease = await store.run(lambda unit: unit.begin_path_operation("p"))
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    f"ALTER TABLE enterprise.mastery_path_leases DROP CONSTRAINT IF EXISTS {constraint}"
+                )
+                if constraint == "mastery_path_leases_kind_check":
+                    await connection.execute(
+                        "ALTER TABLE enterprise.mastery_path_leases "
+                        "DROP CONSTRAINT IF EXISTS mastery_path_leases_check"
+                    )
+                await connection.execute(
+                    f"UPDATE enterprise.mastery_path_leases SET {corruption} "
+                    "WHERE tenant_id=%s AND owner_id=%s AND path_id='p'",
+                    (actor.tenant_id, actor.user_id),
+                )
+        with pytest.raises(ValueError, match=message):
+            await store.run(lambda unit: unit.get_path_lease("p"))
+        bound = AsyncLearningStore(
+            business_sync_database, scope, authority=authority.for_operation(lease)
+        )
+        with pytest.raises(ValueError, match=message):
+            await bound.run(lambda unit: unit.finish_path_operation(lease))
+        assert (await store.run(lambda unit: unit.load("p"))) is not None
+    finally:
+        await executor.close()
+
+
+@pytest.mark.parametrize(
+    ("table", "constraint", "corruption", "message"),
+    [
+        ("mastery_path_leases", "mastery_path_leases_kind_check", "kind='future-kind'", "lease kind is unknown"),
+        ("mastery_path_operations", "mastery_path_operations_status_check", "status='future-state'", "operation status is unknown"),
+        ("mastery_path_operations", "mastery_path_operations_check1", "path_ref=NULL", "active operation requires a path reference"),
+    ],
+)
+async def test_recovery_rejects_invalid_lease_or_operation_without_cleanup(
+    migrated_pg,
+    business_sync_database,
+    business_actors,
+    pg_scope_factory,
+    table,
+    constraint,
+    corruption,
+    message,
+):
+    from deeptutor.persistence.postgres.learning import AsyncLearningStore, ExecutionAuthority
+
+    actor = business_actors.tenants[0].owners[0]
+    scope = pg_scope_factory(actor)
+    first = ExecutorLease(migrated_pg.runtime_dsn, resource=business_sync_database.resource)
+    second = ExecutorLease(migrated_pg.runtime_dsn, resource=business_sync_database.resource)
+    await first.acquire()
+    try:
+        stale = AsyncLearningStore(
+            business_sync_database, scope, authority=ExecutionAuthority(first)
+        )
+        lease = await stale.run(lambda unit: unit.begin_path_operation("recover"))
+        await first.connection.close()
+        await ExecutorLease.confirm_stopped(
+            migrated_pg.runtime_dsn, resource=first.resource, execution_id=first.execution_id
+        )
+        await second.acquire()
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    f"ALTER TABLE enterprise.{table} DROP CONSTRAINT IF EXISTS {constraint}"
+                )
+                if constraint == "mastery_path_leases_kind_check":
+                    await connection.execute(
+                        "ALTER TABLE enterprise.mastery_path_leases "
+                        "DROP CONSTRAINT IF EXISTS mastery_path_leases_check"
+                    )
+                await connection.execute(
+                    f"UPDATE enterprise.{table} SET {corruption} "
+                    "WHERE tenant_id=%s AND owner_id=%s AND path_id='recover'",
+                    (actor.tenant_id, actor.user_id),
+                )
+        current = AsyncLearningStore(
+            business_sync_database, scope, authority=ExecutionAuthority(second)
+        )
+        with pytest.raises(ValueError, match=message):
+            await current.run(lambda unit: unit.recover_stopped_execution(first.execution_id))
+        async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+            leases = await connection.execute(
+                "SELECT count(*) FROM enterprise.mastery_path_leases "
+                "WHERE tenant_id=%s AND owner_id=%s AND path_id='recover'",
+                (actor.tenant_id, actor.user_id),
+            )
+            assert await leases.fetchone() == (1,)
+            operation = await connection.execute(
+                "SELECT version FROM enterprise.mastery_path_operations "
+                "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s",
+                (actor.tenant_id, actor.user_id, lease.operation_id),
+            )
+            assert await operation.fetchone() == (1,)
+    finally:
+        await first.close()
+        await second.close()

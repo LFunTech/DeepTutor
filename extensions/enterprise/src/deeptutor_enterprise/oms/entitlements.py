@@ -12,6 +12,13 @@ from psycopg.types.json import Jsonb
 
 from deeptutor.persistence.postgres.scope import TenantScope
 
+from .value_validation import (
+    OmsValueError,
+    validate_entitlement_row,
+    validate_oms_audit_result,
+    validate_service_definition_row,
+)
+
 
 class EntitlementRejected(ValueError):
     """服务授权命令不满足版本、状态或幂等契约。"""
@@ -80,6 +87,10 @@ class OmsEntitlementLedger:
     def __init__(self, db) -> None:
         self.db = db
 
+    @staticmethod
+    def _reject_value_error(error: OmsValueError) -> None:
+        raise EntitlementRejected(str(error)) from None
+
     async def set(self, scope: TenantScope, request: EntitlementRequest) -> EntitlementResult:
         _validate(scope, request)
         tenant_id = UUID(scope.tenant_id)
@@ -138,10 +149,16 @@ class OmsEntitlementLedger:
                     raise EntitlementRejected("entitlement version is stale")
                 service = await (
                     await c.execute(
-                        "SELECT enabled FROM oms.service_definitions WHERE service_id=%s FOR SHARE",
+                        "SELECT enabled,resource_category FROM oms.service_definitions "
+                        "WHERE service_id=%s FOR SHARE",
                         (request.service_id,),
                     )
                 ).fetchone()
+                if service:
+                    try:
+                        validate_service_definition_row(service)
+                    except OmsValueError as error:
+                        self._reject_value_error(error)
                 if service is None or not service["enabled"]:
                     raise EntitlementRejected("service is not enabled")
                 await c.execute(
@@ -158,6 +175,10 @@ class OmsEntitlementLedger:
                 )
                 version = 1
             else:
+                try:
+                    validate_entitlement_row(current)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
                 if current["version"] != request.expected_version:
                     raise EntitlementRejected("entitlement version is stale")
                 if current["status"] == "revoked" and request.status == "revoked":
@@ -170,11 +191,16 @@ class OmsEntitlementLedger:
                 if request.status == "active":
                     service = await (
                         await c.execute(
-                            "SELECT enabled FROM oms.service_definitions "
+                            "SELECT enabled,resource_category FROM oms.service_definitions "
                             "WHERE service_id=%s FOR SHARE",
                             (request.service_id,),
                         )
                     ).fetchone()
+                    if service:
+                        try:
+                            validate_service_definition_row(service)
+                        except OmsValueError as error:
+                            self._reject_value_error(error)
                     if service is None or not service["enabled"]:
                         raise EntitlementRejected("service is not enabled")
                     if current["status"] == "revoked":
@@ -209,6 +235,7 @@ class OmsEntitlementLedger:
                 version = updated["version"]
 
             result = EntitlementResult(request.service_id, request.status, version)
+            validate_oms_audit_result("success")
             await c.execute(
                 "INSERT INTO oms.audit_events"
                 "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"

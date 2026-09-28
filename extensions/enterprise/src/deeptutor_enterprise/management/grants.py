@@ -9,13 +9,16 @@ from uuid import UUID, uuid4
 from psycopg.errors import CheckViolation
 from psycopg.types.json import Jsonb
 
+from deeptutor_enterprise.management.assignment_rules import validate_assignment_relation
 from deeptutor_enterprise.management.authorization import (
     ManagementAuthorizationDenied,
     ManagementIdentity,
+    _column,
     _identity_is_current,
     require_management_delegation,
     require_management_permission,
 )
+from deeptutor_enterprise.management.policy_version import advance_principal_policy_version
 
 
 class ManagementGrantConflict(ValueError):
@@ -59,6 +62,37 @@ class RevokeRoleResult:
     assignment_version: int
     target_policy_version: int
     replayed: bool
+
+
+def validate_role_owner_for_grant(role, *, application: str, target_school_id: UUID | None) -> None:
+    """模板可跨本应用使用；学校自定义角色只能授予其 owner 学校。"""
+
+    scope_kind = "platform" if target_school_id is None else "school"
+    if not role or _column(role, "scope_kind", 0) != scope_kind:
+        raise ManagementAuthorizationDenied("role version or school owner is invalid")
+    is_template = _column(role, "is_template", 1)
+    owner_school_id = _column(role, "owner_school_id", 2)
+    if type(is_template) is not bool:
+        raise ManagementAuthorizationDenied("role version or school owner is invalid")
+    if application == "oms":
+        valid = owner_school_id is None
+    elif application == "tms":
+        valid = (
+            isinstance(target_school_id, UUID)
+            and scope_kind == "school"
+            and (owner_school_id is None if is_template else owner_school_id == target_school_id)
+        )
+    else:
+        valid = False
+    if not valid:
+        raise ManagementAuthorizationDenied("role version or school owner is invalid")
+
+
+def validate_role_action_owner_for_grant(actions, *, owner_school_id: UUID | None) -> None:
+    """角色动作与角色版本须具有相同学校 owner，不能靠 SQL JOIN 猜测。"""
+
+    if any(_column(row, "owner_school_id", 3) != owner_school_id for row in actions):
+        raise ManagementAuthorizationDenied("role action owner differs from role version")
 
 
 def _validate_command(command: GrantRoleCommand) -> None:
@@ -133,13 +167,21 @@ async def grant_management_role(
         raise ManagementAuthorizationDenied("TMS grants require a school scope")
     role = await (
         await connection.execute(
-            "SELECT scope_kind FROM management.role_versions WHERE application=%s "
+            "SELECT scope_kind,is_template,owner_school_id FROM management.role_versions "
+            "WHERE application=%s "
             "AND role_key=%s AND version=%s FOR SHARE",
             (actor.application, command.role_key, command.role_version),
         )
     ).fetchone()
-    if not role or role[0] != scope_kind:
-        raise ManagementAuthorizationDenied("role version or scope is invalid")
+    validate_role_owner_for_grant(
+        role, application=actor.application, target_school_id=command.target_school_id
+    )
+    if (
+        actor.application == "tms"
+        and not _column(role, "is_template", 1)
+        and not command.role_key.startswith(f"custom_{command.target_school_id.hex}_")
+    ):
+        raise ManagementAuthorizationDenied("role version or school owner is invalid")
     if (actor.application, command.role_key) in {
         ("tms", "school_admin"),
         ("oms", "platform_security_admin"),
@@ -147,7 +189,8 @@ async def grant_management_role(
         raise ManagementAuthorizationDenied("administrator grant requires independent approval")
     actions = await (
         await connection.execute(
-            "SELECT ra.action_key,ac.status,ac.sensitive FROM management.role_actions ra "
+            "SELECT ra.action_key,ac.status,ac.sensitive,ra.owner_school_id "
+            "FROM management.role_actions ra "
             "JOIN management.action_catalog ac ON ac.application=ra.application "
             "AND ac.action_key=ra.action_key "
             "WHERE ra.application=%s AND ra.role_key=%s AND ra.role_version=%s "
@@ -155,11 +198,15 @@ async def grant_management_role(
             (actor.application, command.role_key, command.role_version),
         )
     ).fetchall()
-    if not actions or any(status != "active" for _, status, _ in actions):
+    validate_role_action_owner_for_grant(
+        actions, owner_school_id=_column(role, "owner_school_id", 2)
+    )
+    if not actions or any(_column(row, "status", 1) != "active" for row in actions):
         raise ManagementAuthorizationDenied("role has no active action set")
-    if any(sensitive for _, _, sensitive in actions):
+    if any(_column(row, "sensitive", 2) for row in actions):
         raise ManagementAuthorizationDenied("sensitive role grant requires independent approval")
-    for action, _, _ in actions:
+    for row in actions:
+        action = _column(row, "action_key", 0)
         await require_management_delegation(
             connection,
             actor,
@@ -170,7 +217,7 @@ async def grant_management_role(
 
     principal = await (
         await connection.execute(
-            "SELECT id,status,policy_version FROM management.principals "
+            "SELECT id,status,policy_version,school_id FROM management.principals "
             "WHERE id=%s AND application=%s AND issuer=%s AND subject=%s "
             "AND school_id IS NOT DISTINCT FROM %s FOR UPDATE",
             (
@@ -186,6 +233,15 @@ async def grant_management_role(
         raise ManagementAuthorizationDenied("target principal is unavailable")
     if principal[2] != target.policy_version:
         raise ManagementGrantConflict("target identity policy version changed")
+    validate_assignment_relation(
+        application=actor.application,
+        principal_application=target.application,
+        principal_school_id=principal[3],
+        role_application=actor.application,
+        role_scope_kind=_column(role, "scope_kind", 0),
+        assignment_scope_kind=scope_kind,
+        assignment_school_id=command.target_school_id,
+    )
 
     replay = await (
         await connection.execute(
@@ -262,12 +318,9 @@ async def grant_management_role(
             str(governance.principal_id),
         ),
     )
-    version = await (
-        await connection.execute(
-            "SELECT policy_version FROM management.principals WHERE id=%s",
-            (command.target_principal_id,),
-        )
-    ).fetchone()
+    next_policy_version = await advance_principal_policy_version(
+        connection, command.target_principal_id, expected_before=principal[2]
+    )
     await connection.execute(
         "INSERT INTO management.audit_events"
         "(id,application,school_id,actor_issuer,actor_subject,action_key,target_kind,"
@@ -284,10 +337,10 @@ async def grant_management_role(
             command.request_id,
             command.reason,
             principal[2],
-            version[0],
+            next_policy_version,
         ),
     )
-    return GrantRoleResult(assignment_id, version[0], False)
+    return GrantRoleResult(assignment_id, next_policy_version, False)
 
 
 def _validate_revoke_command(command: RevokeRoleCommand) -> None:
@@ -318,10 +371,16 @@ async def revoke_management_role(
     """在同一事务内撤销本产品角色；不会修改外部账号或 OMS 服务权益。"""
 
     _validate_revoke_command(command)
-    if not isinstance(actor, ManagementIdentity):
+    if not isinstance(actor, ManagementIdentity) or not _identity_is_current(actor, write=True):
         raise ManagementAuthorizationDenied("external management identity is unavailable")
     if actor.application == "tms" and actor.school_id != command.target_school_id:
         raise ManagementAuthorizationDenied("target school differs from trusted session")
+    # 同一学校（或 OMS 平台）撤权先串行化，再读取任何治理授权行；避免双管理员互撤时
+    # 双方先持有对方 assignment 的共享锁，随后升级为排他锁而死锁。
+    await connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+        (str(command.target_school_id) if command.target_school_id else "oms-platform-security",),
+    )
     governance_action = (
         "ops.permissions.manage" if actor.application == "oms" else "tenant.permissions.manage"
     )
@@ -345,7 +404,7 @@ async def revoke_management_role(
         raise ManagementAuthorizationDenied("target assignment is unavailable")
     target = await (
         await connection.execute(
-            "SELECT id,policy_version FROM management.principals WHERE id=%s "
+            "SELECT id,policy_version,school_id FROM management.principals WHERE id=%s "
             "AND application=%s FOR UPDATE",
             (preliminary[0], actor.application),
         )
@@ -354,7 +413,8 @@ async def revoke_management_role(
         raise ManagementAuthorizationDenied("target principal is unavailable")
     assignment = await (
         await connection.execute(
-            "SELECT principal_id,version,status FROM management.assignments "
+            "SELECT principal_id,version,status,role_key,role_version,valid_from,expires_at "
+            "FROM management.assignments "
             "WHERE id=%s AND application=%s AND scope_kind=%s "
             "AND school_id IS NOT DISTINCT FROM %s FOR UPDATE",
             (command.assignment_id, actor.application, scope_kind, command.target_school_id),
@@ -362,6 +422,22 @@ async def revoke_management_role(
     ).fetchone()
     if not assignment or assignment[0] != target[0]:
         raise ManagementGrantConflict("target assignment changed")
+    role = await (
+        await connection.execute(
+            "SELECT scope_kind FROM management.role_versions WHERE application=%s "
+            "AND role_key=%s AND version=%s FOR SHARE",
+            (actor.application, assignment[3], assignment[4]),
+        )
+    ).fetchone()
+    validate_assignment_relation(
+        application=actor.application,
+        principal_application=actor.application,
+        principal_school_id=target[2],
+        role_application=actor.application if role else None,
+        role_scope_kind=_column(role, "scope_kind", 0) if role else None,
+        assignment_scope_kind=scope_kind,
+        assignment_school_id=command.target_school_id,
+    )
     previous = await (
         await connection.execute(
             "SELECT application,school_id,actor_issuer,actor_subject,action_key,"
@@ -399,6 +475,51 @@ async def revoke_management_role(
         or target[1] != command.expected_target_policy_version
     ):
         raise ManagementGrantConflict("assignment or target policy version changed")
+    admin_role = "platform_security_admin" if actor.application == "oms" else "school_admin"
+    admin_action = governance_action
+    if assignment[3] == admin_role:
+        governs = await (
+            await connection.execute(
+                "SELECT 1 FROM management.role_actions ra "
+                "JOIN management.action_catalog ac ON ac.application=ra.application "
+                "AND ac.action_key=ra.action_key WHERE ra.application=%s "
+                "AND ra.role_key=%s AND ra.role_version=%s AND ra.action_key=%s "
+                "AND ac.status='active' AND %s<=now() AND %s>now() LIMIT 1",
+                (
+                    actor.application,
+                    admin_role,
+                    assignment[4],
+                    admin_action,
+                    assignment[5],
+                    assignment[6],
+                ),
+            )
+        ).fetchone()
+        if governs:
+            remaining = await (
+                await connection.execute(
+                    "SELECT 1 FROM management.assignments a "
+                    "JOIN management.principals p ON p.id=a.principal_id "
+                    "AND p.application=a.application "
+                    "JOIN management.role_actions ra ON ra.application=a.application "
+                    "AND ra.role_key=a.role_key AND ra.role_version=a.role_version "
+                    "JOIN management.action_catalog ac ON ac.application=ra.application "
+                    "AND ac.action_key=ra.action_key "
+                    "WHERE a.application=%s AND a.school_id IS NOT DISTINCT FROM %s "
+                    "AND a.role_key=%s AND a.id<>%s AND a.status='active' "
+                    "AND a.valid_from<=now() AND a.expires_at>now() AND p.status='active' "
+                    "AND ra.action_key=%s AND ac.status='active' LIMIT 1",
+                    (
+                        actor.application,
+                        command.target_school_id,
+                        admin_role,
+                        command.assignment_id,
+                        admin_action,
+                    ),
+                )
+            ).fetchone()
+            if not remaining:
+                raise ManagementGrantConflict("last active administrator cannot be revoked")
     try:
         async with connection.transaction():
             await connection.execute(
@@ -410,11 +531,9 @@ async def revoke_management_role(
         if "last active management administrator" not in str(exc):
             raise
         raise ManagementGrantConflict("last active administrator cannot be revoked") from exc
-    after = await (
-        await connection.execute(
-            "SELECT policy_version FROM management.principals WHERE id=%s", (target[0],)
-        )
-    ).fetchone()
+    next_policy_version = await advance_principal_policy_version(
+        connection, target[0], expected_before=target[1]
+    )
     await connection.execute(
         "INSERT INTO management.audit_events"
         "(id,application,school_id,actor_issuer,actor_subject,action_key,target_kind,"
@@ -431,8 +550,8 @@ async def revoke_management_role(
             command.request_id,
             command.reason,
             target[1],
-            after[0],
+            next_policy_version,
             Jsonb({"expected_assignment_version": command.expected_assignment_version}),
         ),
     )
-    return RevokeRoleResult(command.assignment_id, assignment[1] + 1, after[0], False)
+    return RevokeRoleResult(command.assignment_id, assignment[1] + 1, next_policy_version, False)

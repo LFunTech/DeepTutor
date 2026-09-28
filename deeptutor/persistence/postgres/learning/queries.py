@@ -10,9 +10,15 @@ from deeptutor.learning.contracts import (
     LearningPage,
     LearningPaginationRequired,
 )
-from deeptutor.learning.models import MasteryEvent, MasteryTopic, TopicMetadata, TopicSource
+from deeptutor.learning.models import (
+    InteractionStatus,
+    MasteryEvent,
+    MasteryTopic,
+    TopicMetadata,
+    TopicSource,
+)
 
-from .base import validate_id
+from .base import validate_id, validate_topic_source_row, validate_topic_status
 from .transaction import interaction_from_row
 
 COMPAT_LIMIT = 1000
@@ -20,6 +26,17 @@ PAGE_LIMIT = 200
 
 
 class LearningQueries:
+    def _topic_statuses(self):
+        statuses = set()
+        rows = self._execute(
+            "SELECT DISTINCT status FROM enterprise.mastery_topic_meta "
+            "WHERE tenant_id=%s AND owner_id=%s",
+            self._owner,
+        )
+        for row in rows:
+            statuses.add(validate_topic_status(row["status"]))
+        return statuses
+
     @staticmethod
     def _default_map_seed(path):
         return int.from_bytes(hashlib.sha256(path.encode()).digest()[:4], "big")
@@ -124,12 +141,24 @@ class LearningQueries:
     def get_active_interaction(self, path_id):
         path = validate_id(path_id)
         with self._unit() as u:
-            return interaction_from_row(
-                u._execute(
-                    "SELECT * FROM enterprise.mastery_interactions WHERE tenant_id=%s AND owner_id=%s AND path_id=%s AND status=ANY(%s) LIMIT 1",
-                    (*u._owner, path, list(_ACTIVE_INTERACTION_STATES)),
-                ).fetchone()
-            )
+            rows = u._execute(
+                "SELECT * FROM enterprise.mastery_interactions "
+                "WHERE tenant_id=%s AND owner_id=%s AND path_id=%s "
+                "AND (status=ANY(%s) OR status<>ALL(%s)) "
+                "ORDER BY created_at DESC,interaction_id DESC LIMIT 2",
+                (
+                    *u._owner,
+                    path,
+                    list(_ACTIVE_INTERACTION_STATES),
+                    [status.value for status in InteractionStatus],
+                ),
+            ).fetchall()
+            active = None
+            for row in rows:
+                interaction = interaction_from_row(row)
+                if interaction.status.value in _ACTIVE_INTERACTION_STATES:
+                    active = interaction
+            return active
 
     def list_interactions(self, path_id, *, limit=200):
         path = validate_id(path_id)
@@ -218,6 +247,8 @@ class LearningQueries:
                 updated_at=progress.updated_at,
             )
         )
+        for row in sources:
+            validate_topic_source_row(row)
         return MasteryTopic(
             metadata=metadata,
             sources=[
@@ -272,10 +303,19 @@ class LearningQueries:
             LEFT JOIN LATERAL (
                 SELECT to_jsonb(i) item FROM enterprise.mastery_interactions i
                 WHERE i.tenant_id=p.tenant_id AND i.owner_id=p.owner_id AND i.path_id=p.path_id
-                  AND i.status=ANY(%s) LIMIT 1
+                  AND (i.status=ANY(%s) OR i.status<>ALL(%s))
+                ORDER BY (i.status<>ALL(%s)) DESC,i.created_at DESC,i.interaction_id DESC
+                LIMIT 1
             ) active ON true
             ORDER BY p.updated_at DESC,p.path_id DESC""",
-            (*self._owner, *params, limit, list(_ACTIVE_INTERACTION_STATES)),
+            (
+                *self._owner,
+                *params,
+                limit,
+                list(_ACTIVE_INTERACTION_STATES),
+                [status.value for status in InteractionStatus],
+                [status.value for status in InteractionStatus],
+            ),
         ).fetchall()
 
     def get_topic_snapshot(self, path_id):
@@ -315,18 +355,15 @@ class LearningQueries:
 
     def has_active_topics(self):
         with self._unit() as u:
-            return (
-                u._execute(
-                    "SELECT 1 FROM enterprise.mastery_topic_meta WHERE tenant_id=%s AND owner_id=%s AND status='active' LIMIT 1",
-                    u._owner,
-                ).fetchone()
-                is not None
-            )
+            return "active" in u._topic_statuses()
 
     def list_topic_page(self, *, status="active", cursor=None, limit=200):
+        if status:
+            validate_topic_status(status)
         limit = self._limit(limit)
         kind = f"topics:{status}"
         with self._unit() as u:
+            u._topic_statuses()
             after = self._decode(cursor, kind) if cursor is not None else None
             rows = u._topic_rows(status=status, after=after, limit=limit + 1)
             more, rows = len(rows) > limit, rows[:limit]

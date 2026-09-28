@@ -8,6 +8,8 @@ from typing import Any
 
 import psycopg
 
+from .notebook_upsert import validate_notebook_values
+
 
 class PostgresNotebookCategoryMixin:
     """宿主提供同一 ``db/scope/_owner`` 及共用版本、分类加载 helper。"""
@@ -49,7 +51,8 @@ class PostgresNotebookCategoryMixin:
             rows = await (
                 await connection.execute(
                     """
-                    SELECT c.id,c.name,c.created_at,c.version,count(e.id) AS entry_count
+                    SELECT c.id,c.name,c.created_at,c.version,
+                      e.id AS entry_id,e.source,e.score_trend,e.material_id
                     FROM enterprise.notebook_categories c
                     LEFT JOIN enterprise.notebook_entry_categories ec
                       ON ec.tenant_id=c.tenant_id AND ec.owner_id=c.owner_id
@@ -60,21 +63,25 @@ class PostgresNotebookCategoryMixin:
                     """
                     + session_join
                     + " WHERE c.tenant_id=%s AND c.owner_id=%s"
-                    + " GROUP BY c.tenant_id,c.owner_id,c.id"
-                    + ' ORDER BY c.name COLLATE "C",c.id',
+                    + ' ORDER BY c.name COLLATE "C",c.id,e.id',
                     params,
                 )
             ).fetchall()
-        return [
-            {
-                "id": int(row["id"]),
-                "name": row["name"],
-                "created_at": float(row["created_at"]),
-                "entry_count": int(row["entry_count"]),
-                "version": int(row["version"]),
-            }
-            for row in rows
-        ]
+        categories: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            category_id = int(row["id"])
+            if category_id not in categories:
+                categories[category_id] = {
+                    "id": category_id,
+                    "name": row["name"],
+                    "created_at": float(row["created_at"]),
+                    "entry_count": 0,
+                    "version": int(row["version"]),
+                }
+            if row["entry_id"] is not None:
+                validate_notebook_values(row)
+                categories[category_id]["entry_count"] += 1
+        return list(categories.values())
 
     async def rename_category(
         self,
@@ -158,13 +165,14 @@ class PostgresNotebookCategoryMixin:
                 return False
             entry = await (
                 await connection.execute(
-                    "SELECT id FROM enterprise.notebook_entries"
+                    "SELECT source,score_trend,material_id FROM enterprise.notebook_entries"
                     " WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR KEY SHARE",
                     (*self._owner, entry_id),
                 )
             ).fetchone()
             if entry is None:
                 return False
+            validate_notebook_values(entry)
             await connection.execute(
                 "INSERT INTO enterprise.notebook_entry_categories"
                 " (tenant_id,owner_id,entry_id,category_id) VALUES(%s,%s,%s,%s)"
@@ -175,6 +183,16 @@ class PostgresNotebookCategoryMixin:
 
     async def remove_entry_from_category(self, entry_id: int, category_id: int) -> bool:
         async with self.db.transaction(self.scope) as connection:
+            entry = await (
+                await connection.execute(
+                    "SELECT source,score_trend,material_id FROM enterprise.notebook_entries"
+                    " WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                    (*self._owner, entry_id),
+                )
+            ).fetchone()
+            if entry is None:
+                return False
+            validate_notebook_values(entry)
             row = await (
                 await connection.execute(
                     "DELETE FROM enterprise.notebook_entry_categories"
@@ -187,6 +205,16 @@ class PostgresNotebookCategoryMixin:
 
     async def get_entry_categories(self, entry_id: int) -> list[dict[str, Any]]:
         async with self.db.transaction(self.scope) as connection:
+            entry = await (
+                await connection.execute(
+                    "SELECT source,score_trend,material_id FROM enterprise.notebook_entries"
+                    " WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                    (*self._owner, entry_id),
+                )
+            ).fetchone()
+            if entry is None:
+                return []
+            validate_notebook_values(entry)
             return (await self._load_categories_for(connection, [entry_id])).get(entry_id, [])
 
     async def link_entries_to_category(
@@ -207,12 +235,14 @@ class PostgresNotebookCategoryMixin:
                 return 0
             known_rows = await (
                 await connection.execute(
-                    "SELECT id FROM enterprise.notebook_entries"
+                    "SELECT id,source,score_trend,material_id FROM enterprise.notebook_entries"
                     " WHERE tenant_id=%s AND owner_id=%s AND id=ANY(%s)"
                     " ORDER BY id FOR KEY SHARE",
                     (*self._owner, unique_ids),
                 )
             ).fetchall()
+            for row in known_rows:
+                validate_notebook_values(row)
             known_ids = [int(row["id"]) for row in known_rows]
             if not known_ids:
                 return 0

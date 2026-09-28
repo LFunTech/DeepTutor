@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import psycopg
 import pytest
 
 from deeptutor.persistence.postgres.partner_runtime_status import (
     PartnerRuntimeStatusConflict,
+    PartnerRuntimeStatusError,
     PostgresPartnerRuntimeStatusRepository,
 )
 
@@ -141,6 +143,32 @@ async def test_pg_partner_runtime_status_rejects_stale_worker_until_ttl_then_reb
     )
     assert rebuilt_again["runtime_version"] == 3
     assert rebuilt_again["runtime_worker_id"] == "worker-c"
+
+
+async def test_unknown_persisted_partner_state_cannot_be_read_or_overwritten_without_db_check(
+    business_sync_database, business_actors, migrated_pg
+):
+    owner = business_actors.tenants[0].owners[0]
+    clock = MutableClock(2_000.0)
+    repo = _repo(business_sync_database, owner, worker_id="worker-a", clock=clock)
+    repo.set("ada", owner_id=owner.user_id, running=True, state="running")
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as c:
+        await c.execute(
+            "ALTER TABLE enterprise.partner_runtime_status "
+            "DROP CONSTRAINT IF EXISTS partner_runtime_status_state_check"
+        )
+        await c.execute(
+            "UPDATE enterprise.partner_runtime_status SET state='unknown' "
+            "WHERE tenant_id=%s AND owner_id=%s AND partner_id='ada'",
+            (owner.tenant_id, owner.user_id),
+        )
+    with pytest.raises(PartnerRuntimeStatusError, match="unknown"):
+        repo.get("ada", owner_id=owner.user_id)
+    with pytest.raises(PartnerRuntimeStatusError, match="unknown"):
+        repo.list(owner_id=owner.user_id)
+    clock.value += 31.0
+    with pytest.raises(PartnerRuntimeStatusError, match="unknown"):
+        repo.set("ada", owner_id=owner.user_id, running=False, state="stopped")
 
 
 async def test_default_partner_runtime_status_repository_uses_pg_runtime_without_sqlite(

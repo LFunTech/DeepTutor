@@ -1,5 +1,7 @@
 > 2026-09-27 用户确认 EduPlus2 身份/学校/生命周期与 DeepTutor OMS 应用权限拆分，且本代理不得修改 EduPlus2；本 change 权限权威修订版及直接依赖提案随后已分别获批。内部总账实施授权和隔离合成数据限制保持。真实租户数据、生产发布、归档、此次提交/推送均未授权；test-cn Webhook mock 联调不改变 OMS 写入门禁。只在各项证据真实完成后勾选，实施证据见 `implementation-evidence.md`。
 
+> **首个 Agent 的 test-cn 交付优先顺序**：用户指定正式 OMS 维护模型/global Skill，由指定测试学校的受控服务主体先联调，不开放学校用户入口。按 `design.md` 的“test-cn 首个 Agent”切片，优先贯通管理授权 1.2/2.1/3.2、Provider 设置 1.1–2.4、OMS 6.2–6.5/7.3–7.5、独立 OMS 界面 1.1/1.2/3.1 与 B1/B2 的学校运行时门禁；旧原型 fixture、核心本地设置和手工改库均不能替代。此交付顺序不勾选未完成任务，也不豁免后续完整 OMS/Provider/Skill 的全服务验收。
+
 ## 1. A1：状态与迁移基线
 
 - [x] 1.1 审核 DeepTutor PG 身份、租户 scope、配置版本、资源 owner 与现有总账字段，提交 OMS 供给/授予/预留/用量/审计的版本化迁移清单及缺口证据；不直接改核心表或真实数据。见 `implementation-evidence.md` §1.1；这是清单/缺口审计，不是迁移已实施。
@@ -17,7 +19,7 @@
 
 ## 4. B1：EduPlus2 生命周期与可信主体
 
-- [ ] 4.1 与重订的 EduPlus2 lifecycle change 对齐签名事件、分源状态、同步异常及对账投影；验证 OMS 无开停写入、额度耗尽不产生 `tenant.suspended`，登录/管理未受额度误阻断。
+- [x] 4.1 与重订的 EduPlus2 lifecycle change 对齐签名事件、分源状态、同步异常及对账投影；验证 OMS 无开停写入、额度耗尽不产生 `tenant.suspended`，登录/管理未受额度误阻断。见 `implementation-evidence.md` §4.1；这是权威边界/负例验收，不表示 4.2 的真实平台身份或跨学校写入已开放。
 - [ ] 4.2 核实 EduPlus2 **既存**且适用 OMS 的 OIDC client/audience、账号在线状态和学校权威核验接口；依赖 `add-enterprise-management-authorization` 的 DeepTutor Enterprise 程序授权服务与 PG 唯一双应用域事实迁移完成 `(issuer,sub)` 平台主体、默认零权、受控初始管理员、默认/自定义角色与逐 `ops.*` 动作/目标学校授权、撤权版本和审计；不在本 change 复制权限表。建立内部 UUID↔权威学校 ID 的显式核验/撤权/版本栅栏；在账务事务内复核本地权限及绑定，验证伪造平台角色、目标 tenant、停用账号、撤权竞态、漂移绑定和旧 `tenant_admin` OMS 路由均不能写入。现有外部接口缺失时保持写路由关闭，不修改 EduPlus2。
 
 ## 5. B2：租户权益与 TMS 只读契约
@@ -27,7 +29,7 @@
 
 ## 6. C1：平台资源与配置管理
 
-- [ ] 6.1 按新权威边界重新审阅 `add-enterprise-management-authorization`、`add-b2-oms-platform-read-governance` 和 `add-enterprise-all-service-provider-settings`：OMS 平台动作与目标学校授权由 DeepTutor Enterprise 程序判定、仅将事实迁移到本仓库企业 PG，EduPlus2 仅消费既存身份/学校接口，不代做其 OpenFGA/Keycloak 迁移；同时保持 Secret/导出边界、Provider 全服务入口。旧版曾获批并通过 strict validation，但本次权限权威变更须重新批准，不能把旧批准视为新契约实施验收。此前 PG 事实库版曾分别获批；用户最新 Enterprise 程序决策与订阅 actor 首位引导变更后，当前受影响修订版须复核，不等于外部接口或正式写 API 验收。
+- [x] 6.1 按新权威边界重新审阅 `add-enterprise-management-authorization`、`add-b2-oms-platform-read-governance` 和 `add-enterprise-all-service-provider-settings`：OMS 平台动作与目标学校授权由 DeepTutor Enterprise 程序判定、仅将事实迁移到本仓库企业 PG，EduPlus2 仅消费既存身份/学校接口，不代做其 OpenFGA/Keycloak 迁移；同时保持 Secret/导出边界、Provider 全服务入口。三份当前修订版已分别获用户批准，旧版批准不作新合同证据；审阅与 strict validation 见 `implementation-evidence.md` §6.1。此项只完成依赖契约复核，不等于外部接口或正式写 API 验收。
 - [ ] 6.2 建立五类平台资源与现有 DeepTutor descriptor/registry 的映射和安全状态 API；逐项验证 search、task 回退、embedding、TTS/STT、image/video、解析/RAG、外部 Agent/工具的条件字段与本地 Web 语义一致。
 - [ ] 6.3 实施并验证受控配置草稿、测试、目标执行者逐实例版本确认、部分确认/超时失败保留旧 active、新实例就绪前装载及回退；Secret 明文不进入响应、日志或审计，云端旧管理旁路被阻断。
 - [ ] 6.4 同步 OMS 原型中供给/调用扣量的简化文案与 fixture，再将独立 OMS 前端接入真实平台身份和资源管理 API；按列表→详情检查普通运营/高权限角色、加载/空/错误/无权限/待生效、审计关联与生产原型 404。

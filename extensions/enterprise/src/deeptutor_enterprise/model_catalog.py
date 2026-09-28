@@ -7,6 +7,11 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from deeptutor.persistence.postgres.governance import (
+    validate_runtime_setting_row,
+    validate_secret_reference_row,
+)
+
 from .configuration import ModelDeployment
 
 MODEL_CATALOG_SETTING_KEY = "model_catalog"
@@ -55,11 +60,14 @@ async def _secret_reference(store, name: str) -> str:
             await c.execute(
                 "SELECT provider,reference,status FROM enterprise.secret_references "
                 "WHERE tenant_id=%s AND scope_kind='tenant' AND scope_id='' AND name=%s "
-                "AND status IN ('active','saved') ORDER BY updated_at DESC LIMIT 1",
+                "ORDER BY updated_at DESC LIMIT 1",
                 (store.scope.tenant_id, name),
             )
         ).fetchone()
     if row is None:
+        raise RuntimeError("model secret reference is unavailable")
+    validate_secret_reference_row(row)
+    if row["status"] not in {"active", "saved"}:
         raise RuntimeError("model secret reference is unavailable")
     if row["provider"] != "env":
         raise RuntimeError("unsupported model secret provider")
@@ -96,7 +104,11 @@ def _flat_entries(catalog: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(flat, list):
         return [entry for entry in flat if isinstance(entry, dict)]
 
-    service = (catalog.get("services") or {}).get("llm") if isinstance(catalog.get("services"), dict) else None
+    service = (
+        (catalog.get("services") or {}).get("llm")
+        if isinstance(catalog.get("services"), dict)
+        else None
+    )
     profiles = (service or {}).get("profiles") if isinstance(service, dict) else None
     entries: list[dict[str, Any]] = []
     if not isinstance(profiles, list):
@@ -146,7 +158,12 @@ async def load_runtime_model_deployments(
         ).fetchone()
     if row is None:
         return tuple(fallback)
-    catalog = row["active"] if row["status"] == "active" and row["active"] else row["desired"]
+    validate_runtime_setting_row(row)
+    # desired 是未确认草稿；任何状态下都不能成为执行者读取的有效配置。
+    # 发布失败或部分确认时继续使用上一 active；首版未发布时回退部署基线。
+    catalog = row["active"]
+    if not catalog:
+        return tuple(fallback)
     if not isinstance(catalog, dict):
         raise RuntimeError("model catalog setting is invalid")
     models = [await _entry_to_model(store, entry) for entry in _flat_entries(catalog)]
@@ -162,6 +179,15 @@ async def save_runtime_model_catalog(store, *, catalog: dict[str, Any], actor_id
     """测试/维护入口：保存并激活脱敏模型目录。"""
 
     async with store.db.transaction(store.scope) as c:
+        previous = await (
+            await c.execute(
+                "SELECT status FROM enterprise.runtime_settings WHERE tenant_id=%s "
+                "AND scope_kind='tenant' AND scope_id='' AND key=%s FOR UPDATE",
+                (store.scope.tenant_id, MODEL_CATALOG_SETTING_KEY),
+            )
+        ).fetchone()
+        if previous:
+            validate_runtime_setting_row(previous)
         await c.execute(
             "INSERT INTO enterprise.runtime_settings"
             "(tenant_id,scope_kind,scope_id,key,version,desired,active,status,updated_by) "

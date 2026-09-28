@@ -27,17 +27,23 @@ from . import session_workflows
 from .connection import Database
 from .notebook import PostgresNotebookMixin
 from .scope import TenantScope
-from .session_references import REFERENCE_TABLES, record_references
+from .session_references import (
+    REFERENCE_TABLES,
+    record_references,
+    validate_persisted_reference_kinds,
+)
 from .session_statements import (
     SQL_GET_SESSION_ROW,
     SQL_LOCK_SESSION_ROW,
     SQL_UNREGISTERED_ATTACHMENTS,
+    SessionStatement,
     session_statement_contract,
 )
 from .session_validation import EXTERNAL_KEYS, snapshot_attachments, validate_reference_shape
 
 ACTIVE = frozenset({"queued", "running", "waiting_input"})
 TERMINAL = frozenset({"completed", "cancelled", "failed"})
+MESSAGE_ROLES = frozenset({"user", "assistant", "system", "tool"})
 _PARENT_AUTO = object()
 _EXTERNAL_KEYS = EXTERNAL_KEYS
 _SECRET_KEYS = frozenset(
@@ -117,29 +123,71 @@ class PostgresSessionStore(PostgresNotebookMixin):
         return self.scope.tenant_id, self.scope.user_id
 
     async def _session(self, c, session_id, *, lock=False):
-        return await (
+        row = await (
             await c.execute(
                 SQL_LOCK_SESSION_ROW if lock else SQL_GET_SESSION_ROW,
                 (*self._owner, session_id),
             )
         ).fetchone()
+        if row is not None:
+            await validate_persisted_reference_kinds(self, c, session_id)
+        return row
 
     async def _turn(self, c, turn_id, *, lock=False):
-        return await (
+        row = await (
             await c.execute(
                 "SELECT * FROM enterprise.turns WHERE tenant_id=%s AND user_id=%s AND id=%s"
                 + (" FOR UPDATE" if lock else ""),
                 (*self._owner, turn_id),
             )
         ).fetchone()
+        self._validate_turn_status(row)
+        return row
 
     async def _message(self, c, session_id, message_id):
-        return await (
+        row = await (
             await c.execute(
                 "SELECT * FROM enterprise.messages WHERE tenant_id=%s AND owner_id=%s AND session_id=%s AND id=%s",
                 (*self._owner, session_id, int(message_id)),
             )
         ).fetchone()
+        self._validate_message_role(row)
+        return row
+
+    @staticmethod
+    def _validate_turn_status(row):
+        if row is not None and row["status"] not in ACTIVE | TERMINAL:
+            raise RuntimeError("unknown turn status in PostgreSQL")
+
+    @staticmethod
+    def _validate_message_role(row):
+        if row is not None and row["role"] not in MESSAGE_ROLES:
+            raise RuntimeError("unknown message role in PostgreSQL")
+
+    @staticmethod
+    def _validate_operation(row):
+        if row is None:
+            return
+        status = row["status"]
+        if status not in {"registered", "deleted"}:
+            raise RuntimeError("unknown operation status in PostgreSQL")
+        has_request = all(row[key] is not None for key in ("request", "session_id", "turn_id"))
+        is_empty = all(row[key] is None for key in ("request", "session_id", "turn_id"))
+        if (status == "registered" and not has_request) or (status == "deleted" and not is_empty):
+            raise RuntimeError("inconsistent operation state in PostgreSQL")
+
+    async def _assert_known_turns(self, c, session_id=None):
+        query = (
+            "SELECT 1 FROM enterprise.turns WHERE tenant_id=%s AND user_id=%s "
+            "AND status<>ALL(%s)"
+        )
+        args = (*self._owner, list(ACTIVE | TERMINAL))
+        if session_id is not None:
+            query += " AND session_id=%s"
+            args += (session_id,)
+        unknown = await (await c.execute(query + " LIMIT 1", args)).fetchone()
+        if unknown:
+            raise RuntimeError("unknown turn status in PostgreSQL")
 
     _require_session = staticmethod(session_workflows.require_session)
 
@@ -147,6 +195,7 @@ class PostgresSessionStore(PostgresNotebookMixin):
     def _turn_payload(row):
         if row is None:
             return None
+        PostgresSessionStore._validate_turn_status(row)
         payload = {
             key: value
             for key, value in row.items()
@@ -160,6 +209,8 @@ class PostgresSessionStore(PostgresNotebookMixin):
         coalesce(latest.status,'idle') AS status,
         coalesce(latest.capability,'') AS capability,
         coalesce(active.id,'') AS active_turn_id,
+        EXISTS (SELECT 1 FROM enterprise.turns t WHERE (t.tenant_id,t.user_id,t.session_id)=(s.tenant_id,s.owner_id,s.id) AND t.status NOT IN ('queued','running','waiting_input','completed','cancelled','failed')) AS unknown_turn_status,
+        EXISTS (SELECT 1 FROM enterprise.messages m WHERE (m.tenant_id,m.owner_id,m.session_id)=(s.tenant_id,s.owner_id,s.id) AND m.role NOT IN ('user','assistant','system','tool')) AS unknown_message_role,
         (SELECT count(*) FROM enterprise.messages m WHERE (m.tenant_id,m.owner_id,m.session_id)=(s.tenant_id,s.owner_id,s.id) AND m.role<>'system') AS message_count,
         coalesce((SELECT content FROM enterprise.messages m WHERE (m.tenant_id,m.owner_id,m.session_id)=(s.tenant_id,s.owner_id,s.id) AND m.role<>'system' AND btrim(content)<>'' ORDER BY id DESC LIMIT 1),'') AS last_message
         FROM enterprise.sessions s
@@ -167,7 +218,13 @@ class PostgresSessionStore(PostgresNotebookMixin):
         LEFT JOIN LATERAL (SELECT id FROM enterprise.turns t WHERE (t.tenant_id,t.user_id,t.session_id)=(s.tenant_id,s.owner_id,s.id) AND status IN ('queued','running','waiting_input') ORDER BY updated_at DESC,id DESC LIMIT 1) active ON true
         WHERE s.tenant_id=%s AND s.owner_id=%s"""
 
-    _summary_payload = staticmethod(session_workflows.summary_payload)
+    @staticmethod
+    def _summary_payload(row):
+        if row["unknown_turn_status"] or row["status"] not in ACTIVE | TERMINAL | {"idle"}:
+            raise RuntimeError("unknown turn status in PostgreSQL")
+        if row["unknown_message_role"]:
+            raise RuntimeError("unknown message role in PostgreSQL")
+        return session_workflows.summary_payload(row)
 
     async def _session_payload(self, c, row):
         summary = await (
@@ -187,6 +244,11 @@ class PostgresSessionStore(PostgresNotebookMixin):
                 raise ValueError("invalid Session workflow parameters")
             cursor = await c.execute(sql, (*self._owner, *step.params))
             value = await cursor.fetchall() if step.many else await cursor.fetchone()
+            if (
+                step.statement in {SessionStatement.GET_ROW, SessionStatement.LOCK_ROW}
+                and value is not None
+            ):
+                await validate_persisted_reference_kinds(self, c, value["id"])
 
     async def _create_session(self, c, title=None, session_id=None):
         return await self._workflow(c, session_workflows.create_session(title, session_id))
@@ -330,6 +392,7 @@ class PostgresSessionStore(PostgresNotebookMixin):
         self, c, session_id, capability="", *, turn_id=None, owner_id="", fencing_token=0
     ):
         self._require_session(await self._session(c, session_id, lock=True))
+        await self._assert_known_turns(c, session_id)
         active = await (
             await c.execute(
                 "SELECT id FROM enterprise.turns WHERE tenant_id=%s AND user_id=%s AND session_id=%s AND status=ANY(%s)",
@@ -407,6 +470,7 @@ class PostgresSessionStore(PostgresNotebookMixin):
                     )
                 ).fetchone()
                 if operation:
+                    self._validate_operation(operation)
                     if operation["fingerprint"] != fingerprint:
                         raise ValueError("Operation ID conflict: request differs")
                     if operation["status"] == "deleted":
@@ -467,6 +531,7 @@ class PostgresSessionStore(PostgresNotebookMixin):
             return self._turn_payload(await self._turn(c, turn_id))
 
     async def _active_turns(self, c, session_id=None):
+        await self._assert_known_turns(c, session_id)
         query = (
             "SELECT * FROM enterprise.turns WHERE tenant_id=%s AND user_id=%s AND status=ANY(%s)"
         )
@@ -593,6 +658,18 @@ class PostgresSessionStore(PostgresNotebookMixin):
             await self._lock_notebook_export_scope(c)
             if await self._turn(c, turn_id, lock=True) is None:
                 raise ValueError("Turn not found")
+            command = await (
+                await c.execute(
+                    "SELECT kind FROM enterprise.turn_commands "
+                    "WHERE tenant_id=%s AND owner_id=%s AND turn_id=%s AND command_id=%s "
+                    "FOR UPDATE",
+                    (*self._owner, turn_id, command_id),
+                )
+            ).fetchone()
+            if command is None:
+                raise ValueError("Command not found")
+            if command["kind"] not in {"reply", "cancel"}:
+                raise ValueError("Unknown command kind")
             updated = await c.execute(
                 "UPDATE enterprise.turn_commands SET accepted=accepted AND %s WHERE tenant_id=%s AND owner_id=%s AND turn_id=%s AND command_id=%s",
                 (accepted, *self._owner, turn_id, command_id),
@@ -932,12 +1009,15 @@ class PostgresSessionStore(PostgresNotebookMixin):
             }
 
     async def _message_rows(self, c, session_id):
-        return await (
+        rows = await (
             await c.execute(
                 "SELECT * FROM enterprise.messages WHERE tenant_id=%s AND owner_id=%s AND session_id=%s ORDER BY id",
                 (*self._owner, session_id),
             )
         ).fetchall()
+        for row in rows:
+            self._validate_message_role(row)
+        return rows
 
     async def _linked_turn(self, c, session_id, message_id):
         return await (
@@ -1008,6 +1088,8 @@ class PostgresSessionStore(PostgresNotebookMixin):
             return await self._messages(c, session_id)
 
     async def get_last_message(self, session_id, role=None):
+        if role is not None and role not in MESSAGE_ROLES:
+            raise ValueError("Unsupported message role")
         async with self.db.transaction(self.scope) as c:
             query = "SELECT * FROM enterprise.messages WHERE tenant_id=%s AND owner_id=%s AND session_id=%s"
             args = (*self._owner, session_id)
@@ -1015,6 +1097,7 @@ class PostgresSessionStore(PostgresNotebookMixin):
                 query += " AND role=%s"
                 args += (role,)
             row = await (await c.execute(query + " ORDER BY id DESC LIMIT 1", args)).fetchone()
+            self._validate_message_role(row)
             return (
                 {k: v for k, v in row.items() if k not in ("tenant_id", "owner_id")}
                 if row
@@ -1343,6 +1426,11 @@ class PostgresSessionStore(PostgresNotebookMixin):
                 )
             ).fetchall()
         ]
+        if object_ids:
+            from .session_resources import session_object_state
+
+            for object_id in sorted(object_ids):
+                await session_object_state(self, c, object_id, lock=True)
         await c.execute(
             "DELETE FROM enterprise.messages WHERE tenant_id=%s AND owner_id=%s AND session_id=%s AND id=ANY(%s)",
             (*self._owner, session_id, ids),

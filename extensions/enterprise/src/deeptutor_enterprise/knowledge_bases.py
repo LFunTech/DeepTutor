@@ -7,6 +7,7 @@ import json
 from typing import Any, Iterable
 
 from deeptutor.core.tool_protocol import BaseTool, ToolDefinition, ToolParameter, ToolResult
+from deeptutor.persistence.postgres.object_resources import _validate_resource_row
 from deeptutor.services.rag.pipelines.lightrag_server.client import LightRagServerClient
 from deeptutor.services.rag.pipelines.lightrag_server.config import (
     DEFAULT_MODE,
@@ -58,16 +59,19 @@ async def list_externalized_knowledge_bases(store) -> list[ExternalizedKnowledge
     async with store.db.transaction(store.scope) as c:
         rows = await (
             await c.execute(
-                "SELECT resource_id,state,metadata,size_bytes,mime_type,updated_at "
+                "SELECT resource_id,state,retention,metadata,size_bytes,mime_type,updated_at "
                 "FROM enterprise.resource_objects "
                 "WHERE tenant_id=%s AND owner_id=%s AND resource_kind=%s "
-                "AND state<>'deleted' ORDER BY updated_at DESC,id DESC",
+                "ORDER BY updated_at DESC,id DESC",
                 (*store._owner, KNOWLEDGE_BASE_DOCUMENT_KIND),
             )
         ).fetchall()
 
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
+        _validate_resource_row(row)
+        if row["state"] == "deleted":
+            continue
         kb_id = str(row["resource_id"] or "").strip()
         if not kb_id:
             continue

@@ -55,6 +55,8 @@ def summary_payload(row):
             "incarnation",
             "deletion_token",
             "unresolved_dependencies",
+            "unknown_turn_status",
+            "unknown_message_role",
         )
     }
     payload.update(
@@ -173,6 +175,7 @@ def update_preferences(session_id, preferences, expected_version=None):
 def delete_session(session_id, deletion_token=None):
     from deeptutor.services.session.question_bank import QuestionBankReferenceConflict
 
+    from .session_resources import validate_session_object_state
     from .session_validation import validate_reference_shape
 
     row = yield Step(S.LOCK_ROW, (session_id,))
@@ -196,7 +199,17 @@ def delete_session(session_id, deletion_token=None):
         raise QuestionBankReferenceConflict(
             "Session is still used as a question-bank follow-up; clear the reference first"
         )
-    yield Step(S.QUEUE_SESSION_OBJECTS, (session_id, str(row["incarnation"])), many=True)
+    objects = yield Step(S.LOCK_SESSION_OBJECTS, (session_id, str(row["incarnation"])), many=True)
+    for obj in objects:
+        validate_session_object_state(obj)
+    for obj in objects:
+        next_state = "deleted" if obj["state"] == "deleted" else "cleanup"
+        detached = yield Step(
+            S.DETACH_SESSION_OBJECT,
+            (session_id, str(row["incarnation"]), str(obj["object_id"]), next_state),
+        )
+        if detached is None:
+            raise RuntimeError("Session attachment changed during deletion")
     yield Step(S.TOMBSTONE_SESSION, (session_id,), many=True)
     yield Step(S.DETACH_CHILDREN, (session_id,), many=True)
     yield Step(S.DELETE_ROW, (session_id,))

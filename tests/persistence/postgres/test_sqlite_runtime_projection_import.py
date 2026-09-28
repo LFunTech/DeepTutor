@@ -561,3 +561,118 @@ async def test_runtime_projection_import_preserves_safe_state_and_skips_newer_ta
     store = PostgresMarginNoteStore(business_sync_database, actor.scope, kb_id="biology")
     assert store.verify_token("dev-revoked", "revoked-token") is False
     assert store.get("shared-note", device_id="dev-existing").title == "fresh target"
+
+
+async def test_marginnote_import_rejects_unknown_existing_type_before_skipping_newer_row(
+    tmp_path: Path, migrated_pg, business_actors,
+) -> None:
+    """旧目标行即使比源更新，也不能绕过程序值域检查。"""
+
+    from deeptutor.persistence.postgres.offline_import.runtime_sqlite import (
+        SQLiteRuntimeProjectionImporter,
+    )
+
+    actor = business_actors.tenants[0].owners[0]
+    await _seed_target_newer_rows(migrated_pg, actor)
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.marginnote_objects "
+                "DROP CONSTRAINT IF EXISTS marginnote_objects_object_type_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.marginnote_objects SET object_type='future-type' "
+                "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+                "AND device_id='dev-existing' AND object_id='shared-note'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    artifact = tmp_path / "artifact"
+    manifest = _snapshot(
+        _make_marginnote_source(tmp_path / "mn4.sqlite3"),
+        artifact,
+        source_id="legacy-mn4",
+        source_version="marginnote_sqlite/v1",
+        tenant_id=actor.tenant_id,
+        source_owner="legacy-user",
+        target_owner=actor.user_id,
+        source_fields={"resource_mappings": {"kb_id": "biology"}},
+    )
+
+    with pytest.raises(ValueError, match="unsupported MarginNote object_type"):
+        await SQLiteRuntimeProjectionImporter(migrated_pg.admin_dsn).import_manifest(
+            manifest, operator="unit-test"
+        )
+
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT object_type FROM enterprise.marginnote_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+                "AND device_id='dev-existing' AND object_id='shared-note'",
+                (actor.tenant_id, actor.user_id),
+            )
+        ).fetchone()
+    assert row == ("future-type",)
+
+
+async def test_marginnote_import_rejects_unknown_existing_type_before_tombstone_delete(
+    tmp_path: Path, migrated_pg, business_actors,
+) -> None:
+    """墓碑清理也不能绕过旧目标对象的程序值域检查。"""
+
+    from deeptutor.persistence.postgres.offline_import.runtime_sqlite import (
+        SQLiteRuntimeProjectionImporter,
+    )
+
+    actor = business_actors.tenants[0].owners[0]
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.marginnote_objects "
+                "DROP CONSTRAINT IF EXISTS marginnote_objects_object_type_check"
+            )
+            await connection.execute(
+                "INSERT INTO enterprise.marginnote_devices("
+                "tenant_id,owner_id,kb_id,device_id,device_name,device_kind,token_hash) "
+                "VALUES (%s,%s,'biology','dev-revoked','iPad','ipados',%s)",
+                (actor.tenant_id, actor.user_id, _token_hash("target-token")),
+            )
+            await connection.execute(
+                "INSERT INTO enterprise.marginnote_objects("
+                "tenant_id,owner_id,kb_id,device_id,object_id,object_type,title,content,"
+                "tags,links,created_at,updated_at,synced_at,raw) "
+                "VALUES (%s,%s,'biology','dev-revoked','deleted-note','future-type',"
+                "'legacy target','content','[]'::jsonb,'[]'::jsonb,"
+                "'2025-01-01T00:00:00Z','2025-01-02T00:00:00Z',"
+                "'2025-01-02T00:00:00Z','{}'::jsonb)",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    artifact = tmp_path / "artifact"
+    manifest = _snapshot(
+        _make_marginnote_source(tmp_path / "mn4.sqlite3"),
+        artifact,
+        source_id="legacy-mn4",
+        source_version="marginnote_sqlite/v1",
+        tenant_id=actor.tenant_id,
+        source_owner="legacy-user",
+        target_owner=actor.user_id,
+        source_fields={"resource_mappings": {"kb_id": "biology"}},
+    )
+
+    with pytest.raises(ValueError, match="unsupported MarginNote object_type"):
+        await SQLiteRuntimeProjectionImporter(migrated_pg.admin_dsn).import_manifest(
+            manifest, operator="unit-test"
+        )
+
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT object_type FROM enterprise.marginnote_objects "
+                "WHERE tenant_id=%s AND owner_id=%s AND kb_id='biology' "
+                "AND device_id='dev-revoked' AND object_id='deleted-note'",
+                (actor.tenant_id, actor.user_id),
+            )
+        ).fetchone()
+    assert row == ("future-type",)

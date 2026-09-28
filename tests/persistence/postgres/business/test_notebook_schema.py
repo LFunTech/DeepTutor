@@ -6,6 +6,8 @@ import psycopg
 from psycopg.types.json import Jsonb
 import pytest
 
+from deeptutor.persistence.postgres.connection import Database
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -132,6 +134,7 @@ async def test_all_fields_roundtrip_and_legacy_book_execution_namespaces(
 
 async def test_same_integer_ids_are_scoped_and_admin_has_no_personal_bypass(
     business_database,
+    restricted_business_dsn,
     business_actors,
     pg_session_store_factory,
 ):
@@ -142,29 +145,30 @@ async def test_same_integer_ids_are_scoped_and_admin_has_no_personal_bypass(
                 await _entry(c, actor, sid)
                 await _category(c, actor)
                 await _link(c, actor)
-    for tenant in business_actors.tenants:
-        for actor in (*tenant.owners, tenant.admin):
-            async with business_database.transaction(actor.scope) as c:
-                for table in (
-                    "notebook_entries",
-                    "notebook_categories",
-                    "notebook_entry_categories",
-                ):
-                    rows = await (
-                        await c.execute(f"SELECT owner_id FROM enterprise.{table}")
-                    ).fetchall()
-                    assert rows == ([] if actor is tenant.admin else [{"owner_id": actor.user_id}])
-                    assert (
-                        await c.execute(
-                            f"UPDATE enterprise.{table} SET owner_id=owner_id WHERE owner_id<>%s",
-                            (actor.user_id,),
-                        )
-                    ).rowcount == 0
-                    assert (
-                        await c.execute(
-                            f"DELETE FROM enterprise.{table} WHERE owner_id<>%s", (actor.user_id,)
-                        )
-                    ).rowcount == 0
+    async with Database(restricted_business_dsn, resource="notebook-rls-check") as restricted_db:
+        for tenant in business_actors.tenants:
+            for actor in (*tenant.owners, tenant.admin):
+                async with restricted_db.transaction(actor.scope) as c:
+                    for table in (
+                        "notebook_entries",
+                        "notebook_categories",
+                        "notebook_entry_categories",
+                    ):
+                        rows = await (
+                            await c.execute(f"SELECT owner_id FROM enterprise.{table}")
+                        ).fetchall()
+                        assert rows == ([] if actor is tenant.admin else [{"owner_id": actor.user_id}])
+                        assert (
+                            await c.execute(
+                                f"UPDATE enterprise.{table} SET owner_id=owner_id WHERE owner_id<>%s",
+                                (actor.user_id,),
+                            )
+                        ).rowcount == 0
+                        assert (
+                            await c.execute(
+                                f"DELETE FROM enterprise.{table} WHERE owner_id<>%s", (actor.user_id,)
+                            )
+                        ).rowcount == 0
 
 
 @pytest.mark.parametrize("foreign", ["owner", "tenant"])
@@ -382,29 +386,30 @@ async def test_literal_search_and_bidirectional_stable_keyset_order(
     "table", ["notebook_entries", "notebook_categories", "notebook_entry_categories"]
 )
 async def test_rls_rejects_forged_owner_inserts_and_scope_updates(
-    business_database,
+    restricted_business_dsn,
     business_actors,
     pg_session_store_factory,
     table,
 ):
     actor = business_actors.tenants[0].owners[0]
     other = business_actors.tenants[0].owners[1]
-    sid = await _session(pg_session_store_factory, other)
-    async with business_database.transaction(other.scope) as c:
-        await _entry(c, other, sid)
-        await _category(c, other)
-        await _link(c, other)
-    with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        async with business_database.transaction(actor.scope) as c:
-            if table == "notebook_entries":
-                await _entry(c, other, sid, id=18, question_id="q2")
-            elif table == "notebook_categories":
-                await _category(c, other, id=8, name="forged")
-            else:
-                await _link(c, other)
-    with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        async with business_database.transaction(other.scope) as c:
-            await c.execute(f"UPDATE enterprise.{table} SET owner_id=%s", (actor.user_id,))
+    async with Database(restricted_business_dsn, resource="notebook-rls-forgery") as restricted_db:
+        sid = await _session(pg_session_store_factory, other)
+        async with restricted_db.transaction(other.scope) as c:
+            await _entry(c, other, sid)
+            await _category(c, other)
+            await _link(c, other)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            async with restricted_db.transaction(actor.scope) as c:
+                if table == "notebook_entries":
+                    await _entry(c, other, sid, id=18, question_id="q2")
+                elif table == "notebook_categories":
+                    await _category(c, other, id=8, name="forged")
+                else:
+                    await _link(c, other)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            async with restricted_db.transaction(other.scope) as c:
+                await c.execute(f"UPDATE enterprise.{table} SET owner_id=%s", (actor.user_id,))
 
 
 async def test_followup_self_reference_and_real_turn_delete_lifecycle(
@@ -484,8 +489,6 @@ async def test_generated_ids_and_json_enum_version_checks_with_low_privilege(
         ).fetchone()
         assert isinstance(category["id"], int)
     for fields in (
-        {"source": "bad"},
-        {"score_trend": "bad"},
         {"version": 0},
         {"user_answer_images": Jsonb({})},
     ):

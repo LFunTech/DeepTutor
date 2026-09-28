@@ -10,7 +10,8 @@ CLASSIFICATION = (
     REPOSITORY_ROOT
     / "openspec"
     / "changes"
-    / "migrate-all-sqlite-state-to-postgresql"
+    / "archive"
+    / "2026-09-16-migrate-all-sqlite-state-to-postgresql"
     / "sqlite-reference-classification.md"
 )
 

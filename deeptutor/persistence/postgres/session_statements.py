@@ -48,7 +48,8 @@ class SessionStatement(Enum):
     ACTIVE_TURN = auto()
     FOLLOWUP_REF = auto()
     UNREGISTERED_ATTACHMENTS = auto()
-    QUEUE_SESSION_OBJECTS = auto()
+    LOCK_SESSION_OBJECTS = auto()
+    DETACH_SESSION_OBJECT = auto()
     TOMBSTONE_SESSION = auto()
     DETACH_CHILDREN = auto()
     DELETE_ROW = auto()
@@ -73,9 +74,13 @@ _SESSION_STATEMENTS = MappingProxyType(
             SQL_UNREGISTERED_ATTACHMENTS,
             1,
         ),
-        SessionStatement.QUEUE_SESSION_OBJECTS: (
-            "WITH p AS (SELECT %s::uuid tenant,%s::text owner,%s::text sid,%s::uuid incarnation) UPDATE enterprise.session_objects o SET state='cleanup',updated_at=now() FROM p WHERE o.tenant_id=p.tenant AND o.owner_id=p.owner AND o.session_ref=p.sid AND o.incarnation=p.incarnation AND o.state<>'deleted' RETURNING o.object_id",
+        SessionStatement.LOCK_SESSION_OBJECTS: (
+            "SELECT object_id,state FROM enterprise.session_objects WHERE tenant_id=%s AND owner_id=%s AND session_ref=%s AND incarnation=%s ORDER BY object_id FOR UPDATE",
             2,
+        ),
+        SessionStatement.DETACH_SESSION_OBJECT: (
+            "WITH p AS (SELECT %s::uuid tenant,%s::text owner,%s::text sid,%s::uuid incarnation,%s::uuid oid,%s::text next_state) UPDATE enterprise.session_objects o SET session_ref=NULL,state=p.next_state,updated_at=now() FROM p WHERE o.tenant_id=p.tenant AND o.owner_id=p.owner AND o.session_ref=p.sid AND o.incarnation=p.incarnation AND o.object_id=p.oid RETURNING o.object_id",
+            4,
         ),
         SessionStatement.TOMBSTONE_SESSION: (
             "UPDATE enterprise.operations SET status='deleted',request=NULL,session_id=NULL,turn_id=NULL WHERE tenant_id=%s AND owner_id=%s AND session_id=%s RETURNING operation_id",

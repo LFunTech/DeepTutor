@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import re
 import uuid
 
 from deeptutor_enterprise.migrations.runner import MigrationRunner
@@ -45,6 +47,11 @@ async def test_management_schema_is_versioned_repeatable_and_default_deny(pg_dsn
         ("0001_authorization_base",),
         ("0002_approval_delegation_guards",),
         ("0003_assignment_school_binding_version",),
+        ("0004_oms_skill_actions",),
+        ("0005_remove_immutable_fact_function",),
+        ("0006_remove_role_action_function",),
+        ("0007_custom_role_school_owner",),
+        ("0008_relocate_database_business_rules",),
     ]
     assert principals == (0,)
     assert assignments == (0,)
@@ -60,6 +67,107 @@ async def test_management_schema_is_versioned_repeatable_and_default_deny(pg_dsn
     }
     assert {name for name, *_ in tables} == {"schema_history", *scoped}
     assert all(rls and force for name, rls, force in tables if name in scoped)
+
+
+async def test_management_forward_migration_removes_immutable_fact_function(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        function = await (
+            await connection.execute("SELECT to_regprocedure('management.reject_immutable_fact()')")
+        ).fetchone()
+        triggers = await (
+            await connection.execute(
+                "SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid "
+                "JOIN pg_namespace n ON n.oid=r.relnamespace "
+                "WHERE n.nspname='management' AND r.relname IN "
+                "('role_versions','role_actions','audit_events') AND NOT t.tgisinternal "
+                "AND t.tgname LIKE '%append_only'"
+            )
+        ).fetchall()
+    assert function == (None,)
+    assert triggers == []
+
+
+async def test_role_action_scope_is_verified_by_application_runner_without_trigger(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        trigger = await (
+            await connection.execute(
+                "SELECT to_regprocedure('management.validate_role_action()')"
+            )
+        ).fetchone()
+        assert trigger == (None,)
+        await connection.execute(
+            "INSERT INTO management.role_actions"
+            "(application,role_key,role_version,action_key) "
+            "VALUES('oms','platform_security_admin',1,'ops.tenants.read')"
+        )
+    with pytest.raises(RuntimeError, match="role action scope"):
+        await runner.verify()
+
+
+async def test_oms_skill_actions_are_versioned_without_granting_existing_subjects(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    await runner.verify()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        actions = await (
+            await connection.execute(
+                "SELECT action_key,allowed_scope,sensitive FROM management.action_catalog "
+                "WHERE application='oms' AND action_key LIKE 'ops.skills.%' ORDER BY action_key"
+            )
+        ).fetchall()
+        roles = await (
+            await connection.execute(
+                "SELECT ra.role_key,ra.role_version,rv.scope_kind,ra.action_key "
+                "FROM management.role_actions ra JOIN management.role_versions rv "
+                "ON rv.application=ra.application AND rv.role_key=ra.role_key "
+                "AND rv.version=ra.role_version "
+                "WHERE ra.application='oms' AND ra.action_key LIKE 'ops.skills.%' "
+                "ORDER BY ra.role_key,ra.action_key"
+            )
+        ).fetchall()
+        assignments = await (
+            await connection.execute("SELECT count(*) FROM management.assignments")
+        ).fetchone()
+    assert actions == [
+        ("ops.skills.grant", "school", True),
+        ("ops.skills.manage", "platform", True),
+        ("ops.skills.publish", "platform", True),
+        ("ops.skills.read", "platform", False),
+        ("ops.skills.review", "platform", True),
+    ]
+    assert roles == [
+        ("platform_config_admin", 2, "platform", "ops.skills.manage"),
+        ("platform_config_admin", 2, "platform", "ops.skills.publish"),
+        ("platform_config_admin", 2, "platform", "ops.skills.read"),
+        ("platform_operator", 2, "school", "ops.skills.grant"),
+        ("platform_security_admin", 2, "platform", "ops.skills.read"),
+        ("platform_security_admin", 2, "platform", "ops.skills.review"),
+    ]
+    assert assignments == (0,)
+
+
+async def test_oms_skill_action_catalog_drift_blocks_verification(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "UPDATE management.action_catalog SET status='retired' "
+            "WHERE application='oms' AND action_key='ops.skills.review'"
+        )
+    with pytest.raises(RuntimeError, match="management schema drift"):
+        await runner.verify()
+
+
+async def test_oms_skill_migration_applies_for_single_database_runtime_owner(pg_dsn):
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    runner = MigrationRunner(runtime_dsn)
+    await runner.apply()
+    await runner.apply()
+    await runner.verify()
+    assert await runner.plan() == []
 
 
 async def test_management_migration_failure_rolls_back_schema_and_history(pg_dsn):
@@ -80,6 +188,153 @@ async def test_management_migration_failure_rolls_back_schema_and_history(pg_dsn
         ) == (None,)
     await MigrationRunner(pg_dsn).apply()
     await MigrationRunner(pg_dsn).verify()
+
+
+async def test_management_runner_rejects_illegal_action_catalog_transition_without_trigger(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+
+    class IllegalCatalogRunner(MigrationRunner):
+        def _management_migrations(self):
+            return super()._management_migrations() + [
+                (
+                    "0007_illegal_action_change",
+                    "SELECT set_config('app.management_app','oms',true); "
+                    "UPDATE management.action_catalog SET sensitive=true "
+                    "WHERE application='oms' AND action_key='ops.providers.read';",
+                )
+            ]
+
+    with pytest.raises(RuntimeError, match="action catalog transition"):
+        await IllegalCatalogRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT sensitive FROM management.action_catalog "
+                "WHERE application='oms' AND action_key='ops.providers.read'"
+            )
+        ).fetchone()
+    assert row == (False,)
+    await MigrationRunner(pg_dsn).verify()
+
+
+async def test_management_action_retirement_is_one_way_across_separate_migrations(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+
+    class RetirementRunner(MigrationRunner):
+        def _management_migrations(self):
+            return super()._management_migrations() + [
+                (
+                    "0007_retire_synthetic_action",
+                    "SELECT set_config('app.management_app','oms',true); "
+                    "UPDATE management.action_catalog SET status='retired' "
+                    "WHERE application='oms' AND action_key='ops.providers.read';",
+                )
+            ]
+
+    retired = RetirementRunner(pg_dsn)
+    await retired.apply()
+    await retired.verify()
+
+    class ResurrectionRunner(RetirementRunner):
+        def _management_migrations(self):
+            return super()._management_migrations() + [
+                (
+                    "0008_resurrect_synthetic_action",
+                    "SELECT set_config('app.management_app','oms',true); "
+                    "UPDATE management.action_catalog SET status='active' "
+                    "WHERE application='oms' AND action_key='ops.providers.read';",
+                )
+            ]
+
+    with pytest.raises(RuntimeError, match="action catalog transition"):
+        await ResurrectionRunner(pg_dsn).apply()
+    await retired.verify()
+
+
+async def test_management_runner_rejects_role_template_mutation_without_db_trigger(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+
+    class IllegalRoleRunner(MigrationRunner):
+        def _management_migrations(self):
+            return super()._management_migrations() + [
+                (
+                    "0007_illegal_role_mutation",
+                    "SELECT set_config('app.management_app','tms',true); "
+                    "UPDATE management.role_versions SET is_template=false "
+                    "WHERE application='tms' AND role_key='school_auditor' AND version=1;",
+                )
+            ]
+
+    with pytest.raises(RuntimeError, match="role catalog transition"):
+        await IllegalRoleRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT is_template FROM management.role_versions "
+                "WHERE application='tms' AND role_key='school_auditor' AND version=1"
+            )
+        ).fetchone()
+    assert row == (True,)
+
+
+async def test_management_runner_rejects_retired_action_on_new_role_version(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+
+    class IllegalRoleActionRunner(MigrationRunner):
+        def _management_migrations(self):
+            return super()._management_migrations() + [
+                (
+                    "0007_illegal_retired_role_action",
+                    "SELECT set_config('app.management_app','oms',true); "
+                    "UPDATE management.action_catalog SET status='retired' "
+                    "WHERE application='oms' AND action_key='ops.providers.read'; "
+                    "INSERT INTO management.role_versions"
+                    "(application,role_key,version,scope_kind,is_template) "
+                    "VALUES('oms','synthetic_retired_reader',1,'platform',false); "
+                    "INSERT INTO management.role_actions"
+                    "(application,role_key,role_version,action_key) "
+                    "VALUES('oms','synthetic_retired_reader',1,'ops.providers.read');",
+                )
+            ]
+
+    with pytest.raises(RuntimeError, match="role catalog transition"):
+        await IllegalRoleActionRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT status FROM management.action_catalog "
+                "WHERE application='oms' AND action_key='ops.providers.read'"
+            )
+        ).fetchone()
+    assert row == ("active",)
+
+
+async def test_management_runner_rejects_action_added_to_published_role_version(pg_dsn):
+    await MigrationRunner(pg_dsn).apply()
+
+    class PublishedRoleMutationRunner(MigrationRunner):
+        def _management_migrations(self):
+            return super()._management_migrations() + [
+                (
+                    "0007_expand_published_role",
+                    "SELECT set_config('app.management_app','oms',true); "
+                    "INSERT INTO management.role_actions"
+                    "(application,role_key,role_version,action_key) "
+                    "VALUES('oms','platform_config_admin',1,'ops.skills.read');",
+                )
+            ]
+
+    with pytest.raises(RuntimeError, match="role catalog transition"):
+        await PublishedRoleMutationRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT count(*) FROM management.role_actions "
+                "WHERE application='oms' AND role_key='platform_config_admin' "
+                "AND role_version=1 AND action_key='ops.skills.read'"
+            )
+        ).fetchone()
+    assert row == (0,)
 
 
 async def test_management_rls_separates_apps_and_schools(pg_dsn):
@@ -131,35 +386,29 @@ async def test_management_rls_policy_expression_drift_blocks_verify(pg_dsn):
         await runner.verify()
 
 
-async def test_management_action_domain_constraint_drift_blocks_verify(pg_dsn):
+async def test_management_action_domain_check_reintroduction_blocks_verify(pg_dsn):
     runner = MigrationRunner(pg_dsn)
     await runner.apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
-        row = await (
-            await connection.execute(
-                "SELECT conname FROM pg_constraint WHERE conrelid='management.action_catalog'::regclass "
-                "AND pg_get_constraintdef(oid) LIKE '%ops.%'"
-            )
-        ).fetchone()
-        assert row is not None
         await connection.execute(
-            sql.SQL("ALTER TABLE management.action_catalog DROP CONSTRAINT {}").format(
-                sql.Identifier(row[0])
-            )
+            "ALTER TABLE management.action_catalog ADD CONSTRAINT action_catalog_check "
+            "CHECK (action_key IS NOT NULL)"
         )
-    with pytest.raises(RuntimeError, match="management schema drift"):
+    with pytest.raises(RuntimeError, match="database-owned business rules"):
         await runner.verify()
 
 
 async def test_role_action_scope_cannot_cross_platform_and_school(pg_dsn):
-    await MigrationRunner(pg_dsn).apply()
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
-        with pytest.raises(psycopg.errors.CheckViolation):
-            await connection.execute(
-                "INSERT INTO management.role_actions"
-                "(application,role_key,role_version,action_key) "
-                "VALUES('oms','platform_security_admin',1,'ops.tenants.read')"
-            )
+        await connection.execute(
+            "INSERT INTO management.role_actions"
+            "(application,role_key,role_version,action_key) "
+            "VALUES('oms','platform_security_admin',1,'ops.tenants.read')"
+        )
+    with pytest.raises(RuntimeError, match="role action scope"):
+        await runner.verify()
 
 
 async def test_last_active_school_admin_cannot_be_revoked(pg_dsn):
@@ -173,10 +422,6 @@ async def test_last_active_school_admin_cannot_be_revoked(pg_dsn):
             "VALUES(%s,'allowed','synthetic')",
             (school,),
         )
-    runtime_dsn = single_database_user_dsn(pg_dsn)
-    async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
-        await connection.execute("SELECT set_config('app.management_app','tms',true)")
-        await connection.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school),))
         await connection.execute(
             "INSERT INTO management.principals"
             "(id,application,issuer,subject,school_id,status) "
@@ -191,11 +436,12 @@ async def test_last_active_school_admin_cannot_be_revoked(pg_dsn):
             "now()+interval '1 day',%s,'synthetic-approval')",
             (assignment, principal, school, uuid.uuid4()),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            await connection.execute(
-                "UPDATE management.assignments SET status='revoked',revoked_at=now() WHERE id=%s",
-                (assignment,),
-            )
+        await connection.execute(
+            "UPDATE management.assignments SET status='revoked',revoked_at=now() WHERE id=%s",
+            (assignment,),
+        )
+    with pytest.raises(RuntimeError, match="last administrator"):
+        await MigrationRunner(pg_dsn).verify()
 
 
 async def test_last_school_admin_cannot_be_removed_by_expiry_or_principal_disable(pg_dsn):
@@ -207,10 +453,6 @@ async def test_last_school_admin_cannot_be_removed_by_expiry_or_principal_disabl
             "VALUES(%s,'allowed','synthetic')",
             (school,),
         )
-    runtime_dsn = single_database_user_dsn(pg_dsn)
-    async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
-        await connection.execute("SELECT set_config('app.management_app','tms',true)")
-        await connection.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school),))
         await connection.execute(
             "INSERT INTO management.principals"
             "(id,application,issuer,subject,school_id,status) "
@@ -225,19 +467,9 @@ async def test_last_school_admin_cannot_be_removed_by_expiry_or_principal_disabl
             "now()+interval '1 day',%s,'synthetic-approval')",
             (assignment, principal, school, uuid.uuid4()),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            async with connection.transaction():
-                await connection.execute(
-                    "UPDATE management.assignments SET expires_at=now()+interval '1 second' "
-                    "WHERE id=%s",
-                    (assignment,),
-                )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            async with connection.transaction():
-                await connection.execute(
-                    "UPDATE management.principals SET status='disabled' WHERE id=%s",
-                    (principal,),
-                )
+        await connection.execute("UPDATE management.principals SET status='disabled' WHERE id=%s", (principal,))
+    with pytest.raises(RuntimeError, match="last administrator"):
+        await MigrationRunner(pg_dsn).verify()
 
 
 async def test_last_platform_security_admin_cannot_be_revoked_or_disabled(pg_dsn):
@@ -257,19 +489,12 @@ async def test_last_platform_security_admin_cannot_be_revoked_or_disabled(pg_dsn
             "now()-interval '1 day',now()+interval '1 day',%s,'synthetic-approval')",
             (assignment, principal, uuid.uuid4()),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            async with connection.transaction():
-                await connection.execute(
-                    "UPDATE management.assignments SET status='revoked',revoked_at=now() "
-                    "WHERE id=%s",
-                    (assignment,),
-                )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            async with connection.transaction():
-                await connection.execute(
-                    "UPDATE management.principals SET status='disabled' WHERE id=%s",
-                    (principal,),
-                )
+        await connection.execute(
+            "UPDATE management.assignments SET status='revoked',revoked_at=now() WHERE id=%s",
+            (assignment,),
+        )
+    with pytest.raises(RuntimeError, match="last administrator"):
+        await MigrationRunner(pg_dsn).verify()
 
 
 async def test_role_name_without_management_action_is_not_replacement_admin(pg_dsn):
@@ -284,12 +509,12 @@ async def test_role_name_without_management_action_is_not_replacement_admin(pg_d
         )
         await connection.execute(
             "INSERT INTO management.role_versions(application,role_key,version,scope_kind) "
-            "VALUES('oms','platform_security_admin',2,'platform')"
+            "VALUES('oms','platform_security_admin',3,'platform')"
         )
         original_assignment = uuid.uuid4()
         for principal, version, assignment in (
             (original, 1, original_assignment),
-            (impostor, 2, uuid.uuid4()),
+            (impostor, 3, uuid.uuid4()),
         ):
             await connection.execute(
                 "INSERT INTO management.assignments"
@@ -299,27 +524,23 @@ async def test_role_name_without_management_action_is_not_replacement_admin(pg_d
                 "now()-interval '1 day',now()+interval '1 day',%s,'synthetic-approval')",
                 (assignment, principal, version, uuid.uuid4()),
             )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            await connection.execute(
-                "UPDATE management.assignments SET status='revoked',revoked_at=now() WHERE id=%s",
-                (original_assignment,),
-            )
+        await connection.execute(
+            "UPDATE management.assignments SET status='revoked',revoked_at=now() WHERE id=%s",
+            (original_assignment,),
+        )
+    with pytest.raises(RuntimeError, match="last administrator"):
+        await MigrationRunner(pg_dsn).verify()
 
 
 async def test_management_governance_action_cannot_be_retired_in_place(pg_dsn):
     await MigrationRunner(pg_dsn).apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
-        for application, action in (
-            ("oms", "ops.permissions.manage"),
-            ("tms", "tenant.permissions.manage"),
-        ):
-            with pytest.raises(psycopg.errors.CheckViolation):
-                async with connection.transaction():
-                    await connection.execute(
-                        "UPDATE management.action_catalog SET status='retired' "
-                        "WHERE application=%s AND action_key=%s",
-                        (application, action),
-                    )
+        await connection.execute(
+            "UPDATE management.action_catalog SET status='retired' "
+            "WHERE application='oms' AND action_key='ops.permissions.manage'"
+        )
+    with pytest.raises(RuntimeError, match="action catalog fact"):
+        await MigrationRunner(pg_dsn).verify()
 
 
 async def test_assignment_changes_advance_principal_policy_version(pg_dsn):
@@ -360,9 +581,9 @@ async def test_assignment_changes_advance_principal_policy_version(pg_dsn):
                 "SELECT policy_version FROM management.principals WHERE id=%s", (principal,)
             )
         ).fetchone()
-    assert granted == (2,)
-    assert revoked == (3,)
-    assert deleted == (4,)
+    assert granted == (1,)
+    assert revoked == (1,)
+    assert deleted == (1,)
 
 
 async def test_approved_request_requires_distinct_complete_reviewer(pg_dsn):
@@ -426,22 +647,23 @@ async def test_tms_delegation_cannot_target_another_school(pg_dsn):
             "VALUES(%s,'tms','https://issuer.example','school-admin',%s,'active')",
             (principal, school_a),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            async with connection.transaction():
-                await connection.execute(
-                    "INSERT INTO management.delegation_policies"
-                    "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,expires_at) "
-                    "VALUES(%s,'tms',%s,'tenant.permissions.manage','school',%s,"
-                    "now()-interval '1 day',now()+interval '1 day')",
-                    (uuid.uuid4(), principal, school_b),
-                )
+        await connection.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,school_id,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'tms',%s,'school_admin',1,'school',%s,"
+            "now()-interval '1 day',now()+interval '1 day',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, school_a, uuid.uuid4()),
+        )
         await connection.execute(
             "INSERT INTO management.delegation_policies"
             "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,expires_at) "
             "VALUES(%s,'tms',%s,'tenant.permissions.manage','school',%s,"
             "now()-interval '1 day',now()+interval '1 day')",
-            (uuid.uuid4(), principal, school_a),
+            (uuid.uuid4(), principal, school_b),
         )
+    with pytest.raises(RuntimeError, match="delegation relation"):
+        await MigrationRunner(pg_dsn).verify()
 
 
 async def test_delegation_action_scope_must_match_catalog(pg_dsn):
@@ -458,14 +680,23 @@ async def test_delegation_action_scope_must_match_catalog(pg_dsn):
             "VALUES(%s,'oms','https://issuer.example','operator','active')",
             (principal,),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            await connection.execute(
-                "INSERT INTO management.delegation_policies"
-                "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,expires_at) "
-                "VALUES(%s,'oms',%s,'ops.credentials.manage','school',%s,"
-                "now()-interval '1 day',now()+interval '1 day')",
-                (uuid.uuid4(), principal, school),
-            )
+        await connection.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_security_admin',1,'platform',"
+            "now()-interval '1 day',now()+interval '1 day',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+        await connection.execute(
+            "INSERT INTO management.delegation_policies"
+            "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,expires_at) "
+            "VALUES(%s,'oms',%s,'ops.credentials.manage','school',%s,"
+            "now()-interval '1 day',now()+interval '1 day')",
+            (uuid.uuid4(), principal, school),
+        )
+    with pytest.raises(RuntimeError, match="delegation relation"):
+        await MigrationRunner(pg_dsn).verify()
 
 
 async def test_legacy_tenant_admin_is_not_promoted_by_management_migration(pg_dsn):
@@ -560,25 +791,33 @@ async def test_management_audit_fact_is_append_only(pg_dsn):
             "'ops.permissions.manage','principal','candidate','request-1','denied','synthetic')",
             (event,),
         )
-        with pytest.raises(psycopg.errors.RaiseException):
-            async with connection.transaction():
+        assert (
+            await (
                 await connection.execute(
-                    "UPDATE management.audit_events SET reason='rewritten' WHERE id=%s",
-                    (event,),
+                    "SELECT reason FROM management.audit_events WHERE id=%s", (event,)
                 )
-        with pytest.raises(psycopg.errors.RaiseException):
-            async with connection.transaction():
-                await connection.execute(
-                    "DELETE FROM management.audit_events WHERE id=%s", (event,)
-                )
+            ).fetchone()
+        ) == ("synthetic",)
+    source = Path(__file__).parents[1] / "src/deeptutor_enterprise/management"
+    forbidden = re.compile(
+        r"\b(?:UPDATE|DELETE\s+FROM)\s+management\."
+        r"(?:role_versions|role_actions|audit_events)\b",
+        re.IGNORECASE,
+    )
+    for path in source.rglob("*.py"):
+        content = path.read_text(encoding="utf8")
+        assert not forbidden.search(content), path
+        if path.name != "roles.py":
+            assert not re.search(r"\bINSERT\s+INTO\s+management\.role_actions\b", content, re.I), path
 
 
-async def test_management_approval_guard_drift_blocks_verify(pg_dsn):
+async def test_management_approval_guard_reintroduction_blocks_verify(pg_dsn):
     runner = MigrationRunner(pg_dsn)
     await runner.apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute(
-            "ALTER TABLE management.approval_requests DROP CONSTRAINT approval_distinct_reviewer"
+            "ALTER TABLE management.approval_requests ADD CONSTRAINT approval_distinct_reviewer "
+            "CHECK (status IS NOT NULL)"
         )
-    with pytest.raises(RuntimeError, match="management schema drift"):
+    with pytest.raises(RuntimeError, match="database-owned business rules"):
         await runner.verify()

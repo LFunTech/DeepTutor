@@ -1,0 +1,29 @@
+-- Relocate EduPlus2 receiver business CHECK rules to application code.
+
+ALTER TABLE eduplus2."audit_events" DROP CONSTRAINT IF EXISTS "audit_events_result_check";
+ALTER TABLE eduplus2."audit_export_jobs" DROP CONSTRAINT IF EXISTS "audit_export_jobs_format_check";
+ALTER TABLE eduplus2."audit_export_jobs" DROP CONSTRAINT IF EXISTS "audit_export_jobs_status_check";
+ALTER TABLE eduplus2."external_client_registrations" DROP CONSTRAINT IF EXISTS "external_client_registrations_provider_check";
+ALTER TABLE eduplus2."external_client_registrations" DROP CONSTRAINT IF EXISTS "external_client_registrations_registered_by_surface_check";
+ALTER TABLE eduplus2."external_client_registrations" DROP CONSTRAINT IF EXISTS "external_client_registrations_status_check";
+ALTER TABLE eduplus2."identity_bindings" DROP CONSTRAINT IF EXISTS "identity_bindings_provider_check";
+ALTER TABLE eduplus2."identity_bindings" DROP CONSTRAINT IF EXISTS "identity_bindings_status_check";
+ALTER TABLE eduplus2."lifecycle_actor_candidates" DROP CONSTRAINT IF EXISTS "lifecycle_actor_candidate_resolution_check";
+ALTER TABLE eduplus2."lifecycle_actor_candidates" DROP CONSTRAINT IF EXISTS "lifecycle_actor_candidate_status_check";
+ALTER TABLE eduplus2."lifecycle_inbox" DROP CONSTRAINT IF EXISTS "lifecycle_inbox_processing_status_check";
+ALTER TABLE eduplus2."lifecycle_targets" DROP CONSTRAINT IF EXISTS "lifecycle_allowed_requires_binding_version";
+ALTER TABLE eduplus2."lifecycle_targets" DROP CONSTRAINT IF EXISTS "lifecycle_targets_check3";
+ALTER TABLE eduplus2."lifecycle_targets" DROP CONSTRAINT IF EXISTS "lifecycle_targets_eligibility_check";
+ALTER TABLE eduplus2."permission_snapshots" DROP CONSTRAINT IF EXISTS "permission_snapshots_provider_check";
+ALTER TABLE eduplus2."profile_snapshots" DROP CONSTRAINT IF EXISTS "profile_snapshots_provider_check";
+ALTER TABLE eduplus2."profile_snapshots" DROP CONSTRAINT IF EXISTS "profile_snapshots_status_check";
+ALTER TABLE eduplus2."provider_clients" DROP CONSTRAINT IF EXISTS "provider_clients_status_check";
+ALTER TABLE eduplus2."revocation_events" DROP CONSTRAINT IF EXISTS "revocation_events_processing_status_check";
+ALTER TABLE eduplus2."revocation_events" DROP CONSTRAINT IF EXISTS "revocation_events_target_kind_check";
+ALTER TABLE eduplus2."revocation_state" DROP CONSTRAINT IF EXISTS "revocation_state_check";
+ALTER TABLE eduplus2."revocation_state" DROP CONSTRAINT IF EXISTS "revocation_state_check1";
+ALTER TABLE eduplus2."revocation_state" DROP CONSTRAINT IF EXISTS "revocation_state_check2";
+ALTER TABLE eduplus2."revocation_state" DROP CONSTRAINT IF EXISTS "revocation_state_check3";
+ALTER TABLE eduplus2."revocation_state" DROP CONSTRAINT IF EXISTS "revocation_state_check4";
+ALTER TABLE eduplus2."revocation_state" DROP CONSTRAINT IF EXISTS "revocation_state_target_kind_check";
+ALTER TABLE eduplus2."webhook_school_state" DROP CONSTRAINT IF EXISTS "webhook_school_state_eligibility_check";

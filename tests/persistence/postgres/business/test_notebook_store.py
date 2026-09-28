@@ -22,6 +22,7 @@ from deeptutor.services.session.question_bank import (
     QuestionBankReferenceConflict,
     QuestionBankVersionConflict,
 )
+from tests.persistence.postgres.business.test_reading_catalog import factory as reading_factory
 
 pytestmark = pytest.mark.asyncio
 
@@ -76,6 +77,227 @@ async def _session_and_store(pg_session_store_factory, actor, suffix: str = ""):
         f"题库{suffix}", session_id=f"notebook-{actor.user_id}{suffix}"
     )
     return store, session["id"]
+
+
+async def test_notebook_unknown_source_or_trend_is_not_defaulted_or_overwritten(
+    business_actors, pg_session_store_factory, pg_dsn,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store, session_id = await _session_and_store(pg_session_store_factory, actor)
+    with pytest.raises(ValueError, match="source"):
+        await store.upsert_notebook_entries(
+            session_id, [_item("future", "未知来源", source="future-source")]
+        )
+    assert await store.upsert_notebook_entries(
+        session_id, [_item("q1", "题目", material_id="book-1")]
+    ) == 1
+    entry = await store.find_notebook_entry(session_id, "q1")
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "ALTER TABLE enterprise.notebook_entries "
+            "DROP CONSTRAINT IF EXISTS notebook_entries_source_check"
+        )
+        await c.execute(
+            "ALTER TABLE enterprise.notebook_entries "
+            "DROP CONSTRAINT IF EXISTS notebook_entries_score_trend_check"
+        )
+        await c.execute(
+            "UPDATE enterprise.notebook_entries SET source='future-source' "
+            "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+            (actor.tenant_id, actor.user_id, entry["id"]),
+        )
+    with pytest.raises(ValueError, match="source"):
+        await store.get_notebook_entry(entry["id"])
+    with pytest.raises(ValueError, match="source"):
+        await store.list_question_bank_materials()
+    with pytest.raises(ValueError, match="source"):
+        await store.upsert_notebook_entries(session_id, [_item("q1", "不可覆盖")])
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "UPDATE enterprise.notebook_entries SET source='book',score_trend='future-trend' "
+            "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+            (actor.tenant_id, actor.user_id, entry["id"]),
+        )
+    with pytest.raises(ValueError, match="trend"):
+        await store.get_notebook_entry(entry["id"])
+    with pytest.raises(ValueError, match="trend"):
+        await store.update_notebook_entry(entry["id"], {"bookmarked": True})
+    with pytest.raises(ValueError, match="trend"):
+        await store.delete_notebook_entry(entry["id"])
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        row = await (
+            await c.execute(
+                "SELECT question,source,score_trend,bookmarked FROM enterprise.notebook_entries "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, entry["id"]),
+            )
+        ).fetchone()
+        assert row == ("题目", "book", "future-trend", False)
+
+
+async def test_notebook_source_conditions_survive_removed_database_checks(
+    business_actors, pg_session_store_factory, pg_dsn,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store, session_id = await _session_and_store(pg_session_store_factory, actor)
+    await store.upsert_notebook_entries(session_id, [_item("q1", "题目")])
+    entry = await store.find_notebook_entry(session_id, "q1")
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "ALTER TABLE enterprise.notebook_entries "
+            "DROP CONSTRAINT IF EXISTS notebook_mastery_path_required"
+        )
+        await c.execute(
+            "ALTER TABLE enterprise.notebook_entries "
+            "DROP CONSTRAINT IF EXISTS notebook_entries_check"
+        )
+        for source in ("mastery_path", "immersive_reading"):
+            await c.execute(
+                "UPDATE enterprise.notebook_entries SET source=%s,material_id='' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (source, actor.tenant_id, actor.user_id, entry["id"]),
+            )
+            await c.commit()
+            with pytest.raises(ValueError, match="material"):
+                await store.get_notebook_entry(entry["id"])
+
+
+@pytest.mark.parametrize(
+    ("constraint", "mutation"),
+    [
+        ("reading_materials_source_kind_check", "source_kind='future-source'"),
+        ("reading_materials_status_check", "status='future-state',progress=0"),
+        ("reading_materials_check", "status='ready',progress=0"),
+    ],
+)
+async def test_question_bank_reading_provenance_rejects_invalid_existing_material(
+    business_actors,
+    business_sync_database,
+    pg_scope_factory,
+    pg_session_store_factory,
+    pg_dsn,
+    constraint,
+    mutation,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store, session_id = await _session_and_store(pg_session_store_factory, actor)
+    reading = reading_factory(business_sync_database, pg_scope_factory, actor)
+    await reading.run(
+        lambda unit: unit.upsert_material(
+            content_id="reading-provenance",
+            filename="synthetic.pdf",
+            title="Synthetic",
+            source_kind="file",
+            status="ready",
+        )
+    )
+    assert await store.upsert_notebook_entries(
+        session_id,
+        [
+            _item(
+                "valid-reading",
+                "May be linked",
+                source="immersive_reading",
+                material_id="reading-provenance",
+            )
+        ],
+    ) == 1
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                f"ALTER TABLE enterprise.reading_materials DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.reading_materials SET {mutation} "
+                "WHERE tenant_id=%s AND owner_id=%s AND material_id='reading-provenance'",
+                (actor.tenant_id, actor.user_id),
+            )
+
+    with pytest.raises(ValueError, match="reading material source or state|state and progress"):
+        await store.upsert_notebook_entries(
+            session_id,
+            [
+                _item(
+                    "invalid-reading",
+                    "Must not be linked",
+                    source="immersive_reading",
+                    material_id="reading-provenance",
+                )
+            ],
+        )
+    assert await store.find_notebook_entry(session_id, "invalid-reading") is None
+    assert await store.find_notebook_entry(session_id, "valid-reading") is not None
+
+
+@pytest.mark.parametrize(
+    ("constraint", "mutation", "message"),
+    [
+        ("notebook_entries_source_check", "source='future-source'", "source"),
+        ("notebook_entries_score_trend_check", "score_trend='future-trend'", "trend"),
+        ("notebook_mastery_path_required", "source='mastery_path',material_id=''", "material"),
+        ("notebook_entries_check", "source='immersive_reading',material_id=''", "material"),
+    ],
+)
+async def test_question_bank_stats_rejects_invalid_persisted_values(
+    business_actors, pg_session_store_factory, pg_dsn, constraint, mutation, message,
+):
+    actor = business_actors.tenants[0].owners[0]
+    store, session_id = await _session_and_store(pg_session_store_factory, actor)
+    await store.upsert_notebook_entries(session_id, [_item("q1", "题目")])
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.notebook_entries "
+                f"DROP CONSTRAINT IF EXISTS {constraint}"
+            )
+            await connection.execute(
+                f"UPDATE enterprise.notebook_entries SET {mutation} "
+                "WHERE tenant_id=%s AND owner_id=%s AND session_id=%s",
+                (actor.tenant_id, actor.user_id, session_id),
+            )
+
+    assert (await store.question_bank_stats([]))["total"] == 0
+    with pytest.raises(ValueError, match=message):
+        await store.question_bank_stats([session_id])
+    with pytest.raises(ValueError, match=message):
+        await store.list_question_bank_materials([session_id])
+
+
+async def test_category_counts_reject_invalid_linked_notebook_entry(
+    business_actors, pg_session_store_factory, pg_dsn,
+) -> None:
+    actor = business_actors.tenants[0].owners[0]
+    store, session_id = await _session_and_store(pg_session_store_factory, actor)
+    await store.upsert_notebook_entries(session_id, [_item("q1", "题目")])
+    entry = await store.find_notebook_entry(session_id, "q1")
+    category = await store.create_category("Synthetic")
+    assert await store.add_entry_to_category(entry["id"], category["id"])
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        async with connection.transaction():
+            await connection.execute(
+                "ALTER TABLE enterprise.notebook_entries "
+                "DROP CONSTRAINT IF EXISTS notebook_entries_source_check"
+            )
+            await connection.execute(
+                "UPDATE enterprise.notebook_entries SET source='future-source' "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+                (actor.tenant_id, actor.user_id, entry["id"]),
+            )
+
+    assert (await store.list_categories([]))[0]["entry_count"] == 0
+    with pytest.raises(ValueError, match="source"):
+        await store.list_categories([session_id])
+    second_category = await store.create_category("Other")
+    with pytest.raises(ValueError, match="source"):
+        await store.add_entry_to_category(entry["id"], second_category["id"])
+    with pytest.raises(ValueError, match="source"):
+        await store.link_entries_to_category([entry["id"]], second_category["id"])
+    with pytest.raises(ValueError, match="source"):
+        await store.get_entry_categories(entry["id"])
+    with pytest.raises(ValueError, match="source"):
+        await store.remove_entry_from_category(entry["id"], category["id"])
 
 
 async def _wait_for_upsert_blockers(connection, role: str, count: int) -> None:
@@ -311,7 +533,7 @@ async def test_upsert_skips_bad_items_and_rolls_back_whole_batch_on_reference_fa
                     "question_id": "missing-turn",
                     "question": "后失败",
                     "turn_id": "not-a-real-turn",
-                    "source": "invalid-source-falls-back",
+                    "source": "deep_question",
                 },
             ],
         )

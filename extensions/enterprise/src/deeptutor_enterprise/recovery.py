@@ -5,6 +5,7 @@ import uuid
 
 from deeptutor.persistence.postgres.executor import lock_key
 from deeptutor.persistence.postgres.identity.service import IdentityService
+from deeptutor.persistence.postgres.tenant_state import validate_tenant_business_values
 
 from .scope import TenantScope
 
@@ -48,6 +49,7 @@ class RecoveryOperations:
             ).fetchone()
             if not tenant:
                 raise LookupError("tenant not found")
+            validate_tenant_business_values(tenant)
             if tenant["auth_epoch"] == self.epoch:
                 if tenant["recovery_state"] == "quarantined":
                     return
@@ -77,11 +79,19 @@ class RecoveryOperations:
     async def _quarantined(self, c):
         row = await (
             await c.execute(
-                "SELECT 1 FROM enterprise.tenants WHERE id=%s AND auth_epoch=%s AND recovery_state='quarantined' AND NOT local_enabled FOR UPDATE",
-                (self.scope.tenant_id, self.epoch),
+                "SELECT external_eligibility,provisioning_status,recovery_state,auth_epoch,"
+                "local_enabled FROM enterprise.tenants WHERE id=%s FOR UPDATE",
+                (self.scope.tenant_id,),
             )
         ).fetchone()
-        if not row:
+        if row is None:
+            raise ValueError("identity quarantine is required")
+        validate_tenant_business_values(row)
+        if (
+            row["auth_epoch"] != self.epoch
+            or row["recovery_state"] != "quarantined"
+            or row["local_enabled"]
+        ):
             raise ValueError("identity quarantine is required")
 
     async def reset_account(self, user_id, password, *, enabled=False):

@@ -14,7 +14,7 @@
 ## B2 本产品权限与安全开通
 
 - [x] 3.1 测试先行并新增 DeepTutor 企业 PG 后续版本**权限事实**迁移：主体、两应用域、角色/动作目录版本、授予委托上界、范围/有效期/assignment、policy version、审批请求和追加审计；验证默认零权、RLS 隔离兜底、唯一性、幂等、重复 apply/verify、drift、旧管理员不自动提升、最后管理员保护和回退。迁移不等于程序授权服务交付。
-- [ ] 3.2 实现 **DeepTutor Enterprise 统一 PEP/授权服务**与 `require_management_permission(app,action,scope,object)`：由程序按 OMS/TMS 域、已认证身份、本地授权事实、学校绑定、业务状态和 owner/grant 判定；PG role/GRANT/RLS 只做兜底，不能直接放行业务。写事务锁定复核权限/绑定/业务版本并与撤权串行。跨 CLI、HTTP/WS、SDK、后台无直写旁路；未装配旧核心管理 router。
+- [ ] 3.2 实现 **DeepTutor Enterprise 统一 PEP/授权服务**与 `require_management_permission(app,action,scope,object)`：由程序按 OMS/TMS 域、已认证身份、本地授权事实、学校绑定、业务状态和 owner/grant 判定；PG role/GRANT/RLS 只做兜底，不能直接放行业务。写事务锁定复核权限/绑定/业务版本并与撤权串行。跨 CLI、HTTP/WS、SDK、后台无直写旁路；未装配旧核心管理 router。test-cn 首个 Agent 的正式 OMS Skill 管理还需以**后续不可变迁移**增加 `ops.skills.read/manage/review/publish/grant` 动作、显式模板与目标学校范围，API/前端同 key 验收；不得改写已应用的 0001 目录或复用 Provider 权限冒充 Skill 授权。
 - [ ] 3.3 实现 **Webhook 一次性首位管理员登记与本人激活**：仅真实、已验签、非 mock、目标应用/学校及订阅 ID 结构校验通过的 `subscription.created`，且 `actor.type=user`、`actor.user_id` 非空，才写入该校待激活 `(issuer,sub)` 与一次性消费栅栏；事件 ID 幂等、学校绑定版本及已消费/撤销引导不得复活。事件订阅 ID 仅作审计/冲突依据，不作为本产品当前订阅 ID 比对门禁。本人 TMS 登录后须精确匹配已登记身份和当前学校，Enterprise 程序在事务内复核当前学校—应用有效及本地版本，激活唯一 `school_admin` assignment、追加审计。`actor` 缺失/system/null/错校或身份不匹配保持零权；OMS 无学校账号/开通入口。真实事件合同及联调未通过时正式写接口保持关闭。
 - [ ] 3.4 实现 TMS 当前学校 `tenant.permissions.manage` 的角色/成员/应用/服务访问管理，模板扩权须显式确认、高风险授权双人审批、委托能力与业务执行权分离、收缩与撤权立即生效；服务 grant 不带额度数量、不越过 OMS 授权，个人正文仍按 owner/显式 grant。
 

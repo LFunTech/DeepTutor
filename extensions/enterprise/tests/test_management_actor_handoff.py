@@ -1,5 +1,6 @@
 """首位管理员候选只作受控身份交接，不能据此直接授予角色。"""
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import uuid
@@ -11,7 +12,6 @@ from deeptutor_enterprise.management.authorization import (
     ManagementIdentity,
 )
 from deeptutor_enterprise.scope import TenantScope
-import psycopg
 import pytest
 from test_application import app as app
 
@@ -155,14 +155,13 @@ async def test_pending_actor_handoff_never_revives_terminal_event(app, terminal_
     assert await find_pending_actor_candidates(enterprise, identity) == ()
     assert (await find_pending_actor_candidates(enterprise, identity)) == ()
     assert await find_pending_actor_candidates(enterprise, identity) == ()
-    with pytest.raises(psycopg.errors.CheckViolation):
-        async with enterprise.db.transaction(scope) as c:
-            await c.execute(
-                "UPDATE eduplus2.lifecycle_actor_candidates "
-                "SET status='pending_verification',resolved_at=NULL "
-                "WHERE tenant_id=%s AND event_id='synthetic-handoff-created'",
-                (enterprise.deployment.tenant_id,),
-            )
+    with pytest.raises(ManagementAuthorizationDenied):
+        await activate_first_school_administrator(
+            enterprise,
+            identity,
+            event_id="synthetic-handoff-created",
+            request_id="synthetic-terminal-candidate",
+        )
 
 
 async def test_pending_actor_handoff_denies_school_binding_reverification(app):
@@ -179,6 +178,45 @@ async def test_pending_actor_handoff_denies_school_binding_reverification(app):
             (identity.school_id,),
         )
     assert await find_pending_actor_candidates(enterprise, identity) == ()
+
+
+@pytest.mark.parametrize("disable_db_bump", [False, True])
+async def test_first_admin_activation_concurrent_replay_has_one_assignment(app, disable_db_bump):
+    enterprise = app.state.enterprise
+    identity = await _seed_candidate(enterprise)
+    if disable_db_bump:
+        # 最终 schema 已无数据库版本触发器；保留该参数以复用无触发器路径。
+        pass
+    first, second = await asyncio.gather(
+        activate_first_school_administrator(
+            enterprise, identity, event_id="synthetic-handoff-created", request_id="race-one"
+        ),
+        activate_first_school_administrator(
+            enterprise, identity, event_id="synthetic-handoff-created", request_id="race-two"
+        ),
+    )
+    assert first.assignment_id == second.assignment_id
+    assert {first.replayed, second.replayed} == {False, True}
+    assert first.policy_version == second.policy_version == 2
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@handoff-test")
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute("SELECT set_config('app.management_app','tms',true)")
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(identity.school_id),))
+        assignments = await (
+            await c.execute(
+                "SELECT count(*) AS count FROM management.assignments "
+                "WHERE application='tms' AND school_id=%s AND role_key='school_admin'",
+                (identity.school_id,),
+            )
+        ).fetchone()
+        principal = await (
+            await c.execute(
+                "SELECT policy_version FROM management.principals WHERE id=%s",
+                (first.principal_id,),
+            )
+        ).fetchone()
+    assert assignments["count"] == 1
+    assert principal["policy_version"] == 2
 
 
 async def test_first_admin_activation_denies_wrong_actor_and_suspended_school(app):

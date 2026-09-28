@@ -10,7 +10,62 @@ from deeptutor.persistence.resources import OwnerResourceProvider
 from deeptutor.runtime.externalized_providers import ObjectBlobRef
 from deeptutor.services.storage.attachment_store import _coerce_filename
 
+from .object_resources import (
+    ResourceBusinessStateError,
+    _validate_cleanup_state,
+    _validate_resource_row,
+)
+
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+SESSION_OBJECT_STATES = frozenset({"candidate", "ready", "cleanup", "deleted"})
+
+
+class SessionObjectBusinessStateError(ValueError):
+    """数据库旧对象状态不可解释，禁止将其当作可重试对象存储故障。"""
+
+
+def validate_session_object_state(row):
+    if row is not None and row["state"] not in SESSION_OBJECT_STATES:
+        raise SessionObjectBusinessStateError("session object state is unknown")
+    return row
+
+
+async def session_object_state(store, connection, key, *, lock=False):
+    suffix = " FOR UPDATE" if lock else ""
+    row = await (
+        await connection.execute(
+            "SELECT state FROM enterprise.session_objects "
+            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s" + suffix,
+            (*store._owner, key),
+        )
+    ).fetchone()
+    return validate_session_object_state(row)
+
+
+async def validate_scoped_session_object_states(store, connection):
+    rows = await connection.execute(
+        "SELECT DISTINCT state FROM enterprise.session_objects WHERE tenant_id=%s AND owner_id=%s",
+        store._owner,
+    )
+    async for row in rows:
+        validate_session_object_state(row)
+
+
+async def validate_externalized_cleanup_rows(store, connection):
+    rows = await connection.execute(
+        "SELECT r.state,r.retention,j.state AS cleanup_state "
+        "FROM enterprise.session_objects o "
+        "JOIN enterprise.resource_objects r ON (r.tenant_id,r.owner_id,r.id)="
+        "(o.tenant_id,o.owner_id,o.object_id) "
+        "LEFT JOIN enterprise.resource_cleanup_jobs j ON (j.tenant_id,j.owner_id,j.object_id)="
+        "(o.tenant_id,o.owner_id,o.object_id) "
+        "WHERE o.tenant_id=%s AND o.owner_id=%s AND o.state='cleanup'",
+        store._owner,
+    )
+    async for row in rows:
+        _validate_resource_row(row)
+        if row["cleanup_state"] is not None:
+            _validate_cleanup_state(row["cleanup_state"])
 
 
 def attachment_key(attachment, session_id):
@@ -43,6 +98,7 @@ async def link_attachments(store, c, session, message_id, attachments):
         if key in seen:
             raise ValueError("duplicate attachment object")
         seen.add(key)
+        await session_object_state(store, c, key, lock=True)
         row = await (
             await c.execute(
                 "SELECT filename FROM enterprise.session_objects WHERE tenant_id=%s AND owner_id=%s AND object_id=%s AND session_ref=%s AND incarnation=%s AND state='ready' FOR UPDATE",
@@ -198,6 +254,7 @@ class PostgresAttachmentStore:
                 )
                 if current["incarnation"] != session["incarnation"]:
                     raise RuntimeError("session generation changed")
+                await session_object_state(self.store, c, key, lock=True)
                 result = await c.execute(
                     "UPDATE enterprise.session_objects SET state='ready',updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND object_id=%s AND state='candidate' AND session_ref=%s",
                     (*self.store._owner, key, session_id),
@@ -213,6 +270,7 @@ class PostgresAttachmentStore:
         # 在任何资源目录 I/O 前先授权；取得文件锁后仍再次复验以关闭撤销竞争。
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
+            await session_object_state(self.store, c, key)
             visible = await (
                 await c.execute(
                     "SELECT 1 FROM enterprise.session_objects o JOIN enterprise.sessions s ON (s.tenant_id,s.owner_id,s.id,s.incarnation)=(o.tenant_id,o.owner_id,o.session_ref,o.incarnation) WHERE o.tenant_id=%s AND o.owner_id=%s AND o.object_id=%s AND o.session_ref=%s AND o.filename=%s AND o.state='ready' AND NOT s.deleting AND EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id)",
@@ -226,6 +284,7 @@ class PostgresAttachmentStore:
             async with self.store.db.transaction(self.store.scope) as c:
                 await self._authorized(c)
                 await self.store._lock_notebook_export_scope(c)
+                await session_object_state(self.store, c, key, lock=True)
                 row = await (
                     await c.execute(
                         "SELECT o.byte_size,o.sha256 FROM enterprise.session_objects o JOIN enterprise.sessions s ON (s.tenant_id,s.owner_id,s.id,s.incarnation)=(o.tenant_id,o.owner_id,o.session_ref,o.incarnation) WHERE o.tenant_id=%s AND o.owner_id=%s AND o.object_id=%s AND o.session_ref=%s AND o.filename=%s AND o.state='ready' AND NOT s.deleting AND EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id)",
@@ -249,23 +308,25 @@ class PostgresAttachmentStore:
             raise ValueError("operation page limit must be between 1 and 1000")
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
-            return await (
+            rows = await (
                 await c.execute(
                     "SELECT object_id,session_id,filename,state,attempts,last_error,EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id) AS referenced FROM enterprise.session_objects o WHERE tenant_id=%s AND owner_id=%s AND object_id>%s AND state<>'deleted' ORDER BY object_id LIMIT %s",
                     (*self.store._owner, cursor, limit),
                 )
             ).fetchall()
+            return [validate_session_object_state(row) for row in rows]
 
     async def get_operation(self, object_id):
         key = UUID(str(object_id))
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
-            return await (
+            row = await (
                 await c.execute(
                     "SELECT object_id,session_id,filename,state,attempts,last_error,created_at,updated_at,EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id) AS referenced FROM enterprise.session_objects o WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
                     (*self.store._owner, key),
                 )
             ).fetchone()
+            return validate_session_object_state(row)
 
     async def withdraw_operation(self, object_id):
         """操作者按已报告 token 明确撤回，不自动猜测 unknown 提交是否失败。"""
@@ -283,6 +344,7 @@ class PostgresAttachmentStore:
                         (*self.store._owner, key),
                     )
                 ).fetchone()
+                validate_session_object_state(row)
                 referenced = await (
                     await c.execute(
                         "SELECT 1 FROM enterprise.message_objects WHERE tenant_id=%s AND owner_id=%s AND object_id=%s LIMIT 1",
@@ -301,6 +363,7 @@ class PostgresAttachmentStore:
     async def list_cleanup(self, limit=100):
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
+            await validate_scoped_session_object_states(self.store, c)
             return await (
                 await c.execute(
                     "SELECT object_id,state,attempts,last_error FROM enterprise.session_objects WHERE tenant_id=%s AND owner_id=%s AND state='cleanup' ORDER BY created_at,object_id LIMIT %s",
@@ -322,6 +385,7 @@ class PostgresAttachmentStore:
                                 (*self.store._owner, key),
                             )
                         ).fetchone()
+                        validate_session_object_state(current)
                     if not current or current["state"] != "cleanup":
                         continue
                     await self._io(self._delete_object, key)
@@ -357,6 +421,7 @@ class PostgresAttachmentStore:
         key = UUID(str(attachment_id))
         async with self.store.db.transaction(self.store.scope) as c:
             await self.store._lock_notebook_export_scope(c)
+            await session_object_state(self.store, c, key, lock=True)
             await c.execute(
                 "UPDATE enterprise.session_objects o SET state='cleanup',updated_at=now() WHERE o.tenant_id=%s AND o.owner_id=%s AND o.object_id=%s AND o.session_id=%s AND NOT EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id)",
                 (*self.store._owner, key, session_id),
@@ -488,6 +553,17 @@ class PostgresObjectAttachmentStore:
                 )
                 if current["incarnation"] != session["incarnation"]:
                     raise RuntimeError("session generation changed")
+                await session_object_state(self.store, c, key, lock=True)
+                resource = await (
+                    await c.execute(
+                        "SELECT state,retention FROM enterprise.resource_objects "
+                        "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                        (*self.store._owner, key),
+                    )
+                ).fetchone()
+                if resource is None:
+                    raise RuntimeError("resource object candidate was withdrawn")
+                _validate_resource_row(resource)
                 result = await c.execute(
                     "UPDATE enterprise.session_objects SET state='ready',updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND object_id=%s AND state='candidate' AND session_ref=%s",
                     (*self.store._owner, key, session_id),
@@ -510,6 +586,16 @@ class PostgresObjectAttachmentStore:
     async def _visible_resource(self, session_id, key, filename):
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
+            await session_object_state(self.store, c, key)
+            resource = await (
+                await c.execute(
+                    "SELECT state,retention FROM enterprise.resource_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR SHARE",
+                    (*self.store._owner, key),
+                )
+            ).fetchone()
+            if resource is not None:
+                _validate_resource_row(resource)
             row = await (
                 await c.execute(
                     "SELECT r.object_key,r.size_bytes,r.content_hash,r.mime_type "
@@ -545,27 +631,48 @@ class PostgresObjectAttachmentStore:
             raise ValueError("operation page limit must be between 1 and 1000")
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
-            return await (
+            rows = await (
                 await c.execute(
                     "SELECT object_id,session_id,filename,state,attempts,last_error,EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id) AS referenced FROM enterprise.session_objects o WHERE tenant_id=%s AND owner_id=%s AND object_id>%s AND state<>'deleted' ORDER BY object_id LIMIT %s",
                     (*self.store._owner, cursor, limit),
                 )
             ).fetchall()
+            return [validate_session_object_state(row) for row in rows]
 
     async def get_operation(self, object_id):
         key = UUID(str(object_id))
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
-            return await (
+            row = await (
                 await c.execute(
                     "SELECT object_id,session_id,filename,state,attempts,last_error,created_at,updated_at,EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id) AS referenced FROM enterprise.session_objects o WHERE tenant_id=%s AND owner_id=%s AND object_id=%s",
                     (*self.store._owner, key),
                 )
             ).fetchone()
+            return validate_session_object_state(row)
 
     async def _record_cleanup_request(self, key, *, error=""):
         try:
             async with self.store.db.transaction(self.store.scope) as c:
+                await session_object_state(self.store, c, key, lock=True)
+                resource = await (
+                    await c.execute(
+                        "SELECT state,retention FROM enterprise.resource_objects "
+                        "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                        (*self.store._owner, key),
+                    )
+                ).fetchone()
+                if resource is not None:
+                    _validate_resource_row(resource)
+                job = await (
+                    await c.execute(
+                        "SELECT state FROM enterprise.resource_cleanup_jobs "
+                        "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                        (*self.store._owner, key),
+                    )
+                ).fetchone()
+                if job is not None:
+                    _validate_cleanup_state(job["state"])
                 await c.execute(
                     "UPDATE enterprise.session_objects SET state='cleanup',last_error=%s,updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND object_id=%s AND state<>'deleted'",
                     (str(error or ""), *self.store._owner, key),
@@ -588,6 +695,7 @@ class PostgresObjectAttachmentStore:
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
             await self.store._lock_notebook_export_scope(c)
+            await session_object_state(self.store, c, key, lock=True)
             referenced = await (
                 await c.execute(
                     "SELECT 1 FROM enterprise.message_objects WHERE tenant_id=%s AND owner_id=%s AND object_id=%s LIMIT 1",
@@ -605,6 +713,8 @@ class PostgresObjectAttachmentStore:
     async def list_cleanup(self, limit=100):
         async with self.store.db.transaction(self.store.scope) as c:
             await self._authorized(c)
+            await validate_scoped_session_object_states(self.store, c)
+            await validate_externalized_cleanup_rows(self.store, c)
             return await (
                 await c.execute(
                     "SELECT object_id,state,attempts,last_error FROM enterprise.session_objects WHERE tenant_id=%s AND owner_id=%s AND state='cleanup' ORDER BY created_at,object_id LIMIT %s",
@@ -616,13 +726,15 @@ class PostgresObjectAttachmentStore:
         completed, errors = 0, []
         for row in await self.list_cleanup(limit):
             key = row["object_id"]
+            deletion_attempted = False
             try:
                 async with self.store.db.transaction(self.store.scope) as c:
                     await self._authorized(c)
                     await self.store._lock_notebook_export_scope(c)
                     current = await (
                         await c.execute(
-                            "SELECT o.state,r.object_key,r.size_bytes,r.content_hash,r.mime_type "
+                            "SELECT o.state,r.state AS resource_state,r.retention,"
+                            "r.object_key,r.size_bytes,r.content_hash,r.mime_type "
                             "FROM enterprise.session_objects o "
                             "JOIN enterprise.resource_objects r ON (r.tenant_id,r.owner_id,r.id)=(o.tenant_id,o.owner_id,o.object_id) "
                             "WHERE o.tenant_id=%s AND o.owner_id=%s AND o.object_id=%s "
@@ -631,8 +743,21 @@ class PostgresObjectAttachmentStore:
                             (*self.store._owner, key),
                         )
                     ).fetchone()
+                    validate_session_object_state(current)
                     if not current or current["state"] != "cleanup":
                         continue
+                    _validate_resource_row(
+                        {"state": current["resource_state"], "retention": current["retention"]}
+                    )
+                    job = await (
+                        await c.execute(
+                            "SELECT state FROM enterprise.resource_cleanup_jobs "
+                            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                            (*self.store._owner, key),
+                        )
+                    ).fetchone()
+                    if job is not None:
+                        _validate_cleanup_state(job["state"])
                     await c.execute(
                         "UPDATE enterprise.resource_objects SET state='delete-pending',updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND id=%s AND state<>'deleted'",
                         (*self.store._owner, key),
@@ -641,8 +766,38 @@ class PostgresObjectAttachmentStore:
                         "INSERT INTO enterprise.resource_cleanup_jobs(tenant_id,owner_id,object_id,state,last_error) VALUES(%s,%s,%s,'running','') ON CONFLICT(tenant_id,owner_id,object_id) DO UPDATE SET state='running',last_error='',updated_at=now()",
                         (*self.store._owner, key),
                     )
+                deletion_attempted = True
                 await self._io(self.object_store.delete, self._blob_ref(current))
                 async with self.store.db.transaction(self.store.scope) as c:
+                    session_object = await session_object_state(self.store, c, key, lock=True)
+                    if session_object is None or session_object["state"] != "cleanup":
+                        raise SessionObjectBusinessStateError(
+                            "session object changed during cleanup"
+                        )
+                    resource = await (
+                        await c.execute(
+                            "SELECT state,retention FROM enterprise.resource_objects "
+                            "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                            (*self.store._owner, key),
+                        )
+                    ).fetchone()
+                    if resource is None:
+                        raise ResourceBusinessStateError("resource disappeared during cleanup")
+                    _validate_resource_row(resource)
+                    if resource["state"] != "delete-pending":
+                        raise ResourceBusinessStateError("resource changed during cleanup")
+                    job = await (
+                        await c.execute(
+                            "SELECT state FROM enterprise.resource_cleanup_jobs "
+                            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                            (*self.store._owner, key),
+                        )
+                    ).fetchone()
+                    if job is None:
+                        raise ResourceBusinessStateError("resource cleanup job is missing")
+                    _validate_cleanup_state(job["state"])
+                    if job["state"] != "running":
+                        raise ResourceBusinessStateError("resource cleanup job changed")
                     await c.execute(
                         "UPDATE enterprise.session_objects SET state='deleted',attempts=attempts+1,last_error='',updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND object_id=%s AND state='cleanup'",
                         (*self.store._owner, key),
@@ -656,9 +811,45 @@ class PostgresObjectAttachmentStore:
                         (*self.store._owner, key),
                     )
                 completed += 1
+            except (SessionObjectBusinessStateError, ResourceBusinessStateError):
+                raise
             except Exception as exc:
                 error = getattr(exc, "code", "") or type(exc).__name__
                 async with self.store.db.transaction(self.store.scope) as c:
+                    session_object = await session_object_state(self.store, c, key, lock=True)
+                    if session_object is None or session_object["state"] != "cleanup":
+                        raise SessionObjectBusinessStateError(
+                            "session object changed during cleanup"
+                        ) from exc
+                    resource = await (
+                        await c.execute(
+                            "SELECT state,retention FROM enterprise.resource_objects "
+                            "WHERE tenant_id=%s AND owner_id=%s AND id=%s FOR UPDATE",
+                            (*self.store._owner, key),
+                        )
+                    ).fetchone()
+                    if resource is None:
+                        raise ResourceBusinessStateError(
+                            "resource disappeared during cleanup"
+                        ) from exc
+                    _validate_resource_row(resource)
+                    job = await (
+                        await c.execute(
+                            "SELECT state FROM enterprise.resource_cleanup_jobs "
+                            "WHERE tenant_id=%s AND owner_id=%s AND object_id=%s FOR UPDATE",
+                            (*self.store._owner, key),
+                        )
+                    ).fetchone()
+                    if job is not None:
+                        _validate_cleanup_state(job["state"])
+                    if deletion_attempted and (
+                        resource["state"] != "delete-pending"
+                        or job is None
+                        or job["state"] != "running"
+                    ):
+                        raise ResourceBusinessStateError(
+                            "resource cleanup state changed"
+                        ) from exc
                     await c.execute(
                         "UPDATE enterprise.session_objects SET attempts=attempts+1,last_error=%s,updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND object_id=%s AND state='cleanup'",
                         (error, *self.store._owner, key),
@@ -689,6 +880,7 @@ class PostgresObjectAttachmentStore:
         key = UUID(str(attachment_id))
         async with self.store.db.transaction(self.store.scope) as c:
             await self.store._lock_notebook_export_scope(c)
+            await session_object_state(self.store, c, key, lock=True)
             await c.execute(
                 "UPDATE enterprise.session_objects o SET state='cleanup',updated_at=now() WHERE o.tenant_id=%s AND o.owner_id=%s AND o.object_id=%s AND o.session_id=%s AND NOT EXISTS(SELECT 1 FROM enterprise.message_objects m WHERE m.tenant_id=o.tenant_id AND m.owner_id=o.owner_id AND m.object_id=o.object_id)",
                 (*self.store._owner, key, session_id),

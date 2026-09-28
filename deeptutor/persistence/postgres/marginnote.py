@@ -123,6 +123,8 @@ class PostgresMarginNoteStore:
 
     @staticmethod
     def _row_to_object(row: dict[str, Any]) -> MarginNoteObject:
+        if row["object_type"] not in ALL_TYPES:
+            raise ValueError("MarginNote object type is unknown")
         tags = row["tags"] or []
         links = row["links"] or []
         raw = row["raw"] or {}
@@ -292,16 +294,18 @@ class PostgresMarginNoteStore:
                 raise MarginNoteCursorConflict("MarginNote sync cursor is stale")
             for obj in batch.objects:
                 if obj.object_type not in ALL_TYPES:
-                    continue
+                    raise ValueError("MarginNote object type is unknown")
                 previous = connection.execute(
                     """
-                    SELECT synced_at
+                    SELECT synced_at,object_type
                       FROM enterprise.marginnote_objects
                      WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s
                        AND device_id=%s AND object_id=%s
                     """,
                     (*self._values(device_id), obj.object_id),
                 ).fetchone()
+                if previous is not None and previous["object_type"] not in ALL_TYPES:
+                    raise ValueError("MarginNote object type is unknown")
                 synced_at = obj.synced_at or now
                 connection.execute(
                     """
@@ -357,6 +361,14 @@ class PostgresMarginNoteStore:
 
             for object_id in batch.deleted_ids:
                 object_id = _require_text(object_id, "object_id")
+                previous = connection.execute(
+                    "SELECT object_type FROM enterprise.marginnote_objects "
+                    "WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s "
+                    "AND device_id=%s AND object_id=%s FOR UPDATE",
+                    (*self._values(device_id), object_id),
+                ).fetchone()
+                if previous is not None and previous["object_type"] not in ALL_TYPES:
+                    raise ValueError("MarginNote object type is unknown")
                 connection.execute(
                     """
                     INSERT INTO enterprise.marginnote_tombstones(
@@ -445,6 +457,8 @@ class PostgresMarginNoteStore:
         device_id: str = "",
         limit: int = 20,
     ) -> list[dict[str, Any]]:
+        if object_type and object_type not in ALL_TYPES:
+            raise ValueError("MarginNote object type is unknown")
         query = str(query or "").strip()
         if not query:
             return []
@@ -481,6 +495,8 @@ class PostgresMarginNoteStore:
         device_id: str = "",
         limit: int = 200,
     ) -> list[dict[str, Any]]:
+        if object_type and object_type not in ALL_TYPES:
+            raise ValueError("MarginNote object type is unknown")
         limit = max(1, min(int(limit), 2000))
 
         def read(connection):
@@ -508,7 +524,7 @@ class PostgresMarginNoteStore:
     def list_documents(self, *, device_id: str = "") -> list[dict[str, Any]]:
         def read(connection):
             sql = """
-                SELECT document_id, document_title, count(*) AS n
+                SELECT object_type, document_id, document_title
                   FROM enterprise.marginnote_objects
                  WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s
                    AND document_id IS NOT NULL
@@ -517,15 +533,20 @@ class PostgresMarginNoteStore:
             if device_id:
                 sql += " AND device_id=%s"
                 params.append(device_id)
-            sql += " GROUP BY document_id, document_title ORDER BY document_title, document_id"
-            rows = connection.execute(sql, tuple(params)).fetchall()
+            sql += " ORDER BY document_title, document_id"
+            counts: dict[tuple[str, str | None], int] = {}
+            for row in connection.execute(sql, tuple(params)):
+                if row["object_type"] not in ALL_TYPES:
+                    raise ValueError("MarginNote object type is unknown")
+                key = (row["document_id"], row["document_title"])
+                counts[key] = counts.get(key, 0) + 1
             return [
                 {
-                    "document_id": row["document_id"],
-                    "title": row["document_title"] or "(untitled)",
-                    "count": int(row["n"]),
+                    "document_id": document_id,
+                    "title": document_title or "(untitled)",
+                    "count": count,
                 }
-                for row in rows
+                for (document_id, document_title), count in counts.items()
             ]
 
         return self._run(read)
@@ -562,7 +583,7 @@ class PostgresMarginNoteStore:
 
         def read(connection):
             sql = """
-                SELECT tags FROM enterprise.marginnote_objects
+                SELECT object_type,tags FROM enterprise.marginnote_objects
                  WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s
             """
             params: list[Any] = [*self._values()]
@@ -574,6 +595,8 @@ class PostgresMarginNoteStore:
         rows = self._run(read)
         counts: dict[str, int] = {}
         for row in rows:
+            if row["object_type"] not in ALL_TYPES:
+                raise ValueError("MarginNote object type is unknown")
             tags = row["tags"] or []
             if not isinstance(tags, list):
                 continue
@@ -586,25 +609,20 @@ class PostgresMarginNoteStore:
 
     def count(self, *, device_id: str = "") -> int:
         def read(connection):
+            sql = """
+                SELECT object_type FROM enterprise.marginnote_objects
+                 WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s
+            """
+            params: tuple[str, ...] = self._values()
             if device_id:
-                row = connection.execute(
-                    """
-                    SELECT count(*) AS n
-                      FROM enterprise.marginnote_objects
-                     WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s AND device_id=%s
-                    """,
-                    self._values(device_id),
-                ).fetchone()
-            else:
-                row = connection.execute(
-                    """
-                    SELECT count(*) AS n
-                      FROM enterprise.marginnote_objects
-                     WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s
-                    """,
-                    self._values(),
-                ).fetchone()
-            return int(row["n"])
+                sql += " AND device_id=%s"
+                params = self._values(device_id)
+            count = 0
+            for row in connection.execute(sql, params):
+                if row["object_type"] not in ALL_TYPES:
+                    raise ValueError("MarginNote object type is unknown")
+                count += 1
+            return count
 
         return self._run(read)
 

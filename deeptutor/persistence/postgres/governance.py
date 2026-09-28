@@ -24,6 +24,26 @@ _SENSITIVE_KEYS = {
     "signing_key",
     "token",
 }
+_SETTING_STATUSES = frozenset({"draft", "saved", "active", "failed", "draining"})
+_SECRET_STATUSES = frozenset({"saved", "active", "failed", "draining", "missing"})
+_POLICY_SUBJECT_KINDS = frozenset({"tenant", "owner", "role", "tool", "model"})
+
+
+def validate_runtime_setting_row(row) -> None:
+    if row["status"] not in _SETTING_STATUSES:
+        raise ValueError("runtime setting has unknown persisted status")
+
+
+def validate_secret_reference_row(row) -> None:
+    if row["status"] not in _SECRET_STATUSES:
+        raise ValueError("secret reference has unknown persisted status")
+
+
+def validate_runtime_policy_row(row) -> None:
+    if row["subject_kind"] not in _POLICY_SUBJECT_KINDS:
+        raise ValueError("runtime policy has unknown persisted subject kind")
+    if row["status"] not in _SETTING_STATUSES:
+        raise ValueError("runtime policy has unknown persisted status")
 
 
 def _redact(value: Any) -> Any:
@@ -44,8 +64,9 @@ def _redact(value: Any) -> Any:
     return value
 
 
-def _scope(scope_kind: str, scope_id: str) -> tuple[str, str]:
-    if scope_kind not in {"platform", "tenant", "owner", "resource"}:
+def _scope(scope_kind: str, scope_id: str, *, audit: bool = False) -> tuple[str, str]:
+    allowed = {"platform", "tenant", "owner", "resource"} if audit else {"platform", "tenant", "owner"}
+    if scope_kind not in allowed:
         raise ValueError("unsupported governance scope")
     if scope_kind in {"platform", "tenant"}:
         return scope_kind, ""
@@ -84,7 +105,7 @@ class RuntimeGovernanceStore:
         resource_id: str = "",
         summary: Mapping[str, Any] | None = None,
     ) -> None:
-        kind, sid = _scope(scope_kind, scope_id) if scope_kind == "resource" else (scope_kind, scope_id)
+        kind, sid = _scope(scope_kind, scope_id, audit=True)
         await c.execute(
             "INSERT INTO enterprise.runtime_audit_events"
             "(tenant_id,id,event_kind,actor_id,scope_kind,scope_id,resource_kind,resource_id,summary) "
@@ -143,6 +164,15 @@ class RuntimeGovernanceStore:
         kind, sid = _scope(scope_kind, scope_id)
         redacted = _redact(dict(desired))
         async with self.store.db.transaction(self.store.scope) as c:
+            previous = await (
+                await c.execute(
+                    "SELECT status FROM enterprise.runtime_settings WHERE tenant_id=%s "
+                    "AND scope_kind=%s AND scope_id=%s AND key=%s FOR UPDATE",
+                    (self._tenant_id, kind, sid, key),
+                )
+            ).fetchone()
+            if previous:
+                validate_runtime_setting_row(previous)
             row = await (
                 await c.execute(
                     "INSERT INTO enterprise.runtime_settings"
@@ -179,6 +209,15 @@ class RuntimeGovernanceStore:
             raise PermissionError("actor does not match authenticated scope")
         kind, sid = _scope(scope_kind, scope_id)
         async with self.store.db.transaction(self.store.scope) as c:
+            previous = await (
+                await c.execute(
+                    "SELECT status FROM enterprise.runtime_settings WHERE tenant_id=%s "
+                    "AND scope_kind=%s AND scope_id=%s AND key=%s FOR UPDATE",
+                    (self._tenant_id, kind, sid, key),
+                )
+            ).fetchone()
+            if previous:
+                validate_runtime_setting_row(previous)
             row = await (
                 await c.execute(
                     "UPDATE enterprise.runtime_settings "
@@ -213,11 +252,22 @@ class RuntimeGovernanceStore:
         scope_kind: str = "tenant",
         scope_id: str = "",
     ) -> dict[str, Any]:
+        if not isinstance(status, str) or status not in _SECRET_STATUSES:
+            raise ValueError("unsupported secret reference status")
         if actor_id != self._actor_owner_id:
             raise PermissionError("actor does not match authenticated scope")
         kind, sid = _scope(scope_kind, scope_id)
         redacted_summary = f"{provider}:{reference}:{status}"
         async with self.store.db.transaction(self.store.scope) as c:
+            previous = await (
+                await c.execute(
+                    "SELECT status FROM enterprise.secret_references WHERE tenant_id=%s "
+                    "AND scope_kind=%s AND scope_id=%s AND name=%s FOR UPDATE",
+                    (self._tenant_id, kind, sid, name),
+                )
+            ).fetchone()
+            if previous:
+                validate_secret_reference_row(previous)
             row = await (
                 await c.execute(
                     "INSERT INTO enterprise.secret_references"
@@ -269,9 +319,17 @@ class RuntimeGovernanceStore:
                     (self._tenant_id, bounded),
                 )
             ).fetchall()
+        for row in rows:
+            _scope(row["scope_kind"], row["scope_id"], audit=True)
         return [_row_dict(row) for row in rows]
 
     async def usage_summary(self) -> dict[str, Any]:
+        from .object_resources import (
+            _RESOURCE_STATES,
+            ResourceBusinessStateError,
+            _validate_cleanup_state,
+        )
+
         async with self.store.db.transaction(self.store.scope) as c:
             object_rows = await (
                 await c.execute(
@@ -289,6 +347,11 @@ class RuntimeGovernanceStore:
                     (self._tenant_id,),
                 )
             ).fetchall()
+        for row in object_rows:
+            if row["state"] not in _RESOURCE_STATES:
+                raise ResourceBusinessStateError("resource state is unknown")
+        for row in cleanup_rows:
+            _validate_cleanup_state(row["state"])
         return {
             "tenant_id": self._tenant_id,
             "objects": [_row_dict(row) for row in object_rows],

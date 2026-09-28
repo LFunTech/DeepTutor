@@ -12,6 +12,7 @@ import types
 import uuid
 
 from fastapi import Depends, FastAPI
+import psycopg
 import pytest
 from typer.testing import CliRunner
 import uvicorn
@@ -174,6 +175,7 @@ def test_run_server_mode_rejects_unsafe_origin_without_local_pg(
     assert "postgres" not in result.output.lower()
 
 
+@pytest.mark.asyncio
 async def test_remote_run_websocket_json_uses_bearer_and_auto_replies(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -300,6 +302,7 @@ def test_default_business_cli_requires_auth_token_env(tmp_path: Path) -> None:
     assert not (tmp_path / "home" / "chat_sessions.db").exists()
 
 
+@pytest.mark.asyncio
 async def test_default_session_cli_uses_pg_identity_and_releases_executor(
     pg_dsn: str, tmp_path: Path
 ) -> None:
@@ -325,6 +328,33 @@ async def test_default_session_cli_uses_pg_identity_and_releases_executor(
     assert environment["CLI_TOKEN"] not in second.stdout + second.stderr
 
 
+@pytest.mark.asyncio
+async def test_default_session_cli_rejects_unknown_persisted_message_role(
+    pg_dsn: str, tmp_path: Path
+) -> None:
+    """CLI session show 不能把异常 PG 消息 role 当作普通历史输出。"""
+
+    environment, session = await _prepare_default_cli_environment(pg_dsn, tmp_path)
+    async with await psycopg.AsyncConnection.connect(environment["DEEPTUTOR_DATABASE_URL"]) as c:
+        await c.execute("ALTER TABLE enterprise.messages DROP CONSTRAINT IF EXISTS messages_role_check")
+        await c.execute(
+            "INSERT INTO enterprise.messages(tenant_id,owner_id,session_id,role,content) "
+            "SELECT tenant_id,owner_id,id,'future-role','polluted' "
+            "FROM enterprise.sessions WHERE id=%s",
+            (session["id"],),
+        )
+
+    result = _invoke(
+        ["session", "show", session["id"], "--auth-token-env", "CLI_TOKEN"],
+        environment,
+    )
+
+    assert result.returncode != 0
+    assert environment["CLI_TOKEN"] not in result.stdout + result.stderr
+    assert "sqlite" not in (result.stdout + result.stderr).lower()
+
+
+@pytest.mark.asyncio
 async def test_default_session_cli_rejects_revoked_token(pg_dsn: str, tmp_path: Path) -> None:
     """CLI 每次命令都必须按 PG 当前世代认证，不能信任缓存主体。"""
 
@@ -352,6 +382,7 @@ async def test_default_session_cli_rejects_revoked_token(pg_dsn: str, tmp_path: 
     assert "CLI authentication failed" in result.stderr
 
 
+@pytest.mark.asyncio
 async def test_remote_session_cli_uses_existing_executor_without_client_database_secret(
     pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

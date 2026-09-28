@@ -6,6 +6,8 @@ from typing import Literal
 from deeptutor.learning.models import MasteryPathLease
 from deeptutor.persistence.postgres.executor import ExecutorLease, lock_key
 
+from .base import validate_path_lease_row
+
 
 class PathLease(MasteryPathLease):
     kind: Literal["turn", "operation"]
@@ -21,6 +23,7 @@ class PathLease(MasteryPathLease):
 def lease_from_row(row):
     if row is None:
         return None
+    validate_path_lease_row(row)
     values = dict(row)
     values["session_id"] = values["session_id"] or ""
     values["turn_id"] = values["turn_id"] or ""

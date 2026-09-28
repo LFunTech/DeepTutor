@@ -82,8 +82,10 @@ def _as_int(value: Any, default: int = 0) -> int:
 
 
 def _allowed_status(value: Any) -> str:
-    status = str(value or "completed")
-    return status if status in {"queued", "running", "waiting_input", "completed", "cancelled", "failed"} else "failed"
+    allowed = {"queued", "running", "waiting_input", "completed", "cancelled", "failed"}
+    if not isinstance(value, str) or value not in allowed:
+        raise ValueError("unknown PocketBase turn status; review source snapshot before import")
+    return value
 
 
 

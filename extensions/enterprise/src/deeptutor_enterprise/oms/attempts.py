@@ -16,6 +16,17 @@ from psycopg.types.json import Jsonb
 
 from deeptutor.persistence.postgres.scope import TenantScope
 
+from .value_validation import (
+    OmsValueError,
+    validate_attempt_evidence_row,
+    validate_entitlement_row,
+    validate_oms_audit_result,
+    validate_quota_grant_row,
+    validate_service_definition_row,
+    validate_supply_lot_row,
+    validate_usage_attempt_row,
+)
+
 
 class AttemptRejected(ValueError):
     """预留时服务授权、配额、供给或可信主体不满足要求。"""
@@ -154,6 +165,10 @@ async def _event(
     units: Decimal | None = None,
     provider_request_id: str = "",
 ) -> None:
+    try:
+        validate_attempt_evidence_row({"event_kind": kind})
+    except OmsValueError as error:
+        raise SettlementRejected(str(error)) from None
     await c.execute(
         "INSERT INTO oms.attempt_evidence_events"
         "(tenant_id,attempt_id,id,event_kind,reference,observed_units,provider_request_id) "
@@ -165,6 +180,7 @@ async def _event(
 async def _audit(
     c, tenant_id: UUID, attempt_id: UUID, subject_id: str, action: str, reason: str, summary: dict
 ) -> None:
+    validate_oms_audit_result("success")
     await c.execute(
         "INSERT INTO oms.audit_events"
         "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"
@@ -215,6 +231,22 @@ class OmsAttemptLedger:
         ).fetchone()
         if row is None or row["subject_id"] != scope.user_id:
             raise SettlementRejected("attempt is unavailable to this subject")
+        try:
+            validate_usage_attempt_row(row)
+        except OmsValueError as error:
+            raise SettlementRejected(str(error)) from None
+        events = await (
+            await c.execute(
+                "SELECT event_kind FROM oms.attempt_evidence_events "
+                "WHERE tenant_id=%s AND attempt_id=%s",
+                (UUID(scope.tenant_id), attempt_id),
+            )
+        ).fetchall()
+        try:
+            for event in events:
+                validate_attempt_evidence_row(event)
+        except OmsValueError as error:
+            raise SettlementRejected(str(error)) from None
         return row
 
     async def _lock_attempt_pool(self, c, scope: TenantScope, attempt_id: UUID):
@@ -274,11 +306,16 @@ class OmsAttemptLedger:
                 return await self._replay(c, tenant_id, request, fingerprint, existing)
             service = await (
                 await c.execute(
-                    "SELECT unit_code,enabled FROM oms.service_definitions "
+                    "SELECT unit_code,enabled,resource_category FROM oms.service_definitions "
                     "WHERE service_id=%s FOR SHARE",
                     (request.service_id,),
                 )
             ).fetchone()
+            if service:
+                try:
+                    validate_service_definition_row(service)
+                except OmsValueError as error:
+                    raise AttemptRejected(str(error)) from None
             if (
                 service is None
                 or not service["enabled"]
@@ -287,12 +324,17 @@ class OmsAttemptLedger:
                 raise AttemptRejected("service is not enabled for the requested unit")
             entitlement = await (
                 await c.execute(
-                    "SELECT status FROM oms.tenant_service_entitlements "
+                    "SELECT status,version FROM oms.tenant_service_entitlements "
                     "WHERE tenant_id=%s AND service_id=%s "
                     "AND starts_at<=now() AND expires_at>now() FOR UPDATE",
                     (tenant_id, request.service_id),
                 )
             ).fetchone()
+            if entitlement:
+                try:
+                    validate_entitlement_row(entitlement)
+                except OmsValueError as error:
+                    raise AttemptRejected(str(error)) from None
             if entitlement is None or entitlement["status"] != "active":
                 raise AttemptRejected("tenant service entitlement is unavailable")
             await _pool_lock(
@@ -312,6 +354,37 @@ class OmsAttemptLedger:
             ).fetchone()
             if existing is not None:
                 return await self._replay(c, tenant_id, request, fingerprint, existing)
+
+            grant_rows = await (
+                await c.execute(
+                    "SELECT status,acquisition_method,version FROM oms.quota_grants "
+                    "WHERE tenant_id=%s AND service_id=%s AND unit_code=%s "
+                    "AND starts_at<=now() AND expires_at>now() FOR UPDATE",
+                    (tenant_id, request.service_id, request.unit_code),
+                )
+            ).fetchall()
+            lot_rows = await (
+                await c.execute(
+                    "SELECT status,supply_basis,hard_ceiling,verified_at,created_by,version "
+                    "FROM oms.supply_lots WHERE service_id=%s AND provider_id=%s "
+                    "AND provider_account_id=%s AND pool_id=%s AND unit_code=%s "
+                    "AND starts_at<=now() AND expires_at>now() FOR UPDATE",
+                    (
+                        request.service_id,
+                        request.provider_id,
+                        request.provider_account_id,
+                        request.pool_id,
+                        request.unit_code,
+                    ),
+                )
+            ).fetchall()
+            try:
+                for grant in grant_rows:
+                    validate_quota_grant_row(grant)
+                for lot in lot_rows:
+                    validate_supply_lot_row(lot)
+            except OmsValueError as error:
+                raise QuotaUnavailable(str(error)) from None
 
             candidates = await (
                 await c.execute(
@@ -631,6 +704,26 @@ class OmsAttemptLedger:
     async def _reusable(c, row) -> bool:
         current = await (await c.execute("SELECT now() AS current_time")).fetchone()
         now = current["current_time"]
+        try:
+            validate_quota_grant_row(
+                {
+                    "status": row["grant_status"],
+                    "acquisition_method": "gift",
+                    "version": 1,
+                }
+            )
+            validate_supply_lot_row(
+                {
+                    "status": row["lot_status"],
+                    "supply_basis": "native_units",
+                    "hard_ceiling": 1,
+                    "verified_at": now,
+                    "created_by": None,
+                    "version": 1,
+                }
+            )
+        except OmsValueError as error:
+            raise SettlementRejected(str(error)) from None
         return (
             row["grant_status"] == "active"
             and row["grant_start"] <= now < row["grant_end"]

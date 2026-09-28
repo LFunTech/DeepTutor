@@ -1,12 +1,20 @@
 # 真实订阅 Webhook 权威契约核对（2026-09-27）
 
+## 当前合同与非 mock 证据（2026-09-27 追加）
+
+- 只读逐页核对 EduPlus2 的 [事件目录](https://eduplus-test.f123.pub/docs/webhook/event-types/)及八个 `subscription.*` 子页：共同示例均携带 `event_id`、学校 `tenant.id`/`tenant.tenant_type`、`app.id`/`app.client_id`、`subscription.id`/`subscription.status`。文档中的示例状态分别为：`created=active`、`reactivated=active`、`suspended=suspended`、`terminated=terminated`、`plan_changed=active`、`renewed=active`、`expiring=active`、`expired=expired`。这只是**公开字段合同**；目标环境实际验证了 created/terminated/suspended/reactivated，另外四类未获外部端到端证据。
+- [事件目录的 actor 字段说明](https://eduplus-test.f123.pub/docs/webhook/event-types/#actor-%E5%AD%97%E6%AE%B5)明确 `actor.user_id` 是 Keycloak User ID，可为 null，`actor.type` 可区分用户操作与系统任务；这支持候选主体的身份类型选择，**不证明该主体具备学校管理员角色**，也不替代实际登录令牌 `iss/sub/tid/azp` 精确匹配。`subscription.created` 的 [字段页](https://eduplus-test.f123.pub/docs/webhook/event-types/subscription-created/)仍未把 actor 设为必填。
+- [Webhook 概述](https://eduplus-test.f123.pub/docs/webhook/)明确 2xx 视为投递成功；网络故障、5xx 和 429 自动指数退避重试，其他 4xx 不重试；[签名页](https://eduplus-test.f123.pub/docs/webhook/signature-verification/)要求 `timestamp.event.raw-body` HMAC-SHA256 与时间窗。DeepTutor 因而对可重试事务故障返回 503，对无效签名/结构返回 401/422；不把 204 解释为 AI 资源或人员权限就绪。
+- `rc.53`/Woodpecker #64 部署后，test-cn 入口于 21:27:50、21:28:13（北京时间）收到两次非 mock 调用，分别返回 204。PG 只读事务核对同一学校/应用的 `subscription.terminated` 为 `denied`、随后 `subscription.created` 为 `verified/active`；学校绑定 `verified`、PG onboarding 完成、目标应用 client `active`、当前投影 `allowed`。created 的订阅 ID 为正数、client 非空、`actor.type=user` 且 subject 非空，形成 **1 条 `pending_verification` 候选**。不记录实际学校 ID、订阅 ID、client、actor subject、请求体、签名或密钥。
+- 前一轮 503 发生在此版本部署前。部署后的运营后台重试详情曾显示 `TenantApp` 初始化状态为 `failed` 而**跳过分发**，当时 test-cn 没有收到新真实请求；不能把该旧投递结果当成 `rc.53` 的接收失败。后续独立测试学校的真实 `subscription.suspended`/`subscription.reactivated` 均成功回调，PG 资格按 `allowed→denied→allowed` 变化，见 `implementation-evidence.md`；八类中仍有四类未获得实际投递证据，也未验证真实本人 JWT 匹配、漏送/乱序最终态。来源无单调版本/受信快照的残余风险保持不变。
+
 > **后续用户决策再次改变权威边界**：已验签、目标应用匹配的 Webhook 业务数据直接用于学校接入和生命周期，不再用 online resolve 二次核验；本文件此前对在线方案的论证仅为历史背景。无来源版本、漏送和迟到风险并未因此消失，见最新 proposal/design/spec/tasks。
 
 > 本页保留重订前的只读合同与已部署 test 环境快照。用户随后已批准 DeepTutor-only 重订版，本地实现进度见 `implementation-evidence.md`；下文“尚待审阅/实施”“真实事件继续 503”描述的是核对当时及尚未更新的 test 部署，不代表当前工作区没有实现代码。
 
 > 后续用户决策进一步将 `subscription.created` 事件所属订阅的当前性与迟到旧事件处理归 EduPlus2 侧；本页当时提出的“DeepTutor 必须另查当前订阅 ID 才能激活”已不再是现行实施门禁。文档保留当时接口能力的事实核对；现行授权规则见本 change 的 proposal/design/spec/tasks 与管理授权 change。该发送端保证尚未由本仓库真实联调证实。
 
-本记录仅核对已发布文档、只读发送端实现和本仓库接收路径，不含真实学校 ID、OAuth 凭据、Webhook Secret、请求体或签名；未修改 EduPlus2 仓库，也未触碰 test 学校数据。本记录是旧版来源版本设计的**缺口证据**及新版任务 1.1 的输入，不是目标环境现有接口适用性或正式接收器验收。
+以下历史核对段落仅涉及已发布文档、只读发送端实现和当时的接收路径，不含真实学校 ID、OAuth 凭据、Webhook Secret、请求体或签名；当时未触碰 test 学校数据。此后用户批准在 EduPlus2 test 对指定学校执行订阅及停复，结果见本文件顶部和 `implementation-evidence.md`。全程未修改 EduPlus2 仓库。
 
 | 所需保证 | 当前可核实事实 | 结论 |
 | --- | --- | --- |

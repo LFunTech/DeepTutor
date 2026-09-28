@@ -16,6 +16,16 @@ from psycopg.types.json import Jsonb
 
 from deeptutor.persistence.postgres.scope import TenantScope
 
+from .value_validation import (
+    OmsValueError,
+    validate_entitlement_row,
+    validate_grant_command_row,
+    validate_oms_audit_result,
+    validate_quota_grant_row,
+    validate_service_definition_row,
+    validate_supply_lot_row,
+)
+
 
 class GrantRejected(ValueError):
     """服务、租户授权或输入不满足授予契约。"""
@@ -195,6 +205,10 @@ class OmsGrantLedger:
     def __init__(self, db) -> None:
         self.db = db
 
+    @staticmethod
+    def _reject_value_error(error: OmsValueError) -> None:
+        raise GrantRejected(str(error)) from None
+
     async def adjust(self, scope: TenantScope, request: AdjustRequest) -> AdjustResult:
         """按版本调整当前额度，只在供给池中转移未使用承诺。"""
 
@@ -255,6 +269,10 @@ class OmsGrantLedger:
                     or prior["grant_id"] != request.grant_id
                 ):
                     raise GrantRejected("adjust idempotency key conflicts with prior payload")
+                try:
+                    validate_grant_command_row(prior)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
                 if prior["result"] == "denied":
                     raise InsufficientSupply("compatible finite supply is insufficient")
                 if prior["result"] != "success":
@@ -277,7 +295,7 @@ class OmsGrantLedger:
                 raise GrantRejected("grant is unavailable")
             entitlement = await (
                 await c.execute(
-                    "SELECT status,starts_at,expires_at "
+                    "SELECT status,starts_at,expires_at,version "
                     "FROM oms.tenant_service_entitlements "
                     "WHERE tenant_id=%s AND service_id=%s FOR UPDATE",
                     (tenant_id, identity["service_id"]),
@@ -285,6 +303,10 @@ class OmsGrantLedger:
             ).fetchone()
             if entitlement is None:
                 raise GrantRejected("grant entitlement is unavailable")
+            try:
+                validate_entitlement_row(entitlement)
+            except OmsValueError as error:
+                self._reject_value_error(error)
             pools = await (
                 await c.execute(
                     "SELECT DISTINCT sl.service_id,sl.provider_id,sl.provider_account_id,"
@@ -307,11 +329,17 @@ class OmsGrantLedger:
             )
             grant = await (
                 await c.execute(
-                    "SELECT status,version,quantity,adjustment_released,service_id,starts_at,expires_at "
+                    "SELECT status,version,quantity,adjustment_released,service_id,starts_at,"
+                    "expires_at,acquisition_method "
                     "FROM oms.quota_grants WHERE tenant_id=%s AND id=%s FOR UPDATE",
                     (tenant_id, request.grant_id),
                 )
             ).fetchone()
+            if grant is not None:
+                try:
+                    validate_quota_grant_row(grant)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
             if (
                 grant is None
                 or grant["status"] != "active"
@@ -382,7 +410,8 @@ class OmsGrantLedger:
                     raise GrantRejected("tenant service entitlement is unavailable")
                 lots = await (
                     await c.execute(
-                        "SELECT id,hard_ceiling,settled_lifetime,committed_unspent,reserved_inflight "
+                        "SELECT id,hard_ceiling,settled_lifetime,committed_unspent,"
+                        "reserved_inflight,status,supply_basis,verified_at,created_by,version "
                         "FROM oms.supply_lots WHERE service_id=%s AND provider_id=%s "
                         "AND provider_account_id=%s AND pool_id=%s AND unit_code=%s "
                         "AND status='active' AND hard_ceiling IS NOT NULL "
@@ -402,6 +431,10 @@ class OmsGrantLedger:
                 remaining = delta
                 allocations: list[tuple[UUID, Decimal]] = []
                 for lot in lots:
+                    try:
+                        validate_supply_lot_row(lot)
+                    except OmsValueError as error:
+                        self._reject_value_error(error)
                     available = (
                         lot["hard_ceiling"]
                         - lot["settled_lifetime"]
@@ -460,6 +493,7 @@ class OmsGrantLedger:
                 result = AdjustResult(
                     request.grant_id, updated["version"], previous_quantity, quantity
                 )
+            validate_oms_audit_result("denied" if rejected else "success")
             await c.execute(
                 "INSERT INTO oms.audit_events"
                 "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"
@@ -567,6 +601,10 @@ class OmsGrantLedger:
                     or prior["grant_id"] != request.grant_id
                 ):
                     raise GrantRejected("revoke idempotency key conflicts with prior payload")
+                try:
+                    validate_grant_command_row(prior)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
                 if prior["result"] != "success":
                     raise GrantRejected("revoke idempotency result is incomplete")
                 summary = prior["result_summary"]
@@ -583,13 +621,17 @@ class OmsGrantLedger:
             # 与授予/预留统一：租户权益锁 → 池 advisory 锁 → grant/lot 行锁。
             entitlement = await (
                 await c.execute(
-                    "SELECT service_id FROM oms.tenant_service_entitlements "
+                    "SELECT service_id,status,version FROM oms.tenant_service_entitlements "
                     "WHERE tenant_id=%s AND service_id=%s FOR UPDATE",
                     (tenant_id, identity["service_id"]),
                 )
             ).fetchone()
             if entitlement is None:
                 raise GrantRejected("grant entitlement is unavailable")
+            try:
+                validate_entitlement_row(entitlement)
+            except OmsValueError as error:
+                self._reject_value_error(error)
             pools = await (
                 await c.execute(
                     "SELECT DISTINCT sl.service_id,sl.provider_id,sl.provider_account_id,"
@@ -621,11 +663,17 @@ class OmsGrantLedger:
                 )
             grant = await (
                 await c.execute(
-                    "SELECT status,version,quantity,service_id,expires_at FROM oms.quota_grants "
+                    "SELECT status,version,quantity,service_id,expires_at,acquisition_method "
+                    "FROM oms.quota_grants "
                     "WHERE tenant_id=%s AND id=%s FOR UPDATE",
                     (tenant_id, request.grant_id),
                 )
             ).fetchone()
+            if grant is not None:
+                try:
+                    validate_quota_grant_row(grant)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
             if (
                 grant is None
                 or grant["status"] != "active"
@@ -684,6 +732,7 @@ class OmsGrantLedger:
             ).fetchone()
             if updated is None:
                 raise GrantRejected("grant version changed during revocation")
+            validate_oms_audit_result("success")
             await c.execute(
                 "INSERT INTO oms.audit_events"
                 "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"
@@ -752,6 +801,10 @@ class OmsGrantLedger:
                     or prior["grant_id"] != request.grant_id
                 ):
                     raise GrantRejected("grant idempotency key conflicts with prior payload")
+                try:
+                    validate_grant_command_row(prior)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
                 if prior["result"] == "denied":
                     raise InsufficientSupply("compatible finite supply is insufficient")
                 if prior["result"] != "success":
@@ -773,11 +826,16 @@ class OmsGrantLedger:
 
             service = await (
                 await c.execute(
-                    "SELECT unit_code,enabled FROM oms.service_definitions "
+                    "SELECT unit_code,enabled,resource_category FROM oms.service_definitions "
                     "WHERE service_id=%s FOR SHARE",
                     (request.service_id,),
                 )
             ).fetchone()
+            if service:
+                try:
+                    validate_service_definition_row(service)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
             if not service or not service["enabled"] or service["unit_code"] != request.unit_code:
                 raise GrantRejected("service is not enabled for the requested unit")
 
@@ -789,6 +847,11 @@ class OmsGrantLedger:
                     (tenant_id, request.service_id),
                 )
             ).fetchone()
+            if entitlement:
+                try:
+                    validate_entitlement_row(entitlement)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
             if (
                 not entitlement
                 or entitlement["status"] != "active"
@@ -809,7 +872,8 @@ class OmsGrantLedger:
 
             lots = await (
                 await c.execute(
-                    "SELECT id,hard_ceiling,settled_lifetime,committed_unspent,reserved_inflight "
+                    "SELECT id,hard_ceiling,settled_lifetime,committed_unspent,"
+                    "reserved_inflight,status,supply_basis,verified_at,created_by,version "
                     "FROM oms.supply_lots WHERE service_id=%s AND provider_id=%s "
                     "AND provider_account_id=%s AND pool_id=%s AND unit_code=%s "
                     "AND status='active' AND hard_ceiling IS NOT NULL "
@@ -830,6 +894,10 @@ class OmsGrantLedger:
             ).fetchall()
             remaining = request.quantity
             for lot in lots:
+                try:
+                    validate_supply_lot_row(lot)
+                except OmsValueError as error:
+                    self._reject_value_error(error)
                 available = (
                     lot["hard_ceiling"]
                     - lot["settled_lifetime"]
@@ -885,6 +953,7 @@ class OmsGrantLedger:
                         (tenant_id, request.grant_id, lot_id, quantity, quantity),
                     )
 
+            validate_oms_audit_result("denied" if rejected else "success")
             await c.execute(
                 "INSERT INTO oms.audit_events"
                 "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"

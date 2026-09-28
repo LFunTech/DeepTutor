@@ -5,8 +5,17 @@ from __future__ import annotations
 import hmac
 from uuid import uuid4
 
+from deeptutor.persistence.postgres.tenant_state import validate_tenant_business_values
+
 from ..scope import TenantScope
-from .lifecycle import LifecycleConflict, LifecycleEvent, LifecycleInvalid
+from .lifecycle import (
+    LifecycleConflict,
+    LifecycleEvent,
+    LifecycleInvalid,
+    validate_lifecycle_actor_candidate_row,
+    validate_lifecycle_inbox_row,
+    validate_webhook_school_state_row,
+)
 
 _ACTIVE = frozenset({"active", "subscribed"})
 _INACTIVE = frozenset({"suspended", "terminated", "expired", "inactive", "cancelled"})
@@ -17,6 +26,32 @@ async def snapshot_webhook_authority_metrics(enterprise) -> dict[str, int]:
 
     owner = enterprise.deployment.tenant_id
     async with enterprise.db.transaction(TenantScope(str(owner), "@webhook-metrics")) as c:
+        inbox_rows = await (
+            await c.execute(
+                "SELECT processing_status FROM eduplus2.lifecycle_inbox WHERE tenant_id=%s",
+                (owner,),
+            )
+        ).fetchall()
+        for row in inbox_rows:
+            validate_lifecycle_inbox_row(row)
+        projection_rows = await (
+            await c.execute(
+                "SELECT eligibility,onboarding_event_id,onboarding_completed_at "
+                "FROM eduplus2.webhook_school_state WHERE tenant_id=%s",
+                (owner,),
+            )
+        ).fetchall()
+        for row in projection_rows:
+            validate_webhook_school_state_row(row)
+        actor_rows = await (
+            await c.execute(
+                "SELECT status,resolved_at FROM eduplus2.lifecycle_actor_candidates "
+                "WHERE tenant_id=%s",
+                (owner,),
+            )
+        ).fetchall()
+        for row in actor_rows:
+            validate_lifecycle_actor_candidate_row(row)
         inbox = await (
             await c.execute(
                 "SELECT count(*) AS stored_events,"
@@ -135,11 +170,13 @@ async def ingest_authoritative_webhook(
         if not inserted:
             previous = await (
                 await c.execute(
-                    "SELECT semantic_digest FROM eduplus2.lifecycle_inbox "
+                    "SELECT semantic_digest,processing_status FROM eduplus2.lifecycle_inbox "
                     "WHERE tenant_id=%s AND event_id=%s",
                     (owner, event.event_id),
                 )
             ).fetchone()
+            if previous:
+                validate_lifecycle_inbox_row(previous)
             if not previous or not hmac.compare_digest(
                 previous["semantic_digest"], event.semantic_digest
             ):
@@ -148,12 +185,19 @@ async def ingest_authoritative_webhook(
 
         binding = await (
             await c.execute(
-                "SELECT b.tenant_id,b.status,b.version,t.external_tid "
+                "SELECT b.tenant_id,b.status,b.version,t.external_tid,"
+                "t.external_eligibility,t.provisioning_status,t.recovery_state "
                 "FROM oms.school_bindings b JOIN enterprise.tenants t ON t.id=b.tenant_id "
                 "WHERE b.eduplus_tenant_id=%s FOR UPDATE OF b,t",
                 (event.external_tenant_id,),
             )
         ).fetchone()
+        if binding is not None:
+            try:
+                validate_tenant_business_values(binding)
+            except ValueError as exc:
+                # 这是存量数据异常而非发送方事件冲突；保持事务回滚并让发送方重试。
+                raise RuntimeError("bound tenant business state is invalid") from exc
         if binding is None and event.event_type == "subscription.created":
             legacy_school = await (
                 await c.execute(
@@ -175,8 +219,8 @@ async def ingest_authoritative_webhook(
             await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner),))
             await c.execute(
                 "INSERT INTO oms.school_bindings(tenant_id,eduplus_tenant_id,status,"
-                "verified_at,verified_by,source_ref) "
-                "VALUES(%s,%s,'verified',clock_timestamp(),'@signed-webhook',%s)",
+                "version,verified_at,verified_by,source_ref) "
+                "VALUES(%s,%s,'verified',1,clock_timestamp(),'@signed-webhook',%s)",
                 (school_id, event.external_tenant_id, event.event_id),
             )
             binding = {
@@ -197,11 +241,24 @@ async def ingest_authoritative_webhook(
         if (
             binding["external_tid"] != str(event.external_tenant_id)
             or binding["status"] != "verified"
+            or type(binding["version"]) is not int
+            or binding["version"] < 1
         ):
             raise LifecycleConflict("school binding conflicts with signed target")
 
         school_id = binding["tenant_id"]
         eligibility = _eligibility(event)
+        existing_projection = await (
+            await c.execute(
+                "SELECT eligibility,onboarding_event_id,onboarding_completed_at "
+                "FROM eduplus2.webhook_school_state "
+                "WHERE tenant_id=%s AND external_tenant_id=%s AND external_app_id=%s "
+                "FOR UPDATE",
+                (owner, event.external_tenant_id, event.external_app_id),
+            )
+        ).fetchone()
+        if existing_projection:
+            validate_webhook_school_state_row(existing_projection)
         projected = await (
             await c.execute(
                 "INSERT INTO eduplus2.webhook_school_state(tenant_id,external_tenant_id,"
@@ -248,16 +305,36 @@ async def ingest_authoritative_webhook(
                 "DO NOTHING",
                 (owner, school_id, event.external_app_id),
             )
+        projections = await (
+            await c.execute(
+                "SELECT eligibility,binding_version,onboarding_event_id,onboarding_completed_at "
+                "FROM eduplus2.webhook_school_state WHERE tenant_id=%s AND school_id=%s",
+                (owner, school_id),
+            )
+        ).fetchall()
+        for row in projections:
+            validate_webhook_school_state_row(row)
+        school_eligibility = (
+            "allowed"
+            if any(
+                row["eligibility"] == "allowed"
+                and row["binding_version"] == binding["version"]
+                and row["onboarding_event_id"] is not None
+                and row["onboarding_completed_at"] is not None
+                for row in projections
+            )
+            else "denied"
+        )
         await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
         await c.execute(
             "UPDATE enterprise.tenants SET external_eligibility=%s,"
             "external_version=external_version+1 WHERE id=%s AND external_tid=%s "
             "AND external_eligibility<>%s",
             (
-                "allowed" if eligibility == "allowed" else "denied",
+                school_eligibility,
                 school_id,
                 str(event.external_tenant_id),
-                "allowed" if eligibility == "allowed" else "denied",
+                school_eligibility,
             ),
         )
         registration_status = "active" if eligibility == "allowed" else "suspended"

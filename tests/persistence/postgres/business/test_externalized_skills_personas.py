@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -33,6 +34,42 @@ class RecordingObjectStore:
 
     def delete(self, ref) -> None:
         self.objects.pop(ref.key, None)
+
+
+@pytest.mark.parametrize("kind", ["dynamic_skill", "dynamic_persona"])
+async def test_dynamic_catalog_rejects_unknown_persisted_resource_state(
+    pg_session_store_factory, business_actors, migrated_pg, kind,
+):
+    from deeptutor.services.persona.externalized import ExternalizedPersonaService
+    from deeptutor.services.skill.externalized import ExternalizedSkillService
+
+    actor = business_actors.tenants[0].admin
+    store = pg_session_store_factory(actor)
+    object_store = RecordingObjectStore()
+    if kind == "dynamic_skill":
+        service = ExternalizedSkillService(store, object_store, builtin_root=None)
+        list_items = service.list_skills
+    else:
+        service = ExternalizedPersonaService(store, object_store)
+        list_items = service.list_personas
+    handle = await service.resources.put(
+        resource_kind=kind,
+        resource_id="corrupt-catalog-item",
+        filename="package.json",
+        data=b"{}",
+    )
+    async with await psycopg.AsyncConnection.connect(migrated_pg.admin_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE enterprise.resource_objects DROP CONSTRAINT IF EXISTS resource_objects_state_check"
+        )
+        await connection.execute(
+            "UPDATE enterprise.resource_objects SET state='future-state' "
+            "WHERE tenant_id=%s AND owner_id=%s AND id=%s",
+            (actor.tenant_id, actor.user_id, handle.object_id),
+        )
+
+    with pytest.raises(ValueError, match="resource state is unknown"):
+        await list_items()
 
 
 async def test_externalized_skill_package_survives_pod_rebuild_without_local_workspace(

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from importlib.resources import files
+import re
 import uuid
 
 from deeptutor_enterprise.migrations.runner import MigrationRunner
@@ -12,6 +14,21 @@ import pytest
 from tests.fixtures.postgres import single_database_user_dsn
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_new_oms_migrations_have_no_database_business_routines_or_enum_checks():
+    resources = files("deeptutor_enterprise.oms.migrations")
+    for name in (
+        "0013_global_model_catalog.sql",
+        "0014_skill_packages.sql",
+        "0015_remove_fact_mutation_function.sql",
+        "0016_skill_review_publication_fences.sql",
+        "0017_relocate_database_business_rules.sql",
+    ):
+        sql = resources.joinpath(name).read_text(encoding="utf8")
+        assert not re.search(r"\bCREATE\s+(?:FUNCTION|PROCEDURE|TRIGGER)\b", sql, re.I)
+        assert not re.search(r"\bCHECK\s*\([^;]*?\bIN\s*\(", sql, re.I | re.S)
+        assert not re.search(r"\bCHECK\s*\([^;]*?=\s*ANY\s*\(\s*ARRAY", sql, re.I | re.S)
 
 
 async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
@@ -29,6 +46,11 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "oms/0010_quota_adjustment",
         "oms/0011_school_binding",
         "oms/0012_school_binding_version_guard",
+        "oms/0013_global_model_catalog",
+        "oms/0014_skill_packages",
+        "oms/0015_remove_fact_mutation_function",
+        "oms/0016_skill_review_publication_fences",
+        "oms/0017_relocate_database_business_rules",
     } <= set(await runner.plan())
 
     await runner.apply()
@@ -62,6 +84,11 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         ("0010_quota_adjustment",),
         ("0011_school_binding",),
         ("0012_school_binding_version_guard",),
+        ("0013_global_model_catalog",),
+        ("0014_skill_packages",),
+        ("0015_remove_fact_mutation_function",),
+        ("0016_skill_review_publication_fences",),
+        ("0017_relocate_database_business_rules",),
     ]
     assert {row[0]: tuple(row[1:]) for row in tables} == {
         "schema_history": (False, False),
@@ -77,7 +104,27 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "attempt_evidence_events": (True, True),
         "audit_events": (False, False),
         "entitlement_commands": (True, True),
+        "model_catalog_config": (False, False),
+        "skill_revisions": (True, True),
+        "skill_publications": (True, True),
+        "skill_grants": (True, True),
+        "skill_reviews": (True, True),
     }
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "DROP INDEX oms.skill_global_revision_version",
+    ],
+)
+async def test_skill_declarative_guard_drift_blocks_verify(pg_dsn, drift):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(drift)
+    with pytest.raises(RuntimeError, match="oms schema drift"):
+        await runner.verify()
 
 
 async def test_oms_schema_drift_blocks_verify(pg_dsn):
@@ -90,25 +137,27 @@ async def test_oms_schema_drift_blocks_verify(pg_dsn):
         await runner.verify()
 
 
-async def test_supply_verification_constraint_drift_blocks_verify(pg_dsn):
+async def test_supply_business_check_reintroduction_blocks_verify(pg_dsn):
     runner = MigrationRunner(pg_dsn)
     await runner.apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute(
-            "ALTER TABLE oms.supply_lots DROP CONSTRAINT supply_lots_verified_native"
+            "ALTER TABLE oms.supply_lots ADD CONSTRAINT supply_lots_verified_native "
+            "CHECK (supply_basis IS NOT NULL)"
         )
-    with pytest.raises(RuntimeError, match="oms schema drift"):
+    with pytest.raises(RuntimeError, match="database-owned business rules"):
         await runner.verify()
 
 
-async def test_quota_expiry_constraint_drift_blocks_verify(pg_dsn):
+async def test_quota_expiry_business_check_reintroduction_blocks_verify(pg_dsn):
     runner = MigrationRunner(pg_dsn)
     await runner.apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute(
-            "ALTER TABLE oms.quota_grants DROP CONSTRAINT quota_grants_status_check"
+            "ALTER TABLE oms.quota_grants ADD CONSTRAINT quota_grants_status_check "
+            "CHECK (status IS NOT NULL)"
         )
-    with pytest.raises(RuntimeError, match="oms schema drift"):
+    with pytest.raises(RuntimeError, match="database-owned business rules"):
         await runner.verify()
 
 
@@ -164,30 +213,70 @@ async def test_school_binding_constraint_drift_blocks_verify(pg_dsn):
         await runner.verify()
 
 
-async def test_school_binding_retarget_requires_monotonic_version(pg_dsn):
+async def test_school_binding_retarget_requires_runner_transition_version():
+    from datetime import datetime, timezone
+
+    school = uuid.uuid4()
+    proof_time = datetime.now(timezone.utc)
+    before = {school: (101, "verified", 1, proof_time, "synthetic-verifier", "synthetic://a")}
+    after = {school: (202, "verified", 1, proof_time, "synthetic-verifier", "synthetic://b")}
+
+    with pytest.raises(RuntimeError, match="school binding transition"):
+        MigrationRunner._validate_oms_school_binding_transition(before, after)
+
+
+async def test_oms_runner_rejects_binding_retarget_without_version_even_without_trigger(pg_dsn):
     await MigrationRunner(pg_dsn).apply()
     school = uuid.uuid4()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute(
             "INSERT INTO enterprise.tenants(id,external_eligibility,auth_epoch) "
-            "VALUES(%s,'allowed','synthetic')",
-            (school,),
+            "VALUES(%s,'allowed','synthetic')", (school,)
         )
         await connection.execute(
             "INSERT INTO oms.school_bindings"
             "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
-            "VALUES(%s,101,'verified',now(),'synthetic-verifier','synthetic://school-a')",
+            "VALUES(%s,101,'verified',now(),'synthetic','synthetic://original')",
             (school,),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
+
+    class InvalidBindingRunner(MigrationRunner):
+        def _oms_migrations(self):
+            return super()._oms_migrations() + [
+                (
+                    "0018_invalid_binding_retarget",
+                    "UPDATE oms.school_bindings SET eduplus_tenant_id=202,"
+                    "source_ref='synthetic://other' WHERE eduplus_tenant_id=101;",
+                )
+            ]
+
+    with pytest.raises(RuntimeError, match="school binding transition"):
+        await InvalidBindingRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        row = await (
             await connection.execute(
-                "UPDATE oms.school_bindings SET eduplus_tenant_id=202,"
-                "source_ref='synthetic://school-b' WHERE tenant_id=%s",
-                (school,),
+                "SELECT eduplus_tenant_id,version,source_ref FROM oms.school_bindings "
+                "WHERE tenant_id=%s", (school,)
             )
+        ).fetchone()
+    assert row == (101, 1, "synthetic://original")
 
 
-async def test_school_binding_cannot_be_deleted_and_recreated_to_resurrect_grants(pg_dsn):
+async def test_oms_runner_rejects_partial_binding_proof_after_enum_checks_retire():
+    from datetime import datetime, timezone
+
+    with pytest.raises(RuntimeError, match="school binding transition"):
+        MigrationRunner._validate_oms_school_binding_transition(
+            {},
+            {
+                uuid.uuid4(): (
+                    101, "pending", 1, datetime.now(timezone.utc), None, "synthetic://partial"
+                )
+            },
+        )
+
+
+async def test_school_binding_delete_is_rejected_by_runner_transition(pg_dsn):
     await MigrationRunner(pg_dsn).apply()
     school = uuid.uuid4()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
@@ -202,29 +291,42 @@ async def test_school_binding_cannot_be_deleted_and_recreated_to_resurrect_grant
             "VALUES(%s,101,'verified',now(),'synthetic-verifier','synthetic://school')",
             (school,),
         )
-        with pytest.raises(psycopg.errors.CheckViolation):
-            await connection.execute(
-                "DELETE FROM oms.school_bindings WHERE tenant_id=%s", (school,)
-            )
+
+    class InvalidDeleteRunner(MigrationRunner):
+        def _oms_migrations(self):
+            return super()._oms_migrations() + [
+                ("0018_invalid_binding_delete", "DELETE FROM oms.school_bindings WHERE eduplus_tenant_id=101")
+            ]
+
+    with pytest.raises(RuntimeError, match="school binding transition"):
+        await InvalidDeleteRunner(pg_dsn).apply()
 
 
-async def test_school_binding_version_guard_drift_blocks_verify(pg_dsn):
-    runner = MigrationRunner(pg_dsn)
-    await runner.apply()
-    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
-        await connection.execute("DROP TRIGGER guard_school_binding_version ON oms.school_bindings")
-    with pytest.raises(RuntimeError, match="oms schema drift"):
-        await runner.verify()
-
-
-async def test_oms_attempt_lifecycle_constraint_drift_blocks_verify(pg_dsn):
+async def test_school_binding_version_guard_reintroduction_blocks_verify(pg_dsn):
     runner = MigrationRunner(pg_dsn)
     await runner.apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute(
-            "ALTER TABLE oms.usage_attempts DROP CONSTRAINT usage_attempts_status_check"
+            "CREATE FUNCTION oms.guard_school_binding_version() RETURNS trigger "
+            "LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$"
         )
-    with pytest.raises(RuntimeError, match="oms schema drift"):
+        await connection.execute(
+            "CREATE TRIGGER guard_school_binding_version BEFORE UPDATE OR DELETE "
+            "ON oms.school_bindings FOR EACH ROW EXECUTE FUNCTION oms.guard_school_binding_version()"
+        )
+    with pytest.raises(RuntimeError, match="database-owned business rules"):
+        await runner.verify()
+
+
+async def test_oms_attempt_lifecycle_business_check_reintroduction_blocks_verify(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "ALTER TABLE oms.usage_attempts ADD CONSTRAINT usage_attempts_status_check "
+            "CHECK (status IS NOT NULL)"
+        )
+    with pytest.raises(RuntimeError, match="database-owned business rules"):
         await runner.verify()
 
 
@@ -239,15 +341,39 @@ async def test_oms_command_result_drift_blocks_verify(pg_dsn):
         await runner.verify()
 
 
-async def test_oms_append_only_trigger_drift_blocks_verify(pg_dsn):
+async def test_oms_reintroduced_fact_trigger_blocks_verify(pg_dsn):
     runner = MigrationRunner(pg_dsn)
     await runner.apply()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute(
-            "DROP TRIGGER attempt_evidence_append_only ON oms.attempt_evidence_events"
+            "CREATE FUNCTION oms.synthetic_fact_guard() RETURNS trigger "
+            "LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'"
+        )
+        await connection.execute(
+            "CREATE TRIGGER synthetic_fact_guard BEFORE UPDATE ON oms.attempt_evidence_events "
+            "FOR EACH ROW EXECUTE FUNCTION oms.synthetic_fact_guard()"
         )
     with pytest.raises(RuntimeError, match="oms schema drift"):
         await runner.verify()
+
+
+async def test_oms_forward_migration_removes_fact_mutation_function(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        function = await (
+            await connection.execute("SELECT to_regprocedure('oms.reject_fact_mutation()')")
+        ).fetchone()
+        triggers = await (
+            await connection.execute(
+                "SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid "
+                "JOIN pg_namespace n ON n.oid=r.relnamespace "
+                "WHERE n.nspname='oms' AND r.relname IN "
+                "('attempt_evidence_events','audit_events') AND NOT t.tgisinternal"
+            )
+        ).fetchall()
+    assert function == (None,)
+    assert triggers == []
 
 
 async def test_oms_checksum_and_index_drift_block_apply(pg_dsn):

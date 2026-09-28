@@ -979,7 +979,7 @@ class SQLiteRuntimeProjectionImporter:
             existing = await (
                 await connection.execute(
                     """
-                    SELECT updated_at,synced_at
+                    SELECT object_type,updated_at,synced_at
                       FROM enterprise.marginnote_objects
                      WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s
                        AND device_id=%s AND object_id=%s
@@ -988,6 +988,8 @@ class SQLiteRuntimeProjectionImporter:
                     (tenant_id, owner_id, kb_id, device_id, object_id),
                 )
             ).fetchone()
+            if existing is not None and str(existing["object_type"]) not in _ALLOWED_MN_TYPES:
+                raise ValueError(f"unsupported MarginNote object_type: {existing['object_type']!r}")
             if existing is not None and _stamp(existing["synced_at"], existing["updated_at"]) > source_stamp:
                 skipped += 1
                 continue
@@ -1057,7 +1059,7 @@ class SQLiteRuntimeProjectionImporter:
             existing_object = await (
                 await connection.execute(
                     """
-                    SELECT updated_at,synced_at
+                    SELECT object_type,updated_at,synced_at
                       FROM enterprise.marginnote_objects
                      WHERE tenant_id=%s AND owner_id=%s AND kb_id=%s
                        AND device_id=%s AND object_id=%s
@@ -1066,6 +1068,10 @@ class SQLiteRuntimeProjectionImporter:
                     (tenant_id, owner_id, kb_id, device_id, object_id),
                 )
             ).fetchone()
+            if existing_object is not None and str(existing_object["object_type"]) not in _ALLOWED_MN_TYPES:
+                raise ValueError(
+                    f"unsupported MarginNote object_type: {existing_object['object_type']!r}"
+                )
             if existing_object is not None and _stamp(
                 existing_object["synced_at"], existing_object["updated_at"]
             ) > deleted_at:

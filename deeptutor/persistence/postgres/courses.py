@@ -71,6 +71,9 @@ class PostgresCourseService:
 
     @staticmethod
     def _course_from_row(row: dict[str, Any]) -> StudyCourse:
+        status = row.get("status")
+        if status not in COURSE_STATUSES:
+            raise ValueError(f"Unknown course status {status!r}; expected active or archived.")
         created_at = float(row.get("created_at") or time.time())
         return StudyCourse(
             id=str(row.get("id") or ""),
@@ -87,7 +90,7 @@ class PostgresCourseService:
             default_persona=str(row.get("default_persona") or "").strip(),
             resources=_parse_resources(row.get("resources")),
             syllabus=_parse_syllabus(row.get("syllabus")),
-            status="archived" if str(row.get("status") or "").strip() == "archived" else "active",
+            status=status,
             archived_at=float(row.get("archived_at") or 0.0),
         )
 
@@ -122,6 +125,11 @@ class PostgresCourseService:
         return sorted(courses, key=lambda course: (course.created_at, course.name.casefold()))
 
     def _replace_all(self, connection, courses: list[StudyCourse]) -> None:
+        for course in courses:
+            if course.status not in COURSE_STATUSES:
+                raise ValueError(
+                    f"Unknown course status {course.status!r}; expected active or archived."
+                )
         connection.execute(
             "DELETE FROM enterprise.courses WHERE tenant_id=%s AND owner_id=%s",
             self._owner,

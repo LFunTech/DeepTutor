@@ -4,8 +4,10 @@ import json
 
 from psycopg.types.json import Jsonb
 
+from deeptutor.persistence.postgres.reading.materials import validate_material_business_state
 from deeptutor.services.session.question_bank import (
     ASSESSMENT_SOURCES,
+    SCORE_TRENDS,
     QuestionBankReferenceConflict,
 )
 
@@ -60,7 +62,7 @@ def prepare_upsert(owner, session_id, item, now):
         return None
     source = str(item.get("source") or "deep_question")
     if source not in ASSESSMENT_SOURCES:
-        source = "deep_question"
+        raise ValueError("question-bank source is unknown")
     images = item.get("user_answer_images")
     has_images = isinstance(images, list)
     return source, (
@@ -87,6 +89,17 @@ def prepare_upsert(owner, session_id, item, now):
         now,
         has_images,
     )
+
+
+def validate_notebook_values(row):
+    """在读取或改写旧行前拒绝未知来源、趋势及来源条件。"""
+
+    if row["source"] not in ASSESSMENT_SOURCES:
+        raise ValueError("question-bank source is unknown")
+    if row["score_trend"] not in SCORE_TRENDS:
+        raise ValueError("question-bank score trend is unknown")
+    if row["source"] in {"immersive_reading", "mastery_path"} and not row["material_id"]:
+        raise ValueError("question-bank source requires a material")
 
 
 def mastery_reference_query(owner, session_id, item):
@@ -123,11 +136,17 @@ def require_mastery_reference(row):
 def reading_reference_query(owner, item):
     """reading 表已存在后，只接受当前 scope 中可阅读的真实材料。"""
     return (
-        "SELECT EXISTS(SELECT 1 FROM enterprise.reading_materials WHERE tenant_id=%s AND owner_id=%s AND material_id=%s AND status='ready') AS available",
+        "SELECT source_kind,status,progress FROM enterprise.reading_materials "
+        "WHERE tenant_id=%s AND owner_id=%s AND material_id=%s FOR SHARE",
         (*owner, str(item.get("material_id") or "")),
     )
 
 
 def require_reading_reference(row):
-    if not row["available"]:
+    if row is None:
+        raise QuestionBankReferenceConflict("reading provenance requires a current ready material")
+    _, status = validate_material_business_state(
+        row["source_kind"], row["status"], row["progress"]
+    )
+    if status.value != "ready":
         raise QuestionBankReferenceConflict("reading provenance requires a current ready material")

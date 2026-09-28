@@ -11,6 +11,13 @@ from psycopg.types.json import Jsonb
 
 from deeptutor.persistence.postgres.scope import GlobalScope
 
+from .value_validation import (
+    OmsValueError,
+    validate_oms_audit_result,
+    validate_service_definition_row,
+    validate_supply_lot_row,
+)
+
 
 class SupplyRejected(ValueError):
     """供给来源、单位或批次状态不满足准入规则。"""
@@ -100,6 +107,7 @@ def _validate(scope: GlobalScope, request: SupplyRequest) -> None:
 
 
 def _matches_existing(prior, request: SupplyRequest) -> bool:
+    validate_supply_lot_row(prior)
     return prior is not None and (
         prior["service_id"],
         prior["provider_id"],
@@ -132,8 +140,12 @@ def _matches_existing(prior, request: SupplyRequest) -> bool:
 _LOT_IDENTITY_SQL = (
     "SELECT service_id,provider_id,provider_account_id,pool_id,unit_code,"
     "evidence_ref,hard_ceiling,starts_at,expires_at,supply_basis,"
-    "verified_at,created_by FROM oms.supply_lots WHERE id=%s FOR UPDATE"
+    "verified_at,created_by,status,version FROM oms.supply_lots WHERE id=%s FOR UPDATE"
 )
+
+
+def _domain_error(error: OmsValueError) -> SupplyRejected:
+    return SupplyRejected(str(error))
 
 
 class OmsSupplyLedger:
@@ -154,13 +166,18 @@ class OmsSupplyLedger:
         async with self.db.transaction(scope) as c:
             pool = await (
                 await c.execute(
-                    "SELECT service_id,provider_id,provider_account_id,pool_id,unit_code "
+                    "SELECT service_id,provider_id,provider_account_id,pool_id,unit_code,"
+                    "status,supply_basis,hard_ceiling,verified_at,created_by,version "
                     "FROM oms.supply_lots WHERE id=%s",
                     (request.lot_id,),
                 )
             ).fetchone()
             if pool is None:
                 raise SupplyRejected("supply lot is unavailable")
+            try:
+                validate_supply_lot_row(pool)
+            except OmsValueError as error:
+                raise _domain_error(error) from None
             await c.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                 (
@@ -178,6 +195,7 @@ class OmsSupplyLedger:
             ).fetchone()
             if updated is None:
                 raise SupplyRejected("supply version is stale or lot is revoked")
+            validate_oms_audit_result("success")
             await c.execute(
                 "INSERT INTO oms.audit_events"
                 "(id,actor_subject,action,object_kind,object_id,request_id,result,reason,safe_summary) "
@@ -198,16 +216,25 @@ class OmsSupplyLedger:
         async with self.db.transaction(scope) as c:
             prior = await (await c.execute(_LOT_IDENTITY_SQL, (request.lot_id,))).fetchone()
             if prior is not None:
-                if not _matches_existing(prior, request):
+                try:
+                    matches = _matches_existing(prior, request)
+                except OmsValueError as error:
+                    raise _domain_error(error) from None
+                if not matches:
                     raise SupplyRejected("supply lot id conflicts with prior payload")
                 return request.lot_id
             service = await (
                 await c.execute(
-                    "SELECT unit_code,enabled FROM oms.service_definitions "
+                    "SELECT unit_code,enabled,resource_category FROM oms.service_definitions "
                     "WHERE service_id=%s FOR SHARE",
                     (request.service_id,),
                 )
             ).fetchone()
+            if service:
+                try:
+                    validate_service_definition_row(service)
+                except OmsValueError as error:
+                    raise _domain_error(error) from None
             if not service or not service["enabled"] or service["unit_code"] != request.unit_code:
                 raise SupplyRejected("service is not enabled for the requested native unit")
             row = await (
@@ -237,9 +264,14 @@ class OmsSupplyLedger:
             ).fetchone()
             if row is None:
                 prior = await (await c.execute(_LOT_IDENTITY_SQL, (request.lot_id,))).fetchone()
-                if not _matches_existing(prior, request):
+                try:
+                    matches = _matches_existing(prior, request)
+                except OmsValueError as error:
+                    raise _domain_error(error) from None
+                if not matches:
                     raise SupplyRejected("supply lot id conflicts with prior payload")
                 return request.lot_id
+            validate_oms_audit_result("success")
             await c.execute(
                 "INSERT INTO oms.audit_events"
                 "(id,actor_subject,action,object_kind,object_id,request_id,result,reason,safe_summary) "
@@ -283,6 +315,19 @@ class OmsSupplyLedger:
         if not isinstance(provider_account_id, str) or len(provider_account_id) > 255:
             raise SupplyRejected("provider_account_id is invalid")
         async with self.db.transaction(scope) as c:
+            rows = await (
+                await c.execute(
+                    "SELECT status,supply_basis,hard_ceiling,verified_at,created_by,version "
+                    "FROM oms.supply_lots WHERE service_id=%s AND provider_id=%s "
+                    "AND provider_account_id=%s AND pool_id=%s AND unit_code=%s",
+                    (service_id, provider_id, provider_account_id, pool_id, unit_code),
+                )
+            ).fetchall()
+            try:
+                for row in rows:
+                    validate_supply_lot_row(row)
+            except OmsValueError as error:
+                raise _domain_error(error) from None
             row = await (
                 await c.execute(
                     "SELECT COALESCE(SUM(hard_ceiling-settled_lifetime-committed_unspent-"

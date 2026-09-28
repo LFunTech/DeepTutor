@@ -14,13 +14,40 @@ import uuid
 from jose import jwt
 from psycopg.types.json import Jsonb
 
+from deeptutor.persistence.postgres.tenant_state import tenant_allows_authentication
 from deeptutor_enterprise.scope import TenantScope
 
 from .client import HmacEduPlus2JwtVerifier, VerifiedEduPlus2Jwt
 
 _REQUIRED_CLAIMS = ("iss", "exp", "iat", "tid", "eui", "sub", "azp")
 _ACTIVE_VALUES = {"active", "enabled", "allowed"}
+_EDUPLUS2_PROVIDER = "eduplus2"
 _AUTO_REGISTRATION_SOURCES = {"env_allowlist", "ops_import", "auto_upsert", "test_seed"}
+_REGISTRATION_SURFACES = {
+    "tms",
+    "oms",
+    "webhook",
+    "ops_cli",
+    "env_allowlist",
+    "auto_upsert",
+    "test_seed",
+}
+_REGISTRATION_STATUSES = {"active", "revoked", "suspended", "pending_verification"}
+_IDENTITY_BINDING_STATUSES = {"active", "disabled", "revoked"}
+_PROFILE_SNAPSHOT_STATUSES = {
+    "active",
+    "enabled",
+    "allowed",
+    "disabled",
+    "deleted",
+    "inactive",
+    "revoked",
+}
+_AUDIT_RESULTS = {"success", "denied", "replayed", "failed"}
+_AUDIT_EXPORT_FORMATS = {"jsonl", "csv"}
+_AUDIT_EXPORT_STATUSES = {"queued", "running", "completed", "failed", "expired"}
+_REVOCATION_TARGET_KINDS = {"user", "client", "app", "tenant", "permission", "subscription"}
+_REVOCATION_PROCESSING_STATUSES = {"applied", "duplicate", "ignored", "failed"}
 _MANAGEMENT_USAGE_PREFIXES = ("tms.", "tms:", "oms.", "oms:", "ops.", "ops:", "platform.")
 _REVOCATION_TARGET_BY_EVENT = {
     "user.disabled": "user",
@@ -37,6 +64,22 @@ _REVOCATION_TARGET_BY_EVENT = {
     "permission.revoked": "permission",
     "permission.denied": "permission",
 }
+
+
+def _require_allowed_value(
+    value,
+    *,
+    allowed: set[str],
+    label: str,
+    persisted: bool = True,
+) -> str:
+    normalized = str(value or "").strip()
+    if normalized not in allowed:
+        message = f"unknown EduPlus2 {label}: {normalized or '<empty>'}"
+        if persisted:
+            raise RuntimeError(message)
+        raise ValueError(message)
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +247,7 @@ class EduPlus2AccessService:
         policy_version: str = "",
         summary: dict | None = None,
     ):
+        result = self._validate_audit_result(result, persisted=False)
         safe_summary = dict(summary or {})
         for forbidden in ("token", "jwt", "secret", "authorization", "client_secret"):
             safe_summary.pop(forbidden, None)
@@ -247,6 +291,145 @@ class EduPlus2AccessService:
             if value and not lowered.startswith(_MANAGEMENT_USAGE_PREFIXES):
                 allowed.append(value)
         return allowed
+
+    @staticmethod
+    def _validate_registration_row(row) -> None:
+        _require_allowed_value(
+            row["provider"],
+            allowed={_EDUPLUS2_PROVIDER},
+            label="registration provider",
+        )
+        _require_allowed_value(
+            row["registered_by_surface"],
+            allowed=_REGISTRATION_SURFACES,
+            label="registration surface",
+        )
+        _require_allowed_value(
+            row["status"],
+            allowed=_REGISTRATION_STATUSES,
+            label="registration status",
+        )
+
+    @staticmethod
+    def _validate_identity_binding_row(row) -> None:
+        _require_allowed_value(
+            row["provider"],
+            allowed={_EDUPLUS2_PROVIDER},
+            label="identity binding provider",
+        )
+        _require_allowed_value(
+            row["status"],
+            allowed=_IDENTITY_BINDING_STATUSES,
+            label="identity binding status",
+        )
+
+    @staticmethod
+    def _validate_permission_snapshot_row(row) -> None:
+        _require_allowed_value(
+            row["provider"],
+            allowed={_EDUPLUS2_PROVIDER},
+            label="permission snapshot provider",
+        )
+
+    @staticmethod
+    def _validate_profile_snapshot_values(profile: dict) -> None:
+        _require_allowed_value(
+            _EDUPLUS2_PROVIDER,
+            allowed={_EDUPLUS2_PROVIDER},
+            label="profile snapshot provider",
+            persisted=False,
+        )
+        _require_allowed_value(
+            profile.get("status"),
+            allowed=_PROFILE_SNAPSHOT_STATUSES,
+            label="profile snapshot status",
+            persisted=False,
+        )
+
+    @staticmethod
+    def _validate_revocation_event_row(row) -> None:
+        _require_allowed_value(
+            row["target_kind"],
+            allowed=_REVOCATION_TARGET_KINDS,
+            label="revocation target kind",
+        )
+        _require_allowed_value(
+            row["processing_status"],
+            allowed=_REVOCATION_PROCESSING_STATUSES,
+            label="revocation processing status",
+        )
+
+    @staticmethod
+    def _validate_revocation_state_row(row) -> None:
+        target_kind = _require_allowed_value(
+            row["target_kind"],
+            allowed=_REVOCATION_TARGET_KINDS,
+            label="revocation target kind",
+        )
+        external_tenant_id = str(row["external_tenant_id"] or "").strip()
+        external_user_id = str(row["external_user_id"] or "").strip()
+        client_id = str(row["client_id"] or "").strip()
+        external_app_id = str(row["external_app_id"] or "").strip()
+        valid_shape = True
+        if target_kind == "tenant":
+            valid_shape = bool(external_tenant_id)
+        elif target_kind == "user":
+            valid_shape = bool(external_tenant_id and external_user_id)
+        elif target_kind == "client":
+            valid_shape = bool(client_id)
+        elif target_kind == "app":
+            valid_shape = bool(external_app_id)
+        elif target_kind == "permission":
+            valid_shape = bool(external_tenant_id and external_user_id and client_id)
+        elif target_kind == "subscription":
+            valid_shape = bool(external_tenant_id)
+        if not valid_shape:
+            raise RuntimeError("invalid EduPlus2 revocation target shape")
+
+    @staticmethod
+    def _revocation_state_matches(
+        row,
+        *,
+        external_tenant_id: str,
+        external_user_id: str,
+        client_id: str,
+        external_app_id: str,
+    ) -> bool:
+        target_kind = row["target_kind"]
+        if target_kind == "tenant":
+            return row["external_tenant_id"] == external_tenant_id
+        if target_kind == "user":
+            return (
+                row["external_tenant_id"] == external_tenant_id
+                and row["external_user_id"] == external_user_id
+            )
+        if target_kind == "client":
+            return row["client_id"] == client_id
+        if target_kind == "app":
+            return row["external_app_id"] == external_app_id
+        if target_kind == "permission":
+            return (
+                row["external_tenant_id"] == external_tenant_id
+                and row["external_user_id"] == external_user_id
+                and row["client_id"] == client_id
+                and (row["external_app_id"] == "" or row["external_app_id"] == external_app_id)
+            )
+        if target_kind == "subscription":
+            return (
+                row["external_tenant_id"] == external_tenant_id
+                and (row["client_id"] == "" or row["client_id"] == client_id)
+                and (row["external_app_id"] == "" or row["external_app_id"] == external_app_id)
+            )
+        raise RuntimeError("unknown EduPlus2 revocation target kind")
+
+    @staticmethod
+    def _validate_audit_result(result: str, *, persisted: bool) -> str:
+        return _require_allowed_value(
+            result,
+            allowed=_AUDIT_RESULTS,
+            label="audit result",
+            persisted=persisted,
+        )
 
     async def _fetch_profile(
         self,
@@ -420,6 +603,7 @@ class EduPlus2AccessService:
         return permission
 
     async def _persist_profile_snapshot(self, c, profile: dict) -> None:
+        self._validate_profile_snapshot_values(profile)
         await c.execute(
             """
             INSERT INTO eduplus2.profile_snapshots(
@@ -510,49 +694,28 @@ class EduPlus2AccessService:
         client_id: str = "",
         external_app_id: str = "",
     ) -> None:
-        row = await (
+        rows = await (
             await c.execute(
                 """
-                SELECT target_kind,reason FROM eduplus2.revocation_state
-                 WHERE tenant_id=%s AND active AND (
-                   (target_kind='tenant' AND external_tenant_id=%s)
-                   OR (target_kind='user' AND external_tenant_id=%s AND external_user_id=%s)
-                   OR (target_kind='client' AND client_id=%s)
-                   OR (target_kind='app' AND external_app_id=%s)
-                   OR (
-                     target_kind='permission'
-                     AND external_tenant_id=%s AND external_user_id=%s AND client_id=%s
-                     AND (external_app_id='' OR external_app_id=%s)
-                   )
-                   OR (
-                     target_kind='subscription'
-                     AND external_tenant_id=%s
-                     AND (client_id='' OR client_id=%s)
-                     AND (external_app_id='' OR external_app_id=%s)
-                   )
-                 )
+                SELECT target_kind,external_tenant_id,external_user_id,client_id,
+                       external_app_id,reason
+                  FROM eduplus2.revocation_state
+                 WHERE tenant_id=%s AND active
                  ORDER BY updated_at DESC
-                 LIMIT 1
                 """,
-                (
-                    self.identity.tenant_id,
-                    external_tenant_id,
-                    external_tenant_id,
-                    external_user_id,
-                    client_id,
-                    external_app_id,
-                    external_tenant_id,
-                    external_user_id,
-                    client_id,
-                    external_app_id,
-                    external_tenant_id,
-                    client_id,
-                    external_app_id,
-                ),
+                (self.identity.tenant_id,),
             )
-        ).fetchone()
-        if row:
-            raise PermissionError("access revoked")
+        ).fetchall()
+        for row in rows:
+            self._validate_revocation_state_row(row)
+            if self._revocation_state_matches(
+                row,
+                external_tenant_id=external_tenant_id,
+                external_user_id=external_user_id,
+                client_id=client_id,
+                external_app_id=external_app_id,
+            ):
+                raise PermissionError("access revoked")
 
     async def ensure_token_allowed(
         self,
@@ -573,16 +736,14 @@ class EduPlus2AccessService:
                 external_app_id=str(eduplus2.get("external_app_id") or ""),
             )
             if eduplus2.get("permission_version"):
-                row = await (
+                rows = await (
                     await c.execute(
                         """
-                        SELECT allowed,reason,allowed_usages,expires_at,updated_at
+                        SELECT provider,allowed,reason,allowed_usages,expires_at,updated_at
                           FROM eduplus2.permission_snapshots
-                         WHERE tenant_id=%s AND provider='eduplus2'
-                           AND external_tenant_id=%s AND external_user_id=%s
+                         WHERE tenant_id=%s AND external_tenant_id=%s AND external_user_id=%s
                            AND client_registration_id=%s
                          ORDER BY updated_at DESC
-                         LIMIT 1
                         """,
                         (
                             self.identity.tenant_id,
@@ -591,7 +752,12 @@ class EduPlus2AccessService:
                             str(eduplus2.get("client_registration_id") or ""),
                         ),
                     )
-                ).fetchone()
+                ).fetchall()
+                row = None
+                for candidate in rows:
+                    self._validate_permission_snapshot_row(candidate)
+                    if row is None and candidate["provider"] == _EDUPLUS2_PROVIDER:
+                        row = candidate
                 if self._snapshot_recheck_due(row["updated_at"] if row else None):
                     await self._revalidate_external_authorization_snapshot(
                         c,
@@ -599,16 +765,14 @@ class EduPlus2AccessService:
                         required_usage=required_usage,
                         token_hash=hashlib.sha256(token.encode()).hexdigest(),
                     )
-                    row = await (
+                    rows = await (
                         await c.execute(
                             """
-                            SELECT allowed,reason,allowed_usages,expires_at,updated_at
+                            SELECT provider,allowed,reason,allowed_usages,expires_at,updated_at
                               FROM eduplus2.permission_snapshots
-                             WHERE tenant_id=%s AND provider='eduplus2'
-                               AND external_tenant_id=%s AND external_user_id=%s
+                             WHERE tenant_id=%s AND external_tenant_id=%s AND external_user_id=%s
                                AND client_registration_id=%s
                              ORDER BY updated_at DESC
-                             LIMIT 1
                             """,
                             (
                                 self.identity.tenant_id,
@@ -617,7 +781,12 @@ class EduPlus2AccessService:
                                 str(eduplus2.get("client_registration_id") or ""),
                             ),
                         )
-                    ).fetchone()
+                    ).fetchall()
+                    row = None
+                    for candidate in rows:
+                        self._validate_permission_snapshot_row(candidate)
+                        if row is None and candidate["provider"] == _EDUPLUS2_PROVIDER:
+                            row = candidate
                 if not row or not row["allowed"]:
                     raise PermissionError("permission revoked")
                 if row["expires_at"] is not None and row["expires_at"] <= datetime.now(
@@ -656,11 +825,13 @@ class EduPlus2AccessService:
                 """
                 SELECT *
                   FROM eduplus2.external_client_registrations
-                 WHERE tenant_id=%s AND provider='eduplus2' AND id=%s AND client_id=%s
+                 WHERE tenant_id=%s AND id=%s AND client_id=%s
                 """,
                 (self.identity.tenant_id, client_registration_id, client_id),
             )
         ).fetchone()
+        if registration:
+            self._validate_registration_row(registration)
         if not registration or registration["status"] != "active":
             raise PermissionError("registration revoked")
         resolved = await self._resolve(
@@ -675,17 +846,11 @@ class EduPlus2AccessService:
             or registration["external_app_id"] != resolved["external_app_id"]
         ):
             raise PermissionError("tenant mismatch")
-        binding = await (
-            await c.execute(
-                """
-                SELECT external_subject
-                  FROM eduplus2.identity_bindings
-                 WHERE tenant_id=%s AND provider='eduplus2'
-                   AND external_tenant_id=%s AND external_user_id=%s
-                """,
-                (self.identity.tenant_id, external_tenant_id, external_user_id),
-            )
-        ).fetchone()
+        binding = await self._find_identity_binding(
+            c,
+            external_tenant_id=external_tenant_id,
+            external_user_id=external_user_id,
+        )
         claims = {
             "tid": external_tenant_id,
             "eui": external_user_id,
@@ -743,11 +908,16 @@ class EduPlus2AccessService:
         async with self.db.transaction(self._scope) as c:
             duplicate = await (
                 await c.execute(
-                    "SELECT processing_status FROM eduplus2.revocation_events WHERE tenant_id=%s AND event_id=%s",
+                    """
+                    SELECT target_kind,processing_status
+                      FROM eduplus2.revocation_events
+                     WHERE tenant_id=%s AND event_id=%s
+                    """,
                     (self.identity.tenant_id, event_id),
                 )
             ).fetchone()
             if duplicate:
+                self._validate_revocation_event_row(duplicate)
                 return {"status": "duplicate", "event_id": event_id}
             await c.execute(
                 """
@@ -857,6 +1027,8 @@ class EduPlus2AccessService:
         ):
             value = str(filters.get(column) or "").strip()
             if value:
+                if column == "result":
+                    EduPlus2AccessService._validate_audit_result(value, persisted=False)
                 clauses.append(f"{column}=%s")
                 values.append(value)
         return (" AND ".join(clauses), values)
@@ -878,7 +1050,10 @@ class EduPlus2AccessService:
             "internal_user_id": row["internal_user_id"],
             "session_id": row["session_id"],
             "turn_id": row["turn_id"],
-            "result": row["result"],
+            "result": EduPlus2AccessService._validate_audit_result(
+                row["result"],
+                persisted=True,
+            ),
             "reason": row["reason"],
             "policy_version": row["policy_version"],
             "summary": summary,
@@ -935,7 +1110,7 @@ class EduPlus2AccessService:
         actor_id: str,
     ) -> dict:
         export_format = str(export_format or "jsonl").lower()
-        if export_format not in {"jsonl", "csv"}:
+        if export_format not in _AUDIT_EXPORT_FORMATS:
             raise ValueError("unsupported audit export format")
         result = await self.query_audit_events(filters, limit=int(filters.get("limit") or 1000))
         items = result["items"]
@@ -1111,7 +1286,7 @@ class EduPlus2AccessService:
         return resolved
 
     async def _find_registration(self, c, client_id: str):
-        return await (
+        row = await (
             await c.execute(
                 """
                 SELECT * FROM eduplus2.external_client_registrations
@@ -1122,6 +1297,59 @@ class EduPlus2AccessService:
                 (self.identity.tenant_id, client_id),
             )
         ).fetchone()
+        if row:
+            self._validate_registration_row(row)
+        return row
+
+    async def _find_active_registration_for_tenant_app(
+        self,
+        c,
+        *,
+        external_tenant_id: str,
+        external_app_id: str,
+    ):
+        rows = await (
+            await c.execute(
+                """
+                SELECT *
+                  FROM eduplus2.external_client_registrations
+                 WHERE status='active' AND external_tenant_id=%s AND external_app_id=%s
+                 ORDER BY CASE WHEN provider='eduplus2' THEN 0 ELSE 1 END, updated_at DESC
+                """,
+                (external_tenant_id, external_app_id),
+            )
+        ).fetchall()
+        selected = None
+        for row in rows:
+            self._validate_registration_row(row)
+            if selected is None and row["provider"] == _EDUPLUS2_PROVIDER:
+                selected = row
+        return selected
+
+    async def _find_identity_binding(
+        self,
+        c,
+        *,
+        external_tenant_id: str,
+        external_user_id: str,
+    ):
+        rows = await (
+            await c.execute(
+                """
+                SELECT *
+                  FROM eduplus2.identity_bindings
+                 WHERE tenant_id=%s AND external_tenant_id=%s AND external_user_id=%s
+                 ORDER BY CASE WHEN provider='eduplus2' THEN 0 ELSE 1 END, updated_at DESC
+                """,
+                (self.identity.tenant_id, external_tenant_id, external_user_id),
+            )
+        ).fetchall()
+        selected = None
+        for row in rows:
+            self._validate_identity_binding_row(row)
+            if selected is None and row["provider"] == _EDUPLUS2_PROVIDER:
+                selected = row
+        return selected
 
     def _allowed_client(self, client_id: str) -> dict:
         allowed = self.allowed_clients.get(client_id)
@@ -1226,17 +1454,11 @@ class EduPlus2AccessService:
                 },
             )
             raise PermissionError("tenant mismatch")
-        existing = await (
-            await c.execute(
-                """
-                SELECT client_id FROM eduplus2.external_client_registrations
-                 WHERE status='active' AND provider='eduplus2'
-                   AND external_tenant_id=%s AND external_app_id=%s
-                 LIMIT 1
-                """,
-                (resolved["external_tenant_id"], resolved["external_app_id"]),
-            )
-        ).fetchone()
+        existing = await self._find_active_registration_for_tenant_app(
+            c,
+            external_tenant_id=resolved["external_tenant_id"],
+            external_app_id=resolved["external_app_id"],
+        )
         if existing:
             await self._audit(
                 c,
@@ -1344,18 +1566,15 @@ class EduPlus2AccessService:
             raise PermissionError("tenant mismatch")
         registration_id = str(uuid.uuid4())
         async with self.db.transaction(self._scope) as c:
-            existing = await (
-                await c.execute(
-                    """
-                    SELECT client_id FROM eduplus2.external_client_registrations
-                     WHERE status='active' AND (
-                       client_id=%s OR (provider='eduplus2' AND external_tenant_id=%s AND external_app_id=%s)
-                     )
-                     LIMIT 1
-                    """,
-                    (client_id, resolved["external_tenant_id"], resolved["external_app_id"]),
+            existing = await self._find_registration(c, client_id)
+            if existing and existing["status"] != "active":
+                existing = None
+            if existing is None:
+                existing = await self._find_active_registration_for_tenant_app(
+                    c,
+                    external_tenant_id=resolved["external_tenant_id"],
+                    external_app_id=resolved["external_app_id"],
                 )
-            ).fetchone()
             if existing:
                 await self._audit(
                     c,
@@ -1498,15 +1717,11 @@ class EduPlus2AccessService:
                 token_hash=token_hash,
                 token_kid=token_kid,
             )
-            binding = await (
-                await c.execute(
-                    """
-                    SELECT * FROM eduplus2.identity_bindings
-                     WHERE tenant_id=%s AND provider='eduplus2' AND external_tenant_id=%s AND external_user_id=%s
-                    """,
-                    (self.identity.tenant_id, external_tenant_id, external_user_id),
-                )
-            ).fetchone()
+            binding = await self._find_identity_binding(
+                c,
+                external_tenant_id=external_tenant_id,
+                external_user_id=external_user_id,
+            )
             if binding and binding["status"] != "active":
                 await self._audit(
                     c,
@@ -1584,16 +1799,20 @@ class EduPlus2AccessService:
             row = await (
                 await c.execute(
                     """
-                    SELECT u.* FROM enterprise.users u JOIN enterprise.tenants t ON t.id=u.tenant_id
+                    SELECT u.*,t.local_enabled,t.external_eligibility,t.provisioning_status,
+                           t.recovery_state,t.auth_epoch AS tenant_auth_epoch
+                      FROM enterprise.users u JOIN enterprise.tenants t ON t.id=u.tenant_id
                      WHERE u.tenant_id=%s AND u.id=%s AND NOT u.disabled AND u.deleted_at IS NULL
-                       AND t.local_enabled AND t.external_eligibility IN ('not_required','allowed')
-                       AND t.provisioning_status='ready' AND t.auth_epoch=%s
                      FOR UPDATE OF u,t
                     """,
-                    (self.identity.tenant_id, internal_user_id, self.identity.epoch),
+                    (self.identity.tenant_id, internal_user_id),
                 )
             ).fetchone()
-            if not row:
+            if (
+                not row
+                or not tenant_allows_authentication(row)
+                or row["tenant_auth_epoch"] != self.identity.epoch
+            ):
                 await self._audit(
                     c,
                     event_kind="token.exchange",

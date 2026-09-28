@@ -42,7 +42,7 @@ async def _safe_index(
         except Exception:
             logger.debug("Course %s index is unavailable", kind, exc_info=True)
             return {}
-    from deeptutor.learning.runtime import get_learning_runtime
+    from deeptutor.learning.runtime import LearningProviderUnavailable, get_learning_runtime
 
     try:
         runtime = get_learning_runtime()
@@ -55,7 +55,9 @@ async def _safe_index(
             logger.debug("Course %s fallback index is unavailable", kind, exc_info=True)
             return {}
     if runtime.source_provider is None:
-        return {}
+        raise LearningProviderUnavailable(
+            f"PostgreSQL course {kind} source provider is not configured"
+        )
     try:
         await runtime.authorize()
         result = await runtime.source_provider.course_index(runtime.scope, kind)

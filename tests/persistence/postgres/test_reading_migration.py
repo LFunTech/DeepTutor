@@ -78,7 +78,7 @@ async def test_all_source_versions_verified_before_reading_target_and_failure_ro
         "ALTER TABLE enterprise.notebook_entries ALTER COLUMN reading_material_ref DROP EXPRESSION",
         "DROP INDEX enterprise.reading_materials_content",
         "DROP INDEX enterprise.reading_links_target",
-        "ALTER TABLE enterprise.reading_workspace_materials DROP CONSTRAINT reading_workspace_materials_tab_order_check",
+        "ALTER TABLE enterprise.reading_workspace_materials DROP CONSTRAINT IF EXISTS reading_workspace_materials_tab_order_check",
         "ALTER TABLE enterprise.reading_materials ALTER COLUMN version SET DEFAULT 9",
     ],
 )

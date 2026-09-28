@@ -6,7 +6,7 @@ import time
 from deeptutor.learning.contracts import LearningConflictError, LearningStoreError
 from deeptutor.learning.models import LearningProgress
 
-from .base import StoreBase, jsonb, validate_id
+from .base import StoreBase, jsonb, validate_id, validate_path_operation_row
 from .bindings import LearningBindings
 from .notebook import LearningNotebook
 from .queries import LearningQueries
@@ -152,6 +152,26 @@ class PostgresLearningStore(LearningQueries, LearningBindings, LearningNotebook,
             lease = u._lease(path)
             if lease is not None and lease.kind == "operation":
                 u.finish_path_operation(lease)
+            # 保留历史 operation，先逐行校验再在同事务解绑 FK；未知状态不得
+            # 被 SQL 的 status<>'active' 静默当成终态。
+            operations = u._execute(
+                "SELECT operation_id,status,path_ref FROM enterprise.mastery_path_operations "
+                "WHERE tenant_id=%s AND owner_id=%s AND (path_id=%s OR path_ref=%s) FOR UPDATE",
+                (*u._owner, path, path),
+            ).fetchall()
+            detached = []
+            for operation in operations:
+                validate_path_operation_row(operation)
+                if operation["status"] == "active":
+                    raise LearningStoreError("active operation cannot detach path")
+                if operation["path_ref"] == path:
+                    detached.append(operation["operation_id"])
+            if detached:
+                u._execute(
+                    "UPDATE enterprise.mastery_path_operations SET path_ref=NULL "
+                    "WHERE tenant_id=%s AND owner_id=%s AND operation_id=ANY(%s)",
+                    (*u._owner, detached),
+                )
             u._execute(
                 "DELETE FROM enterprise.mastery_paths WHERE tenant_id=%s AND owner_id=%s AND path_id=%s",
                 (*u._owner, path),

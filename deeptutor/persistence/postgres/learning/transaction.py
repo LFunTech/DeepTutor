@@ -11,14 +11,23 @@ from deeptutor.learning.contracts import (
     LearningReferenceError,
     LearningStoreError,
 )
-from deeptutor.learning.models import InteractionStatus, MasteryInteraction
+from deeptutor.learning.models import MasteryInteraction
 from deeptutor.persistence.postgres._ownership import Lease
 
-from .base import jsonb, redact
+from .base import (
+    jsonb,
+    redact,
+    validate_interaction_status,
+    validate_topic_source_row,
+    validate_topic_status,
+)
 
 
 def interaction_from_row(row):
-    return MasteryInteraction.model_validate(row) if row else None
+    if row is None:
+        return None
+    validate_interaction_status(row["status"])
+    return MasteryInteraction.model_validate(row)
 
 
 class LearningTransaction:
@@ -78,7 +87,7 @@ class LearningTransaction:
             if existing:
                 if existing["path_id"] != interaction.path_id:
                     raise ValueError("interaction already belongs to another path")
-                current = InteractionStatus(existing["status"])
+                current = validate_interaction_status(existing["status"])
                 if interaction.status not in _ALLOWED_INTERACTION_TRANSITIONS[current]:
                     raise LearningStoreError(
                         f"Invalid mastery interaction transition: {current.value} -> {interaction.status.value}"
@@ -95,6 +104,8 @@ class LearningTransaction:
                     raise LearningReferenceError(
                         "new interaction requires an active knowledge point"
                     )
+                # 未知旧状态不能被 status=ANY(active) 的过滤掩盖并允许第二题写入。
+                u.get_active_interaction(interaction.path_id)
             if (
                 existing is None
                 or existing["session_id"] != interaction.session_id
@@ -134,6 +145,8 @@ class LearningTransaction:
     def abandon_active_interactions(self):
         self._check()
         u = self._unit
+        # 更新语句只选择已知活跃值；先让旧未知值经过程序验证，不能静默跳过。
+        u.get_active_interaction(self.progress.book_id)
         result = u._execute(
             "UPDATE enterprise.mastery_interactions SET status=%s,updated_at=%s WHERE tenant_id=%s AND owner_id=%s AND path_id=%s AND status=ANY(%s)",
             (
@@ -154,6 +167,24 @@ class LearningTransaction:
         try:
             if metadata.path_id != self.progress.book_id:
                 raise ValueError("topic metadata path_id does not match transaction path")
+            previous = u._execute(
+                "SELECT status FROM enterprise.mastery_topic_meta "
+                "WHERE tenant_id=%s AND owner_id=%s AND path_id=%s FOR UPDATE",
+                (*u._owner, metadata.path_id),
+            ).fetchone()
+            if previous:
+                validate_topic_status(previous["status"])
+            old_sources = u._execute(
+                "SELECT kind,external_id FROM enterprise.mastery_topic_sources "
+                "WHERE tenant_id=%s AND owner_id=%s AND path_id=%s FOR UPDATE",
+                (*u._owner, metadata.path_id),
+            )
+            for row in old_sources:
+                validate_topic_source_row(row)
+            for source in sources:
+                validate_topic_source_row(
+                    {"kind": source.kind.value, "external_id": source.source_id}
+                )
             now = time.time()
             u._execute(
                 """INSERT INTO enterprise.mastery_topic_meta

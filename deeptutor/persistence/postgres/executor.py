@@ -34,12 +34,12 @@ class ExecutorLease:
             if not acquired["acquired"]:
                 raise RuntimeError("another executor is active")
             async with c.transaction():
-                row = await (
+                rows = await (
                     await c.execute(
-                        "SELECT * FROM enterprise.executor_state WHERE status='active' FOR UPDATE"
+                        "SELECT status FROM enterprise.executor_state FOR UPDATE"
                     )
-                ).fetchone()
-                if row and row["status"] != "stopped":
+                ).fetchall()
+                if any(row["status"] != "stopped" for row in rows):
                     raise RuntimeError(
                         "previous executor must be confirmed stopped before recovery"
                     )

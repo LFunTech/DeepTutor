@@ -9,6 +9,7 @@ import sys
 import types
 import uuid
 
+import psycopg
 import pytest
 
 from tests.fixtures.postgres import pg_cluster, pg_dsn, single_database_user_dsn  # noqa: F401
@@ -209,6 +210,35 @@ async def test_sdk_explicit_provider_object_after_context_exit_does_not_fallback
             await app.close()
         else:
             await container.close()
+
+
+@pytest.mark.asyncio
+async def test_sdk_get_session_rejects_unknown_persisted_message_role(
+    pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SDK 会话读取必须复用 PG 程序校验，而不是把未知 role 发送给调用方。"""
+
+    token, session, runtime_dsn = await _prepare_default_sdk_environment(
+        pg_dsn, tmp_path, monkeypatch
+    )
+    monkeypatch.setenv("SDK_TOKEN", token)
+
+    from deeptutor.app import DeepTutorApp
+
+    async with DeepTutorApp(auth_token_env="SDK_TOKEN") as app:
+        await app.container.start()
+        async with await psycopg.AsyncConnection.connect(runtime_dsn) as connection:
+            await connection.execute(
+                "ALTER TABLE enterprise.messages DROP CONSTRAINT IF EXISTS messages_role_check"
+            )
+            await connection.execute(
+                "INSERT INTO enterprise.messages(tenant_id,owner_id,session_id,role,content) "
+                "SELECT tenant_id,owner_id,id,'future-role','polluted' "
+                "FROM enterprise.sessions WHERE id=%s",
+                (session["id"],),
+            )
+        with pytest.raises(RuntimeError, match="unknown message role"):
+            await app.get_session(session["id"])
 
 
 @pytest.mark.asyncio

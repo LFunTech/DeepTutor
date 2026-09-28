@@ -4,7 +4,7 @@
 
 需求与决策见 [proposal](proposal.md)。当前普通第三方 JWT exchange 依赖 `tid/eui`，不能成为 OMS 平台会话；`PlatformOidcJwtVerifier` 尚未装配。`oms.school_bindings` 的 `0011` 仅建空表，未经受控核验。TMS 曾假设外部管理员 webhook/双负责人权限；用户现明确首位管理员身份由真实 `subscription.created.actor.user_id` 提供，本产品程序负责一次性引导与本人激活。两端目前只有合成原型，生产管理入口未开放。
 
-**验证证据分级**：2026-09-26 test-cn Woodpecker #58、Webhook secret 同步和 EduPlus2 控制台 8/8 个 `subscription.*` mock HTTP 204 只证明签名 demo 接收；真实事件仍 503。2026-09-18 的真实 discovery/JWKS、M2M、client resolve 和本地交互登录/WS 证据可复用；当时 profile/permission M2M POST 曾返回 404/405，过期 user JWT 的 smoke 未完成完整 exchange。用户现已指定 OMS Client ID，但这些证据仍不等于 `eduplus-platform-admin` 的授权码登录、实际 token audience、在线账号状态、学校权威绑定、TMS 管理员身份或权限撤销已验收。实施时只针对缺口做脱敏核验，不重复已通过的 Webhook demo。
+**验证证据分级**：2026-09-26 test-cn Woodpecker #58、Webhook secret 同步和 EduPlus2 控制台 8/8 个 `subscription.*` mock HTTP 204 只证明签名 demo 接收；2026-09-27 `rc.53` 后真实 created/terminated 已 204，并有学校 PG 绑定及待核验 actor 候选，但未有正式 TMS 本人登录/激活。2026-09-18 的真实 discovery/JWKS、M2M、client resolve 和本地交互登录/WS 证据可复用；当时 profile/permission M2M POST 曾返回 404/405，过期 user JWT 的 smoke 未完成完整 exchange。用户现已指定 OMS Client ID，但这些证据仍不等于 `eduplus-platform-admin` 的授权码登录、实际 token audience、在线账号状态、TMS 管理员身份或权限撤权已验收。实施时只针对缺口做脱敏核验，不重复已通过的 Webhook demo。
 
 ## Goals / Non-Goals
 
@@ -54,6 +54,7 @@ OMS 平台人员列表与候选来自以 `eduplus-platform-admin` 完成可信 O
 | --- | --- | --- | --- |
 | OMS 工作台和学校列表 | `ops.oms.access`；学校行另需 `ops.tenants.read` + 目标 `school` | security admin、获校授权的 operator/auditor | `ops.oms.access`、`ops.tenants.read` |
 | 全局 Provider 配置、Secret | `ops.providers.manage`、`ops.credentials.manage` + `platform`，读/写分权 | config admin；security admin 不因角色名称自动获 Secret | 同后端动作 key |
+| global Skill 包/审查/发布/学校授权 | `ops.skills.read/manage/review/publish` + `platform`，`ops.skills.grant` + 目标 `school`；审查须有服务端检查结果 | 配置管理员管理/发布、安全管理员审查、获目标学校授权的运营员授予；组合角色仍须显式授予 | 同后端动作 key；原型动作不得代替正式 API |
 | 学校权益、额度、定向供给 | `ops.entitlements.manage`、`ops.quotas.manage`、`ops.supply.manage` + 目标 `school`；影响全局供给另需 `platform` | 明确获校授权的 operator | 同后端动作 key |
 | 成本、审计与导出 | `ops.cost.read`、`ops.audit.read`、`ops.audit.export` 分别授予所需范围 | 单独授权的 auditor/security admin | 同后端动作 key |
 | 平台人员、角色/动作、平台人员学校范围 | `ops.permissions.manage` + `platform` 启动变更；目标学校须核验，授予动作/范围另受委托上界控制；不读取学校账号 | security admin | `ops.permissions.manage` |

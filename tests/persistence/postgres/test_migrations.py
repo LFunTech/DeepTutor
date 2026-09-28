@@ -28,6 +28,8 @@ SCHEMA_11_VERSION = "0011_marginnote_store"
 SCHEMA_12_VERSION = "0012_offline_import_stage"
 SCHEMA_13_VERSION = "0013_courses"
 SCHEMA_14_VERSION = "0014_externalized_runtime"
+SCHEMA_15_VERSION = "0015_remove_legacy_database_functions"
+SCHEMA_16_VERSION = "0016_relocate_database_business_rules"
 SCHEMA_1_SHA256 = "f6a3825321c2d5aaf7f82842e8eed6df7742a2e6a8c7d6bc89e90c013c8a98b8"
 SCHEMA_1_LEGACY_ROLE_GRANT_SHA256 = "06a1a9303d9d45745a31a94ec9a95ce2d864e48ff41be2a6a8d926abdeea7a3f"
 
@@ -108,6 +110,49 @@ async def test_empty_database_apply_accepts_single_database_owner_without_create
     assert role_exists is None
 
 
+async def test_core_forward_migration_removes_legacy_database_functions(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    await runner.verify()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        routines = await (
+            await connection.execute(
+                "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname='enterprise' AND p.prokind IN ('f','p')"
+            )
+        ).fetchall()
+        triggers = await (
+            await connection.execute(
+                "SELECT t.tgname FROM pg_trigger t JOIN pg_class r ON r.oid=t.tgrelid "
+                "JOIN pg_namespace n ON n.oid=r.relnamespace "
+                "WHERE n.nspname='enterprise' AND NOT t.tgisinternal"
+            )
+        ).fetchall()
+    assert routines == []
+    assert triggers == []
+
+
+async def test_core_verify_rejects_reintroduced_database_function(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute(
+            "CREATE FUNCTION enterprise.synthetic_business_rule() RETURNS integer "
+            "LANGUAGE sql AS 'SELECT 1'"
+        )
+    with pytest.raises(RuntimeError, match="database routines"):
+        await runner.verify()
+
+
+async def test_core_verify_rejects_native_database_enum(pg_dsn):
+    runner = MigrationRunner(pg_dsn)
+    await runner.apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        await connection.execute("CREATE TYPE enterprise.synthetic_state AS ENUM ('active')")
+    with pytest.raises(RuntimeError, match="database ENUM"):
+        await runner.verify()
+
+
 async def test_empty_database_apply_is_repeatable_and_concurrent(pg_dsn):
     runners = [MigrationRunner(pg_dsn), MigrationRunner(pg_dsn)]
     assert await runners[0].plan() == [
@@ -125,6 +170,8 @@ async def test_empty_database_apply_is_repeatable_and_concurrent(pg_dsn):
         SCHEMA_12_VERSION,
         SCHEMA_13_VERSION,
         SCHEMA_14_VERSION,
+        SCHEMA_15_VERSION,
+        SCHEMA_16_VERSION,
     ]
 
     await asyncio.gather(*(runner.apply() for runner in runners))
@@ -152,7 +199,10 @@ async def test_empty_database_apply_is_repeatable_and_concurrent(pg_dsn):
     assert history[11][0] == SCHEMA_12_VERSION
     assert history[12][0] == SCHEMA_13_VERSION
     assert history[13][0] == SCHEMA_14_VERSION
-    assert len(history) == 14
+    assert history[14][0] == SCHEMA_15_VERSION
+    assert history[15][0] == SCHEMA_16_VERSION
+    assert history[15][0] == SCHEMA_16_VERSION
+    assert len(history) == 16
 
 
 async def test_role_grant_only_legacy_schema_1_checksum_remains_verifiable(pg_dsn):
@@ -302,6 +352,8 @@ async def test_existing_schema_1_history_data_and_all_ids_are_preserved(pg_dsn):
         SCHEMA_12_VERSION,
         SCHEMA_13_VERSION,
         SCHEMA_14_VERSION,
+        SCHEMA_15_VERSION,
+        SCHEMA_16_VERSION,
     ]
     await runner.apply()
     await runner.verify()
@@ -388,7 +440,10 @@ async def test_existing_schema_1_history_data_and_all_ids_are_preserved(pg_dsn):
     assert history[11][0] == SCHEMA_12_VERSION
     assert history[12][0] == SCHEMA_13_VERSION
     assert history[13][0] == SCHEMA_14_VERSION
-    assert len(history) == 14
+    assert history[14][0] == SCHEMA_15_VERSION
+    assert history[15][0] == SCHEMA_16_VERSION
+    assert history[15][0] == SCHEMA_16_VERSION
+    assert len(history) == 16
 
 
 @pytest.mark.parametrize(
@@ -459,6 +514,8 @@ async def test_failed_migration_rolls_back_schema_data_and_history(pg_dsn, alrea
                 (SCHEMA_12_VERSION,),
                 (SCHEMA_13_VERSION,),
                 (SCHEMA_14_VERSION,),
+                (SCHEMA_15_VERSION,),
+                (SCHEMA_16_VERSION,),
             ]
             assert (
                 await (

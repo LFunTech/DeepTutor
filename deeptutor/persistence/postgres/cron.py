@@ -172,6 +172,22 @@ class PostgresCronRepository(CronRepository):
         job = PostgresCronRepository._job_from_payload(payload)
         state = payload.get("state") or {}
         schedule = job.schedule
+        if not (
+            (schedule.kind == "at" and type(schedule.at_ms) is int and schedule.at_ms > 0
+             and schedule.every_seconds is None and schedule.expr is None)
+            or (schedule.kind == "every" and schedule.at_ms is None
+                and type(schedule.every_seconds) is int and schedule.every_seconds > 0
+                and schedule.expr is None)
+            or (schedule.kind == "cron" and schedule.at_ms is None
+                and schedule.every_seconds is None and isinstance(schedule.expr, str)
+                and bool(schedule.expr.strip()))
+        ):
+            raise ValueError("cron schedule kind or shape is invalid")
+        last_status = state.get("last_status")
+        if last_status is not None and (
+            not isinstance(last_status, str) or last_status not in _TERMINAL_STATUSES
+        ):
+            raise ValueError("cron last status is invalid")
         params = {
             "job_id": job.id,
             "owner_key": job.owner.key,
@@ -196,6 +212,26 @@ class PostgresCronRepository(CronRepository):
             params["revision"] = revision
         return params
 
+    @staticmethod
+    def _validated_stored_job(row) -> dict[str, Any]:
+        """拒绝旧约束退役后未知或与 JSON 投影不一致的持久化状态。"""
+
+        payload = deepcopy(row["payload"])
+        try:
+            expected = PostgresCronRepository._upsert_params(payload)
+        except (KeyError, TypeError, ValueError) as error:
+            raise CronRepositoryError("cron stored job has invalid status or schedule") from error
+        for column, key in (
+            ("schedule_kind", "schedule_kind"),
+            ("at_ms", "at_ms"),
+            ("every_seconds", "every_seconds"),
+            ("cron_expr", "cron_expr"),
+            ("last_status", "last_status"),
+        ):
+            if row[column] != expected[key]:
+                raise CronRepositoryError("cron stored job status or schedule differs from payload")
+        return payload
+
     # ── CronRepository protocol ──────────────────────────────────
 
     def revision(self) -> int:
@@ -213,13 +249,14 @@ class PostgresCronRepository(CronRepository):
         with self._unit() as unit:
             rows = unit._execute(
                 """
-                SELECT payload FROM enterprise.cron_jobs
+                SELECT payload,schedule_kind,at_ms,every_seconds,cron_expr,last_status
+                  FROM enterprise.cron_jobs
                  WHERE tenant_id = %s AND owner_id = %s
                  ORDER BY COALESCE(next_run_at_ms, 0), job_id
                 """,
                 unit._owner,
             ).fetchall()
-            return [deepcopy(row["payload"]) for row in rows]
+            return [self._validated_stored_job(row) for row in rows]
 
     def upsert(self, payload: dict[str, Any]) -> None:
         payload = deepcopy(payload)
@@ -329,7 +366,7 @@ class PostgresCronRepository(CronRepository):
         with self._unit(write=True) as unit:
             row = unit._execute(
                 """
-                SELECT payload, revision
+                SELECT payload, revision,schedule_kind,at_ms,every_seconds,cron_expr,last_status
                   FROM enterprise.cron_jobs
                  WHERE tenant_id = %s AND owner_id = %s AND job_id = %s
                  FOR UPDATE
@@ -338,7 +375,7 @@ class PostgresCronRepository(CronRepository):
             ).fetchone()
             if row is None:
                 return False
-            payload = deepcopy(row["payload"])
+            payload = self._validated_stored_job(row)
             job = self._job_from_payload(payload)
             if owner_key is not None and job.owner.key != owner_key:
                 return False
@@ -386,7 +423,8 @@ class PostgresCronRepository(CronRepository):
         with self._unit(write=True) as unit:
             due_rows = unit._execute(
                 """
-                SELECT job_id, owner_key, next_run_at_ms, payload, revision
+                SELECT job_id, owner_key, next_run_at_ms, payload, revision,
+                       schedule_kind,at_ms,every_seconds,cron_expr,last_status
                   FROM enterprise.cron_jobs
                  WHERE tenant_id = %s AND owner_id = %s
                    AND enabled
@@ -400,7 +438,7 @@ class PostgresCronRepository(CronRepository):
             ).fetchall()
             claims: list[CronExecutionClaim] = []
             for row in due_rows:
-                payload = deepcopy(row["payload"])
+                payload = self._validated_stored_job(row)
                 job = self._job_from_payload(payload)
                 scheduled_run_at_ms = int(row["next_run_at_ms"])
                 claimed_at_ms = _now_ms()
@@ -494,7 +532,8 @@ class PostgresCronRepository(CronRepository):
 
             row = unit._execute(
                 """
-                SELECT payload, revision, schedule_kind, delete_after_run
+                SELECT payload, revision, schedule_kind, delete_after_run,
+                       at_ms,every_seconds,cron_expr,last_status
                   FROM enterprise.cron_jobs
                  WHERE tenant_id = %s AND owner_id = %s AND job_id = %s
                  FOR UPDATE
@@ -504,7 +543,7 @@ class PostgresCronRepository(CronRepository):
             if row is None or int(row["revision"]) != claim.job_revision:
                 raise CronClaimConflict("cron job version no longer matches claim")
 
-            payload = deepcopy(row["payload"])
+            payload = self._validated_stored_job(row)
             state = self._payload_state(payload)
             state["last_run_at_ms"] = claim.claimed_at_ms
             state["last_status"] = status
@@ -591,12 +630,13 @@ class PostgresCronRepository(CronRepository):
     def _payload_for_job(self, job_id: str) -> dict[str, Any] | None:
         row = self._execute(
             """
-            SELECT payload FROM enterprise.cron_jobs
+            SELECT payload,schedule_kind,at_ms,every_seconds,cron_expr,last_status
+              FROM enterprise.cron_jobs
              WHERE tenant_id = %s AND owner_id = %s AND job_id = %s
             """,
             (*self._owner, job_id),
         ).fetchone()
-        return deepcopy(row["payload"]) if row else None
+        return self._validated_stored_job(row) if row else None
 
     def list_executions(self, job_id: str | None = None) -> list[dict[str, Any]]:
         with self._unit() as unit:
@@ -624,7 +664,14 @@ class PostgresCronRepository(CronRepository):
                     """,
                     (*unit._owner, job_id),
                 ).fetchall()
-            return [dict(row) for row in rows]
+            result = []
+            for row in rows:
+                if row["status"] not in {"claimed", *_TERMINAL_STATUSES} or (
+                    (row["status"] == "claimed") != (row["completed_at_ms"] is None)
+                ):
+                    raise CronRepositoryError("cron execution has invalid persisted status")
+                result.append(dict(row))
+            return result
 
 
 class AsyncPostgresCronRepository:

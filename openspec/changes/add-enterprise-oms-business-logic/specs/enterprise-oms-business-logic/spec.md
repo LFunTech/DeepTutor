@@ -28,9 +28,15 @@ OMS SHALL 将云端 Skill 的 owner 与来源分开：owner 仅为 `global` 或�
 
 非 builtin global Skill 的创建与更新 MUST 提交包含唯一有效 `SKILL.md` 的完整 ZIP 包；受控 Hub 导入 MUST 先取得并校验真实包。服务端 MUST 从 `SKILL.md` 的 YAML frontmatter 与 Markdown 正文读取全部 Skill 内容元数据与说明，拒绝缺失或无效 `name`/`description`、空正文、目录名不一致及危险/损坏/超限 ZIP，不得以表单字段、ZIP 文件名或请求自报 owner/状态补齐。owner、来源、审核/发布状态、授权和包摘要 MUST 从可信平台上下文与不可变包版本确定；脚本及 `always` 未经安全审查不得执行或启用。更新 MUST 形成待复核的新包版本，不得在线覆写已发布内容或借旧授权静默生效。
 
+正式 OMS 的 Skill 查询、包管理、安全审查、版本发布和学校授权 SHALL 分别使用 DeepTutor Enterprise 的 `ops.skills.read/manage/review/publish/grant` 动作与适用的 `platform`/目标 `school` 范围；动作目录、模板和前端按钮须由本仓库后续版本化迁移与真实 API 同步交付，不得以 `ops.oms.access`、`ops.providers.manage`、EduPlus2 角色或前端显隐代替。审查动作必须记录实际服务端检查结果和操作者，不得以按钮点击伪称安全检查通过。首次登录仍为零权，测试环境也不得由请求自报角色或手工补数据库绕过。
+
 #### Scenario: 后授权同名 global Skill
 - **WHEN** 平台管理员把已发布的 global Skill 授权给已有同名 tenant Skill 的学校
 - **THEN** OMS 说明该校运行时仍优先使用 tenant 版本，global 版本保留为已授权但被覆盖；其他没有同名 tenant Skill 的获授权租户可直接使用 global 版本
+
+#### Scenario: 未经真实审查的 Skill 进入首个 Agent
+- **WHEN** 操作者仅在前端登记“审查通过”而没有服务端检查结果，或受控服务主体请求未发布、未获目标学校授权的 Skill
+- **THEN** OMS/执行路径拒绝，manifest、`read_skill` 与 `always` 注入均不可得到该包；浏览器原型状态不改变这一结果
 
 ### Requirement: 云端 builtin Skill 必须默认未授权且在所有执行入口受控
 
