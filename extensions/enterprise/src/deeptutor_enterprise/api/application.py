@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime
+from decimal import Decimal
 import hashlib
 import hmac
 import json
@@ -9,6 +10,7 @@ import logging
 import re
 import secrets
 import time
+from typing import Literal
 import uuid
 from uuid import UUID
 
@@ -86,6 +88,7 @@ class AuthenticationMiddleware:
             "/api/v1/eduplus2/webhooks",
             "/api/v1/tms/school-bootstrap/status",
             "/api/v1/tms/school-bootstrap/activate",
+            "/api/v1/tms/quotas",
             "/api/v1/auth/eduplus2/demo/start",
             "/api/v1/auth/eduplus2/demo/callback",
             "/api/v1/auth/eduplus2/demo/result",
@@ -250,6 +253,18 @@ class OmsModelDraftRequest(BaseModel):
     models: tuple[ModelDeployment, ...] = Field(min_length=1, max_length=32)
 
 
+class OmsModelPublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsModelRollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class OmsSkillReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -274,6 +289,49 @@ class OmsSkillGrantRequest(BaseModel):
 class OmsSkillRevokeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_grant_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsEntitlementCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["active", "revoked"]
+    starts_at: datetime
+    expires_at: datetime
+    expected_version: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsQuotaGrantCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    grant_id: UUID
+    service_id: str = Field(min_length=1, max_length=255)
+    unit_code: str = Field(min_length=1, max_length=255)
+    acquisition_method: Literal["gift", "recharge"]
+    quantity: Decimal = Field(gt=0)
+    starts_at: datetime
+    expires_at: datetime
+    provider_id: str = Field(min_length=1, max_length=255)
+    provider_account_id: str = Field(default="", max_length=255)
+    pool_id: str = Field(min_length=1, max_length=255)
+    source_ref: str = Field(min_length=1, max_length=255)
+    expected_entitlement_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsQuotaAdjustCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    new_quantity: Decimal = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsQuotaCloseCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=255)
     reason: str = Field(min_length=1, max_length=1000)
 
 
@@ -489,11 +547,17 @@ def create_application(enterprise):
             )
             async with enterprise.db.transaction(scope) as c:
                 await require_management_permission(
-                    c, actor, "ops.oms.access", target_school_id=target_school_id,
+                    c,
+                    actor,
+                    "ops.oms.access",
+                    target_school_id=target_school_id,
                     write=False,
                 )
                 decision = await require_management_permission(
-                    c, actor, action, target_school_id=target_school_id,
+                    c,
+                    actor,
+                    action,
+                    target_school_id=target_school_id,
                     write=False,
                 )
         except ManagementAuthorizationDenied:
@@ -501,6 +565,15 @@ def create_application(enterprise):
         except (RuntimeError, psycopg.Error):
             return JSONResponse({"detail": "Permission unavailable"}, status_code=503)
         return actor, decision
+
+    def _decimal_text(value) -> str:
+        text = format(Decimal(value).normalize(), "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return "0" if text in {"", "-0"} else text
+
+    def _request_id(request: Request) -> str:
+        return request.headers.get("x-request-id") or str(uuid.uuid4())
 
     @oms.get("/me")
     async def oms_me(request: Request):
@@ -518,11 +591,28 @@ def create_application(enterprise):
 
     @oms.get("/models")
     async def oms_models(request: Request):
-        """只展示当前部署的模型标识；不将部署配置冒充 OMS 可发布草稿。"""
+        """展示当前 active 模型；未发布时只展示部署基线且不冒充 OMS 托管。"""
+
+        from deeptutor.persistence.postgres.scope import GlobalScope
+
+        from ..oms.model_drafts import redacted_model_items
 
         authorized = await _authorize_oms_request(request, "ops.providers.read")
         if isinstance(authorized, JSONResponse):
             return authorized
+        try:
+            async with enterprise.db.transaction(GlobalScope("@oms-model-inventory")) as c:
+                row = await (
+                    await c.execute(
+                        "SELECT active,status FROM oms.model_catalog_config WHERE id='global'"
+                    )
+                ).fetchone()
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+        if row and isinstance(row["active"], dict) and row["active"]:
+            models = redacted_model_items(row["active"], source="oms_active", status="active")
+            if models:
+                return {"models": models}
         return {
             "models": [
                 {
@@ -537,6 +627,20 @@ def create_application(enterprise):
                 for model in enterprise.deployment.models
             ]
         }
+
+    @oms.get("/resources/status")
+    async def oms_resources_status(request: Request):
+        """五类平台资源的安全状态投影；不暴露 Secret、endpoint 或租户正文。"""
+
+        from ..oms.resource_status import build_resource_status
+
+        authorized = await _authorize_oms_request(request, "ops.providers.read")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        try:
+            return await build_resource_status(enterprise)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Resource status unavailable"}, status_code=503)
 
     @oms.post("/models/draft")
     async def oms_model_draft(request: Request, command: OmsModelDraftRequest):
@@ -568,6 +672,102 @@ def create_application(enterprise):
             return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
         return {"version": version, "status": "saved"}
 
+    @oms.post("/models/publish")
+    async def oms_model_publish(request: Request, command: OmsModelPublishRequest):
+        """发布已保存草稿；当前 backend 执行者装载确认成功后才写 active。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.model_drafts import (
+            ModelDraftConflict,
+            ModelPublishUnavailable,
+            publish_global_model_catalog,
+        )
+
+        authorized = await _authorize_oms_request(request, "ops.providers.manage")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            return await publish_global_model_catalog(
+                enterprise,
+                actor,
+                expected_version=command.expected_version,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except ModelDraftConflict:
+            return JSONResponse({"detail": "Version conflict"}, status_code=409)
+        except ModelPublishUnavailable:
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid model publish"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+
+    @oms.post("/models/test")
+    async def oms_model_test(request: Request, command: OmsModelPublishRequest):
+        """测试已保存草稿；目标执行者确认成功也不写 active。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.model_drafts import (
+            ModelDraftConflict,
+            ModelPublishUnavailable,
+            test_global_model_catalog,
+        )
+
+        authorized = await _authorize_oms_request(request, "ops.providers.manage")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            return await test_global_model_catalog(
+                enterprise,
+                actor,
+                expected_version=command.expected_version,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except ModelDraftConflict:
+            return JSONResponse({"detail": "Version conflict"}, status_code=409)
+        except ModelPublishUnavailable:
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid model test"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+
+    @oms.post("/models/rollback")
+    async def oms_model_rollback(request: Request, command: OmsModelRollbackRequest):
+        """丢弃未生效草稿或失败状态，继续使用当前 active。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.model_drafts import ModelDraftConflict, rollback_global_model_catalog
+
+        authorized = await _authorize_oms_request(request, "ops.providers.manage")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            return await rollback_global_model_catalog(
+                enterprise,
+                actor,
+                expected_version=command.expected_version,
+                reason=command.reason,
+                request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except ModelDraftConflict:
+            return JSONResponse({"detail": "Version conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid model rollback"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Model configuration unavailable"}, status_code=503)
+
     @oms.get("/models/draft")
     async def oms_model_draft_read(request: Request):
         """只读脱敏草稿；目标执行者未确认前不显示为可用模型。"""
@@ -578,6 +778,7 @@ def create_application(enterprise):
             ManagementAuthorizationDenied,
             require_management_permission,
         )
+        from ..oms.model_drafts import redacted_model_items
 
         authorized = await _authorize_oms_request(request, "ops.providers.read")
         if isinstance(authorized, JSONResponse):
@@ -604,19 +805,7 @@ def create_application(enterprise):
         return {
             "version": row["version"],
             "status": row["status"],
-            "models": [
-                {
-                    "profile_id": model.get("profile_id"),
-                    "model_id": model.get("model_id"),
-                    "model": model.get("model"),
-                    "provider": model.get("provider"),
-                    "source": "oms_draft",
-                    "managed": True,
-                    "status": "not_active",
-                }
-                for model in models
-                if isinstance(model, dict)
-            ],
+            "models": redacted_model_items(row["desired"], source="oms_draft", status="not_active"),
         }
 
     @oms.post("/skills/draft")
@@ -678,9 +867,7 @@ def create_application(enterprise):
         }
 
     @oms.post("/skills/revisions/{revision_id}/review")
-    async def oms_skill_review(
-        request: Request, revision_id: UUID, command: OmsSkillReviewRequest
-    ):
+    async def oms_skill_review(request: Request, revision_id: UUID, command: OmsSkillReviewRequest):
         """只允许独立审查人；服务端复读不可变 ZIP，不能由按钮伪造审查。"""
 
         from ..management.authorization import ManagementAuthorizationDenied
@@ -693,7 +880,9 @@ def create_application(enterprise):
         actor, _ = authorized
         try:
             result = await review_global_skill(
-                enterprise, actor, revision_id,
+                enterprise,
+                actor,
+                revision_id,
                 expected_sha256=command.expected_sha256,
                 approved=command.approved,
                 reason=command.reason,
@@ -729,7 +918,9 @@ def create_application(enterprise):
         actor, _ = authorized
         try:
             result = await publish_global_skill(
-                enterprise, actor, revision_id,
+                enterprise,
+                actor,
+                revision_id,
                 expected_version=command.expected_version,
                 reason=command.reason,
                 request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
@@ -764,7 +955,10 @@ def create_application(enterprise):
         actor, _ = authorized
         try:
             result = await grant_global_skill(
-                enterprise, actor, school_id, name,
+                enterprise,
+                actor,
+                school_id,
+                name,
                 expected_grant_version=command.expected_grant_version,
                 expires_at=command.expires_at,
                 reason=command.reason,
@@ -779,7 +973,8 @@ def create_application(enterprise):
         except (RuntimeError, psycopg.Error):
             return JSONResponse({"detail": "Skill grant unavailable"}, status_code=503)
         return {
-            "school_id": str(result.school_id), "name": result.name,
+            "school_id": str(result.school_id),
+            "name": result.name,
             "revision_id": str(result.revision_id),
             "grant_version": result.grant_version,
             "publication_version": result.publication_version,
@@ -801,7 +996,10 @@ def create_application(enterprise):
         actor, _ = authorized
         try:
             result = await revoke_global_skill(
-                enterprise, actor, school_id, name,
+                enterprise,
+                actor,
+                school_id,
+                name,
                 expected_grant_version=command.expected_grant_version,
                 reason=command.reason,
                 request_id=request.headers.get("x-request-id") or str(uuid.uuid4()),
@@ -815,11 +1013,311 @@ def create_application(enterprise):
         except (RuntimeError, psycopg.Error):
             return JSONResponse({"detail": "Skill grant unavailable"}, status_code=503)
         return {
-            "school_id": str(result.school_id), "name": result.name,
+            "school_id": str(result.school_id),
+            "name": result.name,
             "revision_id": str(result.revision_id),
             "grant_version": result.grant_version,
             "publication_version": result.publication_version,
             "status": result.status,
+        }
+
+    @oms.get("/schools/{school_id}/quota")
+    async def oms_school_quota_summary(request: Request, school_id: UUID):
+        """OMS 同一学校服务授权与赠送/充值额度列表；不回显采购凭据。"""
+
+        from ..management.authorization import (
+            ManagementAuthorizationDenied,
+            require_management_permission,
+        )
+
+        authorized = await _authorize_oms_request(
+            request, "ops.quotas.read", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            async with enterprise.db.transaction(TenantScope(str(school_id), actor.subject)) as c:
+                await require_management_permission(
+                    c,
+                    actor,
+                    "ops.entitlements.read",
+                    target_school_id=school_id,
+                    write=False,
+                )
+                entitlements = await (
+                    await c.execute(
+                        "SELECT service_id,status,starts_at,expires_at,version "
+                        "FROM oms.tenant_service_entitlements "
+                        "WHERE tenant_id=%s ORDER BY service_id",
+                        (school_id,),
+                    )
+                ).fetchall()
+                grants = await (
+                    await c.execute(
+                        "SELECT id,service_id,unit_code,acquisition_method,quantity,"
+                        "adjustment_released,status,version,starts_at,expires_at,source_ref "
+                        "FROM oms.quota_grants WHERE tenant_id=%s "
+                        "ORDER BY created_at DESC,id",
+                        (school_id,),
+                    )
+                ).fetchall()
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Quota summary unavailable"}, status_code=503)
+        return {
+            "school_id": str(school_id),
+            "entitlements": [
+                {
+                    "service_id": row["service_id"],
+                    "status": row["status"],
+                    "starts_at": row["starts_at"].isoformat(),
+                    "expires_at": row["expires_at"].isoformat(),
+                    "version": row["version"],
+                }
+                for row in entitlements
+            ],
+            "grants": [
+                {
+                    "grant_id": str(row["id"]),
+                    "service_id": row["service_id"],
+                    "unit_code": row["unit_code"],
+                    "acquisition_method": row["acquisition_method"],
+                    "quantity": _decimal_text(row["quantity"]),
+                    "adjustment_released": _decimal_text(row["adjustment_released"]),
+                    "status": row["status"],
+                    "version": row["version"],
+                    "starts_at": row["starts_at"].isoformat(),
+                    "expires_at": row["expires_at"].isoformat(),
+                    "source_ref_hash": hashlib.sha256(row["source_ref"].encode()).hexdigest(),
+                }
+                for row in grants
+            ],
+        }
+
+    @oms.post("/schools/{school_id}/entitlements/{service_id}")
+    async def oms_school_entitlement_set(
+        request: Request,
+        school_id: UUID,
+        service_id: str,
+        command: OmsEntitlementCommandRequest,
+    ):
+        from ..oms.entitlements import (
+            EntitlementRejected,
+            EntitlementRequest,
+            OmsEntitlementLedger,
+        )
+
+        authorized = await _authorize_oms_request(
+            request, "ops.entitlements.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsEntitlementLedger(enterprise.db).set(
+                TenantScope(str(school_id), actor.subject),
+                EntitlementRequest(
+                    service_id=service_id,
+                    status=command.status,
+                    starts_at=command.starts_at,
+                    expires_at=command.expires_at,
+                    expected_version=command.expected_version,
+                    actor_subject=actor.subject,
+                    request_id=_request_id(request),
+                    idempotency_key=command.idempotency_key,
+                    reason=command.reason,
+                ),
+                management_identity=actor,
+            )
+        except EntitlementRejected:
+            return JSONResponse({"detail": "Entitlement conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid entitlement command"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Entitlement unavailable"}, status_code=503)
+        return {
+            "service_id": result.service_id,
+            "status": result.status,
+            "version": result.version,
+        }
+
+    @oms.post("/schools/{school_id}/quota-grants")
+    async def oms_school_quota_grant(
+        request: Request,
+        school_id: UUID,
+        command: OmsQuotaGrantCommandRequest,
+    ):
+        from ..oms.ledger import GrantRejected, GrantRequest, InsufficientSupply, OmsGrantLedger
+
+        authorized = await _authorize_oms_request(
+            request, "ops.quotas.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsGrantLedger(enterprise.db).grant(
+                TenantScope(str(school_id), actor.subject),
+                GrantRequest(
+                    grant_id=command.grant_id,
+                    service_id=command.service_id,
+                    unit_code=command.unit_code,
+                    acquisition_method=command.acquisition_method,
+                    quantity=command.quantity,
+                    starts_at=command.starts_at,
+                    expires_at=command.expires_at,
+                    provider_id=command.provider_id,
+                    provider_account_id=command.provider_account_id,
+                    pool_id=command.pool_id,
+                    source_ref=command.source_ref,
+                    actor_subject=actor.subject,
+                    request_id=_request_id(request),
+                    idempotency_key=command.idempotency_key,
+                    reason=command.reason,
+                    expected_entitlement_version=command.expected_entitlement_version,
+                ),
+                management_identity=actor,
+            )
+        except InsufficientSupply:
+            return JSONResponse({"detail": "Insufficient supply"}, status_code=409)
+        except GrantRejected:
+            return JSONResponse({"detail": "Quota grant conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid quota grant"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Quota grant unavailable"}, status_code=503)
+        return {
+            "grant_id": str(result.grant_id),
+            "allocations": [
+                {"lot_id": str(lot_id), "quantity": _decimal_text(quantity)}
+                for lot_id, quantity in result.allocations
+            ],
+        }
+
+    @oms.patch("/schools/{school_id}/quota-grants/{grant_id}")
+    async def oms_school_quota_adjust(
+        request: Request,
+        school_id: UUID,
+        grant_id: UUID,
+        command: OmsQuotaAdjustCommandRequest,
+    ):
+        from ..oms.ledger import AdjustRequest, GrantRejected, InsufficientSupply, OmsGrantLedger
+
+        authorized = await _authorize_oms_request(
+            request, "ops.quotas.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsGrantLedger(enterprise.db).adjust(
+                TenantScope(str(school_id), actor.subject),
+                AdjustRequest(
+                    grant_id=grant_id,
+                    expected_version=command.expected_version,
+                    new_quantity=command.new_quantity,
+                    actor_subject=actor.subject,
+                    request_id=_request_id(request),
+                    idempotency_key=command.idempotency_key,
+                    reason=command.reason,
+                ),
+                management_identity=actor,
+            )
+        except InsufficientSupply:
+            return JSONResponse({"detail": "Insufficient supply"}, status_code=409)
+        except GrantRejected:
+            return JSONResponse({"detail": "Quota adjustment conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid quota adjustment"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Quota adjustment unavailable"}, status_code=503)
+        return {
+            "grant_id": str(result.grant_id),
+            "version": result.version,
+            "previous_quantity": _decimal_text(result.previous_quantity),
+            "quantity": _decimal_text(result.quantity),
+        }
+
+    @oms.post("/schools/{school_id}/quota-grants/{grant_id}/revoke")
+    async def oms_school_quota_revoke(
+        request: Request,
+        school_id: UUID,
+        grant_id: UUID,
+        command: OmsQuotaCloseCommandRequest,
+    ):
+        from ..oms.ledger import GrantRejected, OmsGrantLedger, RevokeRequest
+
+        authorized = await _authorize_oms_request(
+            request, "ops.quotas.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsGrantLedger(enterprise.db).revoke(
+                TenantScope(str(school_id), actor.subject),
+                RevokeRequest(
+                    grant_id=grant_id,
+                    expected_version=command.expected_version,
+                    actor_subject=actor.subject,
+                    request_id=_request_id(request),
+                    idempotency_key=command.idempotency_key,
+                    reason=command.reason,
+                ),
+                management_identity=actor,
+            )
+        except GrantRejected:
+            return JSONResponse({"detail": "Quota revoke conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid quota revoke"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Quota revoke unavailable"}, status_code=503)
+        return {
+            "grant_id": str(result.grant_id),
+            "version": result.version,
+            "released_units": _decimal_text(result.released_units),
+        }
+
+    @oms.post("/schools/{school_id}/quota-grants/{grant_id}/expire")
+    async def oms_school_quota_expire(
+        request: Request,
+        school_id: UUID,
+        grant_id: UUID,
+        command: OmsQuotaCloseCommandRequest,
+    ):
+        from ..oms.ledger import ExpireRequest, GrantRejected, OmsGrantLedger
+
+        authorized = await _authorize_oms_request(
+            request, "ops.quotas.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsGrantLedger(enterprise.db).expire(
+                TenantScope(str(school_id), actor.subject),
+                ExpireRequest(
+                    grant_id=grant_id,
+                    expected_version=command.expected_version,
+                    actor_subject=actor.subject,
+                    request_id=_request_id(request),
+                    idempotency_key=command.idempotency_key,
+                    reason=command.reason,
+                ),
+                management_identity=actor,
+            )
+        except GrantRejected:
+            return JSONResponse({"detail": "Quota expire conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid quota expire"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Quota expire unavailable"}, status_code=503)
+        return {
+            "grant_id": str(result.grant_id),
+            "version": result.version,
+            "released_units": _decimal_text(result.released_units),
         }
 
     async def require_audit_admin():
@@ -985,6 +1483,123 @@ def create_application(enterprise):
         if not bearer.lower().startswith("bearer "):
             raise TmsAuthenticationDenied("TMS bearer token is missing")
         return await trusted_tms_identity_from_token(enterprise, bearer[7:])
+
+    @tms_bootstrap.get("/quotas")
+    async def tms_quota_summary(request: Request):
+        """TMS 当前学校配额只读安全视图；不暴露供给、成本或 Secret 关联字段。"""
+
+        from ..management.authorization import (
+            ManagementAuthorizationDenied,
+            require_management_permission,
+        )
+        from ..management.tms_identity import TmsAuthenticationDenied, TmsSchoolDenied
+
+        headers = {"Cache-Control": "no-store"}
+        try:
+            identity = await _tms_bootstrap_identity(request)
+            async with enterprise.db.transaction(
+                TenantScope(str(identity.school_id), "@tms-quota-summary")
+            ) as c:
+                await require_management_permission(
+                    c,
+                    identity,
+                    "tenant.tms.access",
+                    target_school_id=identity.school_id,
+                    write=False,
+                )
+                await require_management_permission(
+                    c,
+                    identity,
+                    "tenant.quotas.read",
+                    target_school_id=identity.school_id,
+                    write=False,
+                )
+                await require_management_permission(
+                    c,
+                    identity,
+                    "tenant.usage.read",
+                    target_school_id=identity.school_id,
+                    write=False,
+                )
+                entitlements = await (
+                    await c.execute(
+                        "SELECT service_id,status,starts_at,expires_at,version "
+                        "FROM oms.tenant_service_entitlements "
+                        "WHERE tenant_id=%s ORDER BY service_id",
+                        (identity.school_id,),
+                    )
+                ).fetchall()
+                grants = await (
+                    await c.execute(
+                        "SELECT id,service_id,unit_code,acquisition_method,quantity,"
+                        "adjustment_released,status,version,starts_at,expires_at "
+                        "FROM oms.quota_grants WHERE tenant_id=%s "
+                        "ORDER BY created_at DESC,id",
+                        (identity.school_id,),
+                    )
+                ).fetchall()
+                usage = await (
+                    await c.execute(
+                        "SELECT service_id,unit_code,status,count(*) AS attempts,"
+                        "COALESCE(sum(reserved_units),0) AS reserved_units,"
+                        "COALESCE(sum(settled_units),0) AS settled_units "
+                        "FROM oms.usage_attempts WHERE tenant_id=%s "
+                        "GROUP BY service_id,unit_code,status ORDER BY service_id,status",
+                        (identity.school_id,),
+                    )
+                ).fetchall()
+        except TmsAuthenticationDenied:
+            return JSONResponse(
+                {"detail": "Authentication required"}, status_code=401, headers=headers
+            )
+        except (TmsSchoolDenied, ManagementAuthorizationDenied):
+            return JSONResponse({"detail": "Forbidden"}, status_code=403, headers=headers)
+        except (RuntimeError, TimeoutError, psycopg.Error):
+            return JSONResponse(
+                {"detail": "Quota summary unavailable"}, status_code=503, headers=headers
+            )
+        return JSONResponse(
+            {
+                "school_id": str(identity.school_id),
+                "entitlements": [
+                    {
+                        "service_id": row["service_id"],
+                        "status": row["status"],
+                        "starts_at": row["starts_at"].isoformat(),
+                        "expires_at": row["expires_at"].isoformat(),
+                        "version": row["version"],
+                    }
+                    for row in entitlements
+                ],
+                "grants": [
+                    {
+                        "grant_id": str(row["id"]),
+                        "service_id": row["service_id"],
+                        "unit_code": row["unit_code"],
+                        "acquisition_method": row["acquisition_method"],
+                        "quantity": _decimal_text(row["quantity"]),
+                        "adjustment_released": _decimal_text(row["adjustment_released"]),
+                        "status": row["status"],
+                        "version": row["version"],
+                        "starts_at": row["starts_at"].isoformat(),
+                        "expires_at": row["expires_at"].isoformat(),
+                    }
+                    for row in grants
+                ],
+                "usage": [
+                    {
+                        "service_id": row["service_id"],
+                        "unit_code": row["unit_code"],
+                        "status": row["status"],
+                        "attempts": row["attempts"],
+                        "reserved_units": _decimal_text(row["reserved_units"]),
+                        "settled_units": _decimal_text(row["settled_units"]),
+                    }
+                    for row in usage
+                ],
+            },
+            headers=headers,
+        )
 
     @tms_bootstrap.get("/school-bootstrap/status")
     async def tms_bootstrap_status(request: Request):

@@ -223,9 +223,7 @@ async def test_webhook_does_not_accept_unknown_school_binding_version_without_db
         await c.execute(
             "ALTER TABLE oms.school_bindings DROP CONSTRAINT IF EXISTS school_bindings_version_check"
         )
-        await c.execute(
-            "UPDATE oms.school_bindings SET version=0 WHERE eduplus_tenant_id=10001"
-        )
+        await c.execute("UPDATE oms.school_bindings SET version=0 WHERE eduplus_tenant_id=10001")
     denied = await _deliver(
         app,
         event_id="synthetic-binding-version-suspended",
@@ -370,6 +368,152 @@ async def test_tms_bootstrap_http_uses_verified_token_and_signed_school_binding(
         assert active.json()["status"] == "active"
 
 
+async def test_tms_quota_summary_is_current_school_read_only_and_redacted(app):
+    """学校侧只能读取本校配额安全视图，不能看到供给、成本或 Secret 关联字段。"""
+
+    from deeptutor_enterprise.eduplus2.client import HmacEduPlus2JwtVerifier
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    enterprise.eduplus2_verifier = HmacEduPlus2JwtVerifier(
+        signing_key="synthetic-oidc-signing-key-0123456789", issuer=enterprise.eduplus2_issuer
+    )
+    event_id = "synthetic-tms-quota-" + uuid.uuid4().hex
+    assert (
+        await _deliver(
+            app,
+            event_id=event_id,
+            event_type="subscription.created",
+            status="active",
+            actor={"type": "user", "user_id": "synthetic-quota-admin"},
+        )
+    ).status_code == 204
+    issued_at = int(time.time())
+    claims = {
+        "iss": enterprise.eduplus2_issuer,
+        "iat": issued_at,
+        "exp": issued_at + 300,
+        "tid": "10001",
+        "eui": "synthetic-eui",
+        "sub": "synthetic-quota-admin",
+        "azp": "synthetic-school-client",
+    }
+    token = jwt.encode(claims, "synthetic-oidc-signing-key-0123456789", algorithm="HS256")
+    headers = {"Authorization": "Bearer " + token}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        activated = await client.post(
+            "/api/v1/tms/school-bootstrap/activate",
+            headers={**headers, "X-Request-ID": "synthetic-quota-activation"},
+        )
+        assert activated.status_code == 200, activated.text
+
+    now = datetime.now(timezone.utc)
+    grant_id = uuid.uuid4()
+    async with enterprise.db.transaction(
+        TenantScope(str(enterprise.deployment.tenant_id), "@synthetic-quota-school")
+    ) as c:
+        school_row = await (
+            await c.execute(
+                "SELECT tenant_id FROM oms.school_bindings WHERE eduplus_tenant_id=10001"
+            )
+        ).fetchone()
+        assert school_row is not None
+        school_id = school_row["tenant_id"]
+    async with enterprise.db.transaction(TenantScope(str(school_id), "@synthetic-quota-seed")) as c:
+        await c.execute(
+            "INSERT INTO oms.service_definitions(service_id,unit_code,resource_category,enabled) "
+            "VALUES('search','request','tool_integration',true)"
+        )
+        await c.execute(
+            "INSERT INTO oms.tenant_service_entitlements"
+            "(tenant_id,service_id,status,starts_at,expires_at,created_by) "
+            "VALUES(%s,'search','active',%s,%s,'synthetic-oms')",
+            (school_id, now - timedelta(minutes=1), now + timedelta(days=7)),
+        )
+        await c.execute(
+            "INSERT INTO oms.quota_grants"
+            "(id,tenant_id,service_id,unit_code,acquisition_method,quantity,"
+            "starts_at,expires_at,created_by,source_ref) "
+            "VALUES(%s,%s,'search','request','gift',25,%s,%s,'synthetic-oms',"
+            "'purchase://provider-secret-source')",
+            (grant_id, school_id, now - timedelta(minutes=1), now + timedelta(days=7)),
+        )
+        await c.execute(
+            "INSERT INTO oms.usage_attempts"
+            "(tenant_id,attempt_id,operation_id,service_id,unit_code,provider_id,"
+            "provider_account_id,model_id,config_version,subject_kind,subject_id,user_id,"
+            "status,reserved_units,settled_units,evidence) "
+            "VALUES(%s,%s,%s,'search','request','secret-provider','secret-account',"
+            "'secret-model',1,'user','synthetic-quota-admin','synthetic-quota-admin',"
+            "'settled',3,2,'{\"cost\":\"secret-cost\"}'::jsonb)",
+            (school_id, uuid.uuid4(), uuid.uuid4()),
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        summary = await client.get("/api/v1/tms/quotas", headers=headers)
+        assert summary.status_code == 200, summary.text
+        body = summary.json()
+        assert body["school_id"] == str(school_id)
+        assert body["entitlements"] == [
+            {
+                "service_id": "search",
+                "status": "active",
+                "starts_at": body["entitlements"][0]["starts_at"],
+                "expires_at": body["entitlements"][0]["expires_at"],
+                "version": 1,
+            }
+        ]
+        assert body["grants"] == [
+            {
+                "grant_id": str(grant_id),
+                "service_id": "search",
+                "unit_code": "request",
+                "acquisition_method": "gift",
+                "quantity": "25",
+                "adjustment_released": "0",
+                "status": "active",
+                "version": 1,
+                "starts_at": body["grants"][0]["starts_at"],
+                "expires_at": body["grants"][0]["expires_at"],
+            }
+        ]
+        assert body["usage"] == [
+            {
+                "service_id": "search",
+                "unit_code": "request",
+                "status": "settled",
+                "attempts": 1,
+                "reserved_units": "3",
+                "settled_units": "2",
+            }
+        ]
+        for hidden in (
+            "source_ref",
+            "source_ref_hash",
+            "provider_id",
+            "provider_account_id",
+            "pool_id",
+            "provider-secret-source",
+            "secret-provider",
+            "secret-account",
+            "secret-model",
+            "secret-cost",
+        ):
+            assert hidden not in summary.text
+        assert (
+            await client.post("/api/v1/tms/quotas", headers=headers, json={})
+        ).status_code == 405
+        grants_write = await client.post("/api/v1/tms/quotas/grants", headers=headers, json={})
+        assert grants_write.status_code in {401, 404}
+
+
 async def test_authorized_oms_freeze_survives_webhook_reactivation(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
@@ -413,7 +557,7 @@ async def test_authorized_oms_freeze_survives_webhook_reactivation(app):
             "role_version,scope_kind,school_id,school_binding_version,valid_from,"
             "expires_at,command_id,created_by) VALUES(%s,'oms',%s,"
             "'synthetic_reconciler',1,'school',%s,1,now(),"
-                "now()+interval '100 years',%s,'synthetic-approval')",
+            "now()+interval '100 years',%s,'synthetic-approval')",
             (uuid.uuid4(), operator_id, school_id, uuid.uuid4()),
         )
         await c.execute(

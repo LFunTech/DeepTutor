@@ -24,6 +24,7 @@ async def test_new_oms_migrations_have_no_database_business_routines_or_enum_che
         "0015_remove_fact_mutation_function.sql",
         "0016_skill_review_publication_fences.sql",
         "0017_relocate_database_business_rules.sql",
+        "0018_tenant_service_access_grants.sql",
     ):
         sql = resources.joinpath(name).read_text(encoding="utf8")
         assert not re.search(r"\bCREATE\s+(?:FUNCTION|PROCEDURE|TRIGGER)\b", sql, re.I)
@@ -51,6 +52,7 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "oms/0015_remove_fact_mutation_function",
         "oms/0016_skill_review_publication_fences",
         "oms/0017_relocate_database_business_rules",
+        "oms/0018_tenant_service_access_grants",
     } <= set(await runner.plan())
 
     await runner.apply()
@@ -89,6 +91,7 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         ("0015_remove_fact_mutation_function",),
         ("0016_skill_review_publication_fences",),
         ("0017_relocate_database_business_rules",),
+        ("0018_tenant_service_access_grants",),
     ]
     assert {row[0]: tuple(row[1:]) for row in tables} == {
         "schema_history": (False, False),
@@ -108,6 +111,7 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "skill_revisions": (True, True),
         "skill_publications": (True, True),
         "skill_grants": (True, True),
+        "tenant_service_access_grants": (True, True),
         "skill_reviews": (True, True),
     }
 
@@ -231,7 +235,8 @@ async def test_oms_runner_rejects_binding_retarget_without_version_even_without_
     async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
         await connection.execute(
             "INSERT INTO enterprise.tenants(id,external_eligibility,auth_epoch) "
-            "VALUES(%s,'allowed','synthetic')", (school,)
+            "VALUES(%s,'allowed','synthetic')",
+            (school,),
         )
         await connection.execute(
             "INSERT INTO oms.school_bindings"
@@ -256,7 +261,8 @@ async def test_oms_runner_rejects_binding_retarget_without_version_even_without_
         row = await (
             await connection.execute(
                 "SELECT eduplus_tenant_id,version,source_ref FROM oms.school_bindings "
-                "WHERE tenant_id=%s", (school,)
+                "WHERE tenant_id=%s",
+                (school,),
             )
         ).fetchone()
     assert row == (101, 1, "synthetic://original")
@@ -270,7 +276,12 @@ async def test_oms_runner_rejects_partial_binding_proof_after_enum_checks_retire
             {},
             {
                 uuid.uuid4(): (
-                    101, "pending", 1, datetime.now(timezone.utc), None, "synthetic://partial"
+                    101,
+                    "pending",
+                    1,
+                    datetime.now(timezone.utc),
+                    None,
+                    "synthetic://partial",
                 )
             },
         )
@@ -295,7 +306,10 @@ async def test_school_binding_delete_is_rejected_by_runner_transition(pg_dsn):
     class InvalidDeleteRunner(MigrationRunner):
         def _oms_migrations(self):
             return super()._oms_migrations() + [
-                ("0018_invalid_binding_delete", "DELETE FROM oms.school_bindings WHERE eduplus_tenant_id=101")
+                (
+                    "0018_invalid_binding_delete",
+                    "DELETE FROM oms.school_bindings WHERE eduplus_tenant_id=101",
+                )
             ]
 
     with pytest.raises(RuntimeError, match="school binding transition"):

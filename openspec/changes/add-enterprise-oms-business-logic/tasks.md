@@ -24,13 +24,13 @@
 
 ## 5. B2：租户权益与 TMS 只读契约
 
-- [ ] 5.1 与 TMS 业务 change 固定 service/grant/quota/usage 安全 DTO、版本/时效、当前租户绑定及只读配额 API；验证 TMS 无配额写路由、成本/Secret/跨租户字段不可达。
-- [ ] 5.2 设计服务授权与额度授予的动作权限、有效期/撤销及同步状态；验证 TMS 成员/应用访问 grant 不生成配额授予、预留或实际消耗。
+- [x] 5.1 与 TMS 业务 change 固定 service/grant/quota/usage 安全 DTO、版本/时效、当前租户绑定及只读配额 API；验证 TMS 无配额写路由、成本/Secret/跨租户字段不可达。见 `implementation-evidence.md` §2026-09-28 TMS 当前学校配额只读投影；该 API 仅为当前学校安全投影，不含 TMS 前端、筛选/详情完整交互或真实执行结算验收。
+- [x] 5.2 设计服务授权与额度授予的动作权限、有效期/撤销及同步状态；验证 TMS 成员/应用访问 grant 不生成配额授予、预留或实际消耗。见 `implementation-evidence.md` §2026-09-28 TMS 服务访问 grant 与额度隔离；当前完成应用层账本/迁移和合成验证，正式 TMS API/前端入口仍属 TMS 业务 change。
 
 ## 6. C1：平台资源与配置管理
 
 - [x] 6.1 按新权威边界重新审阅 `add-enterprise-management-authorization`、`add-b2-oms-platform-read-governance` 和 `add-enterprise-all-service-provider-settings`：OMS 平台动作与目标学校授权由 DeepTutor Enterprise 程序判定、仅将事实迁移到本仓库企业 PG，EduPlus2 仅消费既存身份/学校接口，不代做其 OpenFGA/Keycloak 迁移；同时保持 Secret/导出边界、Provider 全服务入口。三份当前修订版已分别获用户批准，旧版批准不作新合同证据；审阅与 strict validation 见 `implementation-evidence.md` §6.1。此项只完成依赖契约复核，不等于外部接口或正式写 API 验收。
-- [ ] 6.2 建立五类平台资源与现有 DeepTutor descriptor/registry 的映射和安全状态 API；逐项验证 search、task 回退、embedding、TTS/STT、image/video、解析/RAG、外部 Agent/工具的条件字段与本地 Web 语义一致。
+- [x] 6.2 建立五类平台资源与现有 DeepTutor descriptor/registry 的映射和安全状态 API；逐项验证 search、task 回退、embedding、TTS/STT、image/video、解析/RAG、外部 Agent/工具的条件字段与本地 Web 语义一致。见 `implementation-evidence.md` §2026-09-28 OMS 平台资源安全状态 API；该 API 只返回脱敏 descriptor/status，不执行探针、不保存配置、不替代 6.3 发布确认。
 - [ ] 6.3 实施并验证受控配置草稿、测试、目标执行者逐实例版本确认、部分确认/超时失败保留旧 active、新实例就绪前装载及回退；Secret 明文不进入响应、日志或审计，云端旧管理旁路被阻断。
 - [ ] 6.4 同步 OMS 原型中供给/调用扣量的简化文案与 fixture，再将独立 OMS 前端接入真实平台身份和资源管理 API；按列表→详情检查普通运营/高权限角色、加载/空/错误/无权限/待生效、审计关联与生产原型 404。
 - [ ] 6.5 与 TMS 业务 change 实施云端 Skill `global`/`tenant` owner 和安全来源模型：非 builtin 创建/更新只接收完整 ZIP，服务端校验包并以 `SKILL.md` 作为全部内容元数据来源，保存不可变版本/摘要且审查前不运行脚本或 `always`；builtin 不可编辑、默认零租户授权并按打包版本复核；OMS 管 global 授权与审核发布，验证无需 TMS 二次分配、未授权 builtin 在清单/`read_skill`/显式请求/`always` 各入口不可达、依赖不足不可用、同名 tenant 优先且本地 DeepTutor 行为不变。
@@ -39,7 +39,7 @@
 
 - [x] 7.1 重订旧逐 Token usage change 并退役旧费用/欠费 change；批准供给、赠送/充值、非 Token 原生单位、待核对、OMS-only 成本的唯一总账和版本化 PG 迁移，不迁入旧租户售价/欠费字段。见 `implementation-evidence.md` §7.1；完成的是获批的目标契约和基础迁移门禁，不是 7.2–7.6 的供给管理、真实执行/核对或成本视图。
 - [x] 7.2 实施供应商供给批次/兼容池与可授予量事务校验；验证供给过期仍保留历史消耗、授予不晚于供给有效期、金额/credits/paygo 无可信上界时拒绝硬额度及新调用，并以并发测试证明不超额承诺。见 `implementation-evidence.md` §7.2；完成内部总账事务与合成验证，不代表平台采购写 API、供应商凭据核验或真实执行者已开放。
-- [ ] 7.3 实施 OMS 租户服务授权及同一列表的赠送/充值额度授予、调整、过期/撤销；验证操作审计、版本冲突、赠送优先与未使用承诺释放。
+- [x] 7.3 实施 OMS 租户服务授权及同一列表的赠送/充值额度授予、调整、过期/撤销；验证操作审计、版本冲突、赠送优先与未使用承诺释放。见 `implementation-evidence.md` §2026-09-28 OMS 服务授权与额度 API；完成的是经 DeepTutor 本产品 school-scope 授权的合成 PG API/总账闭环，不代表真实执行边界或供应商调用已开放。
 - [ ] 7.4 在真实 CLI、HTTP/WS、SDK、后台和 Agent 子调用执行边界接入授权/额度/供给准入与预留；验证单服务耗尽只拒该服务新调用，登录/管理/历史与其他服务可用。
 - [ ] 7.5 以供应商可信 usage/可核验对账结算 Token，以真实原生单位结算其他服务；验证流中断、异步任务、同一 operation 多个可计费 attempt、重复回执、迟到响应、取消未知结果、一次 attempt 跨多笔额度及 Agent 防双扣。
 - [ ] 7.6 实施保留原始证据的核对/更正与 OMS-only 供应商成本视图；验证无成本契约时未核定、不生成租户费用，并检查权限、导出、日志及 TMS DTO 负例。
@@ -47,4 +47,4 @@
 
 ## 8. H：条件性多执行者与高可用
 
-- [ ] 8.1 若启用多实例，先验证跨实例准入/预留/结算的事务一致性、配置版本传播、取消/重试幂等和故障后待核对恢复，并通过 G-H；单实例则明确非 HA、容量与恢复目标。
+- [x] 8.1 若启用多实例，先验证跨实例准入/预留/结算的事务一致性、配置版本传播、取消/重试幂等和故障后待核对恢复，并通过 G-H；单实例则明确非 HA、容量与恢复目标。见 `implementation-evidence.md` §2026-09-28 单实例运行边界；当前仅确认非 HA 单 backend，未启用多实例。

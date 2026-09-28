@@ -209,7 +209,28 @@ class OmsGrantLedger:
     def _reject_value_error(error: OmsValueError) -> None:
         raise GrantRejected(str(error)) from None
 
-    async def adjust(self, scope: TenantScope, request: AdjustRequest) -> AdjustResult:
+    @staticmethod
+    async def _require_quota_management(c, management_identity, tenant_id: UUID) -> None:
+        if management_identity is None:
+            return
+        from ..management.authorization import require_management_permission
+
+        await require_management_permission(
+            c,
+            management_identity,
+            "ops.quotas.manage",
+            target_school_id=tenant_id,
+            write=True,
+            _lock_school_id=tenant_id,
+        )
+
+    async def adjust(
+        self,
+        scope: TenantScope,
+        request: AdjustRequest,
+        *,
+        management_identity=None,
+    ) -> AdjustResult:
         """按版本调整当前额度，只在供给池中转移未使用承诺。"""
 
         _validate_revoke(scope, request)
@@ -238,6 +259,7 @@ class OmsGrantLedger:
         rejected: InsufficientSupply | None = None
         result: AdjustResult | None = None
         async with self.db.transaction(scope) as c:
+            await self._require_quota_management(c, management_identity, tenant_id)
             claimed = await (
                 await c.execute(
                     "INSERT INTO oms.grant_commands"
@@ -539,19 +561,41 @@ class OmsGrantLedger:
         assert result is not None
         return result
 
-    async def revoke(self, scope: TenantScope, request: RevokeRequest) -> RevokeResult:
+    async def revoke(
+        self,
+        scope: TenantScope,
+        request: RevokeRequest,
+        *,
+        management_identity=None,
+    ) -> RevokeResult:
         """只释放未使用承诺；在途预留及历史结算由原 attempt 继续核对。"""
 
         version, released = await self._close_grant(
-            scope, request, action="quota.revoke", terminal_status="revoked", require_due=False
+            scope,
+            request,
+            action="quota.revoke",
+            terminal_status="revoked",
+            require_due=False,
+            management_identity=management_identity,
         )
         return RevokeResult(request.grant_id, version, released)
 
-    async def expire(self, scope: TenantScope, request: ExpireRequest) -> ExpireResult:
+    async def expire(
+        self,
+        scope: TenantScope,
+        request: ExpireRequest,
+        *,
+        management_identity=None,
+    ) -> ExpireResult:
         """到期后释放未使用承诺，远端未知 attempt 的预留继续留账。"""
 
         version, released = await self._close_grant(
-            scope, request, action="quota.expire", terminal_status="expired", require_due=True
+            scope,
+            request,
+            action="quota.expire",
+            terminal_status="expired",
+            require_due=True,
+            management_identity=management_identity,
         )
         return ExpireResult(request.grant_id, version, released)
 
@@ -563,12 +607,14 @@ class OmsGrantLedger:
         action: str,
         terminal_status: str,
         require_due: bool,
+        management_identity=None,
     ) -> tuple[int, Decimal]:
 
         _validate_revoke(scope, request)
         tenant_id = UUID(scope.tenant_id)
         fingerprint = _revoke_fingerprint(scope, request)
         async with self.db.transaction(scope) as c:
+            await self._require_quota_management(c, management_identity, tenant_id)
             claimed = await (
                 await c.execute(
                     "INSERT INTO oms.grant_commands"
@@ -762,13 +808,20 @@ class OmsGrantLedger:
             )
             return updated["version"], released
 
-    async def grant(self, scope: TenantScope, request: GrantRequest) -> GrantResult:
+    async def grant(
+        self,
+        scope: TenantScope,
+        request: GrantRequest,
+        *,
+        management_identity=None,
+    ) -> GrantResult:
         _validate(scope, request)
         tenant_id = UUID(scope.tenant_id)
         fingerprint = _fingerprint(scope, request)
         rejected: InsufficientSupply | None = None
         allocations: list[tuple[UUID, Decimal]] = []
         async with self.db.transaction(scope) as c:
+            await self._require_quota_management(c, management_identity, tenant_id)
             claimed = await (
                 await c.execute(
                     "INSERT INTO oms.grant_commands"

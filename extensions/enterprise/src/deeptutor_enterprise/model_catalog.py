@@ -156,22 +156,50 @@ async def load_runtime_model_deployments(
                 (store.scope.tenant_id, MODEL_CATALOG_SETTING_KEY),
             )
         ).fetchone()
-    if row is None:
-        return tuple(fallback)
-    validate_runtime_setting_row(row)
-    # desired 是未确认草稿；任何状态下都不能成为执行者读取的有效配置。
-    # 发布失败或部分确认时继续使用上一 active；首版未发布时回退部署基线。
+    if row is not None:
+        validate_runtime_setting_row(row)
+        # desired 是未确认草稿；任何状态下都不能成为执行者读取的有效配置。
+        # 发布失败或部分确认时继续使用上一 active。
+        catalog = row["active"]
+        if catalog:
+            if not isinstance(catalog, dict):
+                raise RuntimeError("model catalog setting is invalid")
+            models = [await _entry_to_model(store, entry) for entry in _flat_entries(catalog)]
+            if not models:
+                raise RuntimeError("model catalog has no usable model profiles")
+            keys = [(model.profile_id, model.model_id) for model in models]
+            if len(keys) != len(set(keys)):
+                raise RuntimeError("model catalog contains duplicate model selections")
+            return tuple(models)
+
+    global_models = await _load_global_oms_model_deployments(store)
+    if global_models:
+        return global_models
+    return tuple(fallback)
+
+
+async def _load_global_oms_model_deployments(store) -> tuple[ModelDeployment, ...]:
+    """租户未自定义时加载 OMS 已发布全局模型；草稿绝不生效。"""
+
+    async with store.db.transaction(store.scope) as c:
+        row = await (
+            await c.execute(
+                "SELECT active,status FROM oms.model_catalog_config WHERE id='global'", ()
+            )
+        ).fetchone()
+    if row is None or not row["active"]:
+        return ()
+    if row["status"] not in {"saved", "active", "failed"}:
+        raise ValueError("unknown persisted model catalog status")
     catalog = row["active"]
-    if not catalog:
-        return tuple(fallback)
     if not isinstance(catalog, dict):
-        raise RuntimeError("model catalog setting is invalid")
-    models = [await _entry_to_model(store, entry) for entry in _flat_entries(catalog)]
+        raise RuntimeError("global OMS model catalog is invalid")
+    models = [ModelDeployment.model_validate(entry) for entry in _flat_entries(catalog)]
     if not models:
-        raise RuntimeError("model catalog has no usable model profiles")
+        raise RuntimeError("global OMS model catalog has no usable model profiles")
     keys = [(model.profile_id, model.model_id) for model in models]
     if len(keys) != len(set(keys)):
-        raise RuntimeError("model catalog contains duplicate model selections")
+        raise RuntimeError("global OMS model catalog contains duplicate model selections")
     return tuple(models)
 
 

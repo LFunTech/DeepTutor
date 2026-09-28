@@ -58,6 +58,7 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "oms/0015_remove_fact_mutation_function",
     "oms/0016_skill_review_publication_fences",
     "oms/0017_relocate_database_business_rules",
+    "oms/0018_tenant_service_access_grants",
     "management/0001_authorization_base",
     "management/0002_approval_delegation_guards",
     "management/0003_assignment_school_binding_version",
@@ -73,7 +74,11 @@ BUSINESS_RULE_CHECK_NAMES = {
     ("eduplus2", "audit_events", "audit_events_result_check"),
     ("eduplus2", "audit_export_jobs", "audit_export_jobs_format_check"),
     ("eduplus2", "audit_export_jobs", "audit_export_jobs_status_check"),
-    ("eduplus2", "external_client_registrations", "external_client_registrations_registered_by_surface_check"),
+    (
+        "eduplus2",
+        "external_client_registrations",
+        "external_client_registrations_registered_by_surface_check",
+    ),
     ("eduplus2", "external_client_registrations", "external_client_registrations_status_check"),
     ("eduplus2", "external_client_registrations", "external_client_registrations_provider_check"),
     ("eduplus2", "identity_bindings", "identity_bindings_status_check"),
@@ -206,7 +211,6 @@ async def migrated(dsn):
     return runner
 
 
-
 async def test_final_schema_has_no_database_owned_business_rules(pg_dsn):
     runner = await migrated(pg_dsn)
     async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
@@ -266,6 +270,7 @@ async def test_final_schema_has_no_database_owned_business_rules(pg_dsn):
         if "ANY (ARRAY" in row[3] or (row[0], row[1], row[2]) in BUSINESS_RULE_CHECK_NAMES
     ]
     assert business_checks == []
+
 
 async def test_migrations_repeat_concurrent_and_runtime_ddl(pg_dsn):
     runner = await migrated(pg_dsn)

@@ -462,6 +462,7 @@ class Enterprise:
         from deeptutor.runtime.registry.capability_registry import CapabilityRegistry
         from deeptutor.runtime.request_contracts import CAPABILITY_CONFIG_MODELS
 
+        from .oms.runtime_skills import enterprise_skill_service_factory
         from .runtime import GuardedTurns, StoreProvider, TurnEnvironment
 
         if self.deployment.maintenance:
@@ -498,10 +499,12 @@ class Enterprise:
                 ):
                     raise RuntimeError("fixed tenant is not initialized or available")
             self.store_provider = StoreProvider(self)
+            skill_service_factory = enterprise_skill_service_factory(self)
             self.providers = ApplicationProviders(
                 store=self.store_provider,
                 configuration=self.configuration,
                 object_store=self.object_store,
+                skill_service_factory=skill_service_factory,
             )
             with provider_context(self.providers):
                 registry = CapabilityRegistry(CapabilityCatalog())
@@ -548,6 +551,7 @@ class Enterprise:
                     container=self.container,
                     configuration=self.configuration,
                     object_store=self.object_store,
+                    skill_service_factory=skill_service_factory,
                 )
                 await self.container.start()
                 await self.recover()

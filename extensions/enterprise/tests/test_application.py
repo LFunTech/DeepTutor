@@ -340,6 +340,101 @@ async def test_oms_model_inventory_requires_provider_read_and_redacts_credential
     assert "base_url" not in response.text
 
 
+async def test_oms_resource_status_maps_platform_categories_without_secrets(app, pg_dsn):
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "config-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="config-admin",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "config-token" and subject == "config-admin"
+
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "config-admin"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_config_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        response = await client.get(
+            "/api/v1/oms/resources/status", headers={"Authorization": "Bearer config-token"}
+        )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["categories"] == [
+        "model_external",
+        "agent_capability",
+        "tool_integration",
+        "knowledge_content",
+        "runtime",
+    ]
+    by_id = {item["id"]: item for item in payload["resources"]}
+    assert by_id["model:chat:primary"] == {
+        "id": "model:chat:primary",
+        "category": "model_external",
+        "kind": "chat_model",
+        "status": "readiness_unverified",
+        "managed": False,
+        "display_name": "primary",
+        "safe_fields": {
+            "profile_id": "chat",
+            "model_id": "primary",
+            "provider": "openai",
+            "task_fallback": "uses_chat_model_when_task_model_missing",
+        },
+    }
+    assert by_id["knowledge:lightrag"]["status"] == "ready"
+    assert by_id["knowledge:lightrag"]["safe_fields"] == {
+        "workspace_binding": "workspace-main",
+        "index_version": "idx-v1",
+        "contract_version": "lightrag-api-v1",
+        "object_store": "configured",
+    }
+    assert by_id["tool:web_search"]["status"] == "not_configured"
+    assert by_id["model:embedding"]["safe_fields"] == {
+        "endpoint_contract": "full_https_url_required",
+        "usage_source": "provider_usage_or_reconciliation",
+    }
+    assert by_id["media:tts"]["status"] == "not_configured"
+    assert by_id["media:stt"]["status"] == "not_configured"
+    assert by_id["media:image"]["safe_fields"]["native_unit"] == "image"
+    assert by_id["media:video"]["safe_fields"]["native_unit"] == "second"
+    assert by_id["agent:external"]["safe_fields"]["callable"] is False
+    assert by_id["tool:mcp"]["safe_fields"]["requires_tenant_binding"] is True
+    assert by_id["runtime:postgres"]["status"] == "ready"
+    assert by_id["runtime:object_store"]["status"] == "ready"
+    assert "DT_TEST" not in response.text
+    assert "objects.example" not in response.text
+    assert "lightrag.example" not in response.text
+    assert "model.example" not in response.text
+
+
 async def test_oms_model_draft_is_versioned_audited_and_never_active_without_publish(
     app, pg_dsn, monkeypatch
 ):
@@ -372,7 +467,9 @@ async def test_oms_model_draft_is_versioned_audited_and_never_active_without_pub
 
     def platform_only_transaction(scope):
         if scope.user_id == "@oms-model-draft":
-            assert isinstance(scope, GlobalScope), "OMS global model catalog must not borrow tenant scope"
+            assert isinstance(scope, GlobalScope), (
+                "OMS global model catalog must not borrow tenant scope"
+            )
         return original_transaction(scope)
 
     monkeypatch.setattr(enterprise.db, "transaction", platform_only_transaction)
@@ -471,6 +568,589 @@ async def test_oms_model_draft_is_versioned_audited_and_never_active_without_pub
         ).fetchone()
         assert audit[0] == "ops.providers.manage"
         assert "DT_TEST_MODEL" not in json.dumps(audit[1])
+
+
+async def test_oms_model_test_confirms_target_executors_without_activating(
+    app, pg_dsn, monkeypatch
+):
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "config-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="config-admin",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "config-token" and subject == "config-admin"
+
+    monkeypatch.setenv("DT_TEST_MODEL", "publish-secret")
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    enterprise.oms_model_publish_executors = ("backend", "canary")
+    seen: list[str] = []
+
+    async def hook(executor, models):
+        seen.append(executor)
+        assert [model.model_id for model in models] == ["next"]
+
+    enterprise.oms_model_confirmation_hook = hook
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "config-admin"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_config_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+    command = {
+        "expected_version": 0,
+        "reason": "测试执行者装载",
+        "models": [
+            {
+                "profile_id": "chat",
+                "model_id": "next",
+                "model": "next-model",
+                "provider": "openai",
+                "base_url": "https://model.example/v1",
+                "secret": "env:DT_TEST_MODEL",
+                "allowed_roles": ["user"],
+            }
+        ],
+    }
+    headers = {"Authorization": "Bearer config-token", "Origin": "https://school.example"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        saved = await client.post("/api/v1/oms/models/draft", json=command, headers=headers)
+        assert saved.status_code == 200, saved.text
+        tested = await client.post(
+            "/api/v1/oms/models/test",
+            json={"expected_version": 1, "reason": "两实例测试"},
+            headers=headers,
+        )
+        assert tested.status_code == 200, tested.text
+        assert tested.json() == {
+            "version": 2,
+            "status": "tested",
+            "confirmed_executors": ["backend", "canary"],
+        }
+        inventory = await client.get(
+            "/api/v1/oms/models", headers={"Authorization": "Bearer config-token"}
+        )
+        assert inventory.status_code == 200
+        assert inventory.json()["models"][0]["source"] == "deployment"
+    assert seen == ["backend", "canary"]
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        row = await (
+            await c.execute(
+                "SELECT version,status,active FROM oms.model_catalog_config WHERE id='global'"
+            )
+        ).fetchone()
+    assert row[0] == 2
+    assert row[1] == "tested"
+    assert row[2] == {}
+
+
+async def test_oms_model_publish_confirms_backend_and_becomes_runtime_active(
+    app, pg_dsn, monkeypatch
+):
+    """发布必须由 OMS 权限驱动，并让真实运行时读取 active 而非 draft。"""
+
+    from deeptutor_enterprise.context import identity_context
+    from deeptutor_enterprise.model_catalog import load_runtime_model_deployments
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "config-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="config-admin",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "config-token" and subject == "config-admin"
+
+    monkeypatch.setenv("DT_TEST_MODEL", "publish-secret")
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "config-admin"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_config_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+    draft = {
+        "expected_version": 0,
+        "reason": "发布首个 Agent 模型",
+        "models": [
+            {
+                "profile_id": "chat",
+                "model_id": "published",
+                "model": "published-model",
+                "provider": "openai",
+                "base_url": "https://model.example/v1",
+                "secret": "env:DT_TEST_MODEL",
+                "allowed_roles": ["user"],
+            }
+        ],
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        saved = await client.post(
+            "/api/v1/oms/models/draft",
+            json=draft,
+            headers={"Authorization": "Bearer config-token", "Origin": "https://school.example"},
+        )
+        assert saved.status_code == 200, saved.text
+        published = await client.post(
+            "/api/v1/oms/models/publish",
+            json={"expected_version": 1, "reason": "确认 backend 执行者已装载"},
+            headers={"Authorization": "Bearer config-token", "Origin": "https://school.example"},
+        )
+        assert published.status_code == 200, published.text
+        assert published.json() == {
+            "version": 2,
+            "active_version": 1,
+            "status": "active",
+            "confirmed_executors": ["backend"],
+        }
+        inventory = await client.get(
+            "/api/v1/oms/models",
+            headers={"Authorization": "Bearer config-token"},
+        )
+    assert inventory.status_code == 200, inventory.text
+    assert inventory.json()["models"] == [
+        {
+            "profile_id": "chat",
+            "model_id": "published",
+            "model": "published-model",
+            "provider": "openai",
+            "source": "oms_active",
+            "managed": True,
+            "status": "active",
+        }
+    ]
+    assert "publish-secret" not in inventory.text
+    assert "DT_TEST_MODEL" not in inventory.text
+    token = await enterprise.identity.login("admin", "long-password-1", client="oms-publish")
+    identity = await enterprise.identity.authenticate(token)
+    with identity_context(identity, token):
+        store = enterprise.store_provider.get()
+        models = await load_runtime_model_deployments(store, enterprise.deployment.models)
+    assert [(model.profile_id, model.model_id, model.model) for model in models] == [
+        ("chat", "published", "published-model")
+    ]
+    school_store = SimpleNamespace(
+        db=enterprise.db,
+        scope=type(store.scope)(str(uuid.uuid4()), "@school-agent-runtime"),
+    )
+    school_models = await load_runtime_model_deployments(school_store, enterprise.deployment.models)
+    assert [(model.profile_id, model.model_id, model.model) for model in school_models] == [
+        ("chat", "published", "published-model")
+    ]
+
+
+async def test_oms_model_publish_failure_keeps_active_and_rollback_discards_bad_draft(
+    app, pg_dsn, monkeypatch
+):
+    """执行者确认失败时必须保留旧 active，并允许 OMS 显式丢弃坏草稿。"""
+
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "config-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="config-admin",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "config-token" and subject == "config-admin"
+
+    monkeypatch.setenv("DT_GOOD_MODEL", "publish-secret")
+    monkeypatch.delenv("DT_MISSING_MODEL", raising=False)
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "config-admin"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_config_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+
+    def draft(version, *, model_id, model, secret):
+        return {
+            "expected_version": version,
+            "reason": "模型切换",
+            "models": [
+                {
+                    "profile_id": "chat",
+                    "model_id": model_id,
+                    "model": model,
+                    "provider": "openai",
+                    "base_url": "https://model.example/v1",
+                    "secret": secret,
+                    "allowed_roles": ["user"],
+                }
+            ],
+        }
+
+    headers = {"Authorization": "Bearer config-token", "Origin": "https://school.example"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        first = await client.post(
+            "/api/v1/oms/models/draft",
+            json=draft(0, model_id="stable", model="stable-model", secret="env:DT_GOOD_MODEL"),
+            headers=headers,
+        )
+        assert first.status_code == 200, first.text
+        published = await client.post(
+            "/api/v1/oms/models/publish",
+            json={"expected_version": 1, "reason": "首版确认"},
+            headers=headers,
+        )
+        assert published.status_code == 200, published.text
+        bad = await client.post(
+            "/api/v1/oms/models/draft",
+            json=draft(2, model_id="bad", model="bad-model", secret="env:DT_MISSING_MODEL"),
+            headers=headers,
+        )
+        assert bad.status_code == 200, bad.text
+        failed = await client.post(
+            "/api/v1/oms/models/publish",
+            json={"expected_version": 3, "reason": "确认缺失 Secret 的执行者失败"},
+            headers=headers,
+        )
+        assert failed.status_code == 503, failed.text
+        inventory = await client.get(
+            "/api/v1/oms/models", headers={"Authorization": "Bearer config-token"}
+        )
+        assert inventory.status_code == 200, inventory.text
+        assert inventory.json()["models"][0]["model_id"] == "stable"
+        assert "DT_MISSING_MODEL" not in inventory.text
+        rollback = await client.post(
+            "/api/v1/oms/models/rollback",
+            json={"expected_version": 4, "reason": "丢弃缺失 Secret 的草稿"},
+            headers=headers,
+        )
+        assert rollback.status_code == 200, rollback.text
+        assert rollback.json() == {"version": 5, "active_version": 1, "status": "active"}
+        draft_view = await client.get(
+            "/api/v1/oms/models/draft", headers={"Authorization": "Bearer config-token"}
+        )
+        assert draft_view.status_code == 200, draft_view.text
+        assert draft_view.json()["models"][0]["model_id"] == "stable"
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        row = await (
+            await c.execute(
+                "SELECT version,active_version,status,desired,active "
+                "FROM oms.model_catalog_config WHERE id='global'"
+            )
+        ).fetchone()
+    assert row[0] == 5
+    assert row[1] == 1
+    assert row[2] == "active"
+    assert row[3]["models"][0]["model_id"] == "stable"
+    assert row[4]["models"][0]["model_id"] == "stable"
+
+
+async def test_oms_school_entitlement_and_quota_commands_are_authorized_and_audited(app, pg_dsn):
+    """OMS 学校额度写入必须经本产品 school-scope 授权并落到真实总账。"""
+
+    from datetime import datetime, timedelta, timezone
+
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "operator-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="school-operator",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "operator-token" and subject == "school-operator"
+
+    enterprise = app.state.enterprise
+    school_id = enterprise.deployment.tenant_id
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    now = datetime.now(timezone.utc)
+    grant_id = uuid.uuid4()
+    expired_grant_id = uuid.uuid4()
+    lot_id = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute(
+            "UPDATE enterprise.tenants SET bootstrap_completed=true,local_enabled=true,"
+            "provisioning_status='ready',external_eligibility='allowed',"
+            "recovery_state='normal' WHERE id=%s",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,10001,'verified',now(),'synthetic-verifier','synthetic://school')",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.service_definitions(service_id,unit_code,resource_category,enabled) "
+            "VALUES('search','request','tool_integration',true)"
+        )
+        await c.execute(
+            "INSERT INTO oms.supply_lots"
+            "(id,service_id,provider_id,provider_account_id,pool_id,unit_code,"
+            "evidence_ref,hard_ceiling,starts_at,expires_at,supply_basis,verified_at,created_by) "
+            "VALUES(%s,'search','provider-a','account-a','pool-a','request',"
+            "'purchase://synthetic',100,now()-interval '1 hour',now()+interval '7 days',"
+            "'native_units',now(),'supply-admin')",
+            (lot_id,),
+        )
+        principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "school-operator"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,school_id,"
+            "school_binding_version,valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_operator',1,'school',%s,1,"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, school_id, uuid.uuid4()),
+        )
+
+    headers = {"Authorization": "Bearer operator-token", "Origin": "https://school.example"}
+    starts_at = (now - timedelta(minutes=1)).isoformat()
+    expires_at = (now + timedelta(days=2)).isoformat()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        entitlement = await client.post(
+            f"/api/v1/oms/schools/{school_id}/entitlements/search",
+            json={
+                "status": "active",
+                "starts_at": starts_at,
+                "expires_at": expires_at,
+                "expected_version": 0,
+                "idempotency_key": "entitlement-1",
+                "reason": "开通搜索服务",
+            },
+            headers=headers,
+        )
+        assert entitlement.status_code == 200, entitlement.text
+        assert entitlement.json() == {"service_id": "search", "status": "active", "version": 1}
+        stale_entitlement = await client.post(
+            f"/api/v1/oms/schools/{school_id}/entitlements/search",
+            json={
+                "status": "active",
+                "starts_at": starts_at,
+                "expires_at": expires_at,
+                "expected_version": 0,
+                "idempotency_key": "entitlement-stale",
+                "reason": "旧版本重放",
+            },
+            headers=headers,
+        )
+        assert stale_entitlement.status_code == 409
+        grant = await client.post(
+            f"/api/v1/oms/schools/{school_id}/quota-grants",
+            json={
+                "grant_id": str(grant_id),
+                "service_id": "search",
+                "unit_code": "request",
+                "acquisition_method": "gift",
+                "quantity": "30",
+                "starts_at": starts_at,
+                "expires_at": expires_at,
+                "provider_id": "provider-a",
+                "provider_account_id": "account-a",
+                "pool_id": "pool-a",
+                "source_ref": "campaign://synthetic-secret",
+                "expected_entitlement_version": 1,
+                "idempotency_key": "grant-1",
+                "reason": "赠送首批额度",
+            },
+            headers=headers,
+        )
+        assert grant.status_code == 200, grant.text
+        assert grant.json()["grant_id"] == str(grant_id)
+        assert grant.json()["allocations"] == [{"lot_id": str(lot_id), "quantity": "30"}]
+        assert "synthetic-secret" not in grant.text
+        adjusted = await client.patch(
+            f"/api/v1/oms/schools/{school_id}/quota-grants/{grant_id}",
+            json={
+                "expected_version": 1,
+                "new_quantity": "20",
+                "idempotency_key": "adjust-1",
+                "reason": "减少未使用额度",
+            },
+            headers=headers,
+        )
+        assert adjusted.status_code == 200, adjusted.text
+        assert adjusted.json() == {
+            "grant_id": str(grant_id),
+            "version": 2,
+            "previous_quantity": "30",
+            "quantity": "20",
+        }
+        revoked = await client.post(
+            f"/api/v1/oms/schools/{school_id}/quota-grants/{grant_id}/revoke",
+            json={
+                "expected_version": 2,
+                "idempotency_key": "revoke-1",
+                "reason": "撤销未使用额度",
+            },
+            headers=headers,
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert revoked.json() == {
+            "grant_id": str(grant_id),
+            "version": 3,
+            "released_units": "20",
+        }
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+            await c.execute(
+                "INSERT INTO oms.quota_grants"
+                "(id,tenant_id,service_id,unit_code,acquisition_method,quantity,"
+                "starts_at,expires_at,created_by,source_ref) "
+                "VALUES(%s,%s,'search','request','recharge',5,"
+                "now()-interval '2 days',now()-interval '1 day','school-operator',"
+                "'purchase://expired')",
+                (expired_grant_id, school_id),
+            )
+            await c.execute(
+                "INSERT INTO oms.grant_commitments"
+                "(tenant_id,grant_id,lot_id,committed_total,unspent) "
+                "VALUES(%s,%s,%s,5,5)",
+                (school_id, expired_grant_id, lot_id),
+            )
+            await c.execute(
+                "UPDATE oms.supply_lots SET committed_unspent=committed_unspent+5 WHERE id=%s",
+                (lot_id,),
+            )
+        expired = await client.post(
+            f"/api/v1/oms/schools/{school_id}/quota-grants/{expired_grant_id}/expire",
+            json={
+                "expected_version": 1,
+                "idempotency_key": "expire-1",
+                "reason": "到期释放未用额度",
+            },
+            headers=headers,
+        )
+        assert expired.status_code == 200, expired.text
+        assert expired.json() == {
+            "grant_id": str(expired_grant_id),
+            "version": 2,
+            "released_units": "5",
+        }
+        summary = await client.get(
+            f"/api/v1/oms/schools/{school_id}/quota",
+            headers={"Authorization": "Bearer operator-token"},
+        )
+        assert summary.status_code == 200, summary.text
+        assert {row["status"] for row in summary.json()["grants"]} == {"revoked", "expired"}
+        assert "synthetic-secret" not in summary.text
+
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+        grant_row = await (
+            await c.execute(
+                "SELECT status,version,quantity,adjustment_released "
+                "FROM oms.quota_grants WHERE tenant_id=%s AND id=%s",
+                (school_id, grant_id),
+            )
+        ).fetchone()
+        commitment = await (
+            await c.execute(
+                "SELECT unspent,released FROM oms.grant_commitments "
+                "WHERE tenant_id=%s AND grant_id=%s AND lot_id=%s",
+                (school_id, grant_id, lot_id),
+            )
+        ).fetchone()
+        supply = await (
+            await c.execute("SELECT committed_unspent FROM oms.supply_lots WHERE id=%s", (lot_id,))
+        ).fetchone()
+        audit_actions = await (
+            await c.execute(
+                "SELECT action,result FROM oms.audit_events "
+                "WHERE actor_subject='school-operator' ORDER BY created_at,action"
+            )
+        ).fetchall()
+    assert tuple(grant_row) == ("revoked", 3, 30, 10)
+    assert tuple(commitment) == (0, 30)
+    assert supply[0] == 0
+    assert ("service_entitlement.set", "success") in [tuple(row) for row in audit_actions]
+    assert ("quota.grant", "success") in [tuple(row) for row in audit_actions]
+    assert ("quota.adjust", "success") in [tuple(row) for row in audit_actions]
+    assert ("quota.revoke", "success") in [tuple(row) for row in audit_actions]
+    assert ("quota.expire", "success") in [tuple(row) for row in audit_actions]
 
 
 async def test_eduplus2_signed_webhook_demo_only_checks_delivery_without_state_change(app):
@@ -974,15 +1654,26 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
     assert {path for path in paths if path.startswith("/api/v1/tms/")} == {
         "/api/v1/tms/school-bootstrap/status",
         "/api/v1/tms/school-bootstrap/activate",
+        "/api/v1/tms/quotas",
     }
     assert {path for path in paths if path.startswith("/api/v1/oms/")} == {
         "/api/v1/oms/me",
         "/api/v1/oms/models",
+        "/api/v1/oms/resources/status",
         "/api/v1/oms/models/draft",
+        "/api/v1/oms/models/test",
+        "/api/v1/oms/models/publish",
+        "/api/v1/oms/models/rollback",
         "/api/v1/oms/skills/draft",
         "/api/v1/oms/skills/revisions/{revision_id}/review",
         "/api/v1/oms/skills/revisions/{revision_id}/publish",
         "/api/v1/oms/skills/{name}/schools/{school_id}/grant",
+        "/api/v1/oms/schools/{school_id}/quota",
+        "/api/v1/oms/schools/{school_id}/entitlements/{service_id}",
+        "/api/v1/oms/schools/{school_id}/quota-grants",
+        "/api/v1/oms/schools/{school_id}/quota-grants/{grant_id}",
+        "/api/v1/oms/schools/{school_id}/quota-grants/{grant_id}/revoke",
+        "/api/v1/oms/schools/{school_id}/quota-grants/{grant_id}/expire",
     }
     for prefix in (
         "/api/skills",
@@ -1344,6 +2035,7 @@ async def test_conversation_test_options_are_authenticated_and_non_secret(app, m
         lambda: (_ for _ in ()).throw(AssertionError("must not read local data KBs")),
     )
     enterprise = app.state.enterprise
+    assert callable(enterprise.providers.skill_service_factory)
     token = await enterprise.identity.login("admin", "long-password-1", client="conversation-test")
     identity = await enterprise.identity.authenticate(token)
     await seed_externalized_kb(
@@ -1427,8 +2119,8 @@ async def test_externalized_kb_listing_rejects_unknown_resource_state(app):
             await list_externalized_knowledge_bases(enterprise.store_provider.get())
 
 
-async def test_conversation_test_options_show_skill_names_as_labels(app):
-    """普通测试页的 Skills 选项必须展示可识别的 skill 名称，而不是长说明文案。"""
+async def test_conversation_test_options_hide_unauthorized_builtin_skills(app):
+    """企业学校运行时未获 OMS 授权的 builtin Skill 不得出现在测试页清单。"""
 
     enterprise = app.state.enterprise
     token = await enterprise.identity.login("admin", "long-password-1", client="conversation-test")
@@ -1441,10 +2133,8 @@ async def test_conversation_test_options_show_skill_names_as_labels(app):
             headers={"Authorization": "Bearer " + token},
         )
     assert response.status_code == 200, response.text
-    skills = response.json()["skills"]
-    skill_creator = next(item for item in skills if item["id"] == "skill-creator")
-    assert skill_creator["label"] == "skill-creator"
-    assert "Design and author DeepTutor skills" in skill_creator["description"]
+    skill_ids = {item["id"] for item in response.json()["skills"]}
+    assert "skill-creator" not in skill_ids
 
 
 async def test_enterprise_voice_stt_is_available_to_authenticated_test_page(app, monkeypatch):

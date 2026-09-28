@@ -27,9 +27,17 @@ _BUSINESS_RULE_CHECK_NAMES = frozenset(
         ("eduplus2", "audit_events", "audit_events_result_check"),
         ("eduplus2", "audit_export_jobs", "audit_export_jobs_format_check"),
         ("eduplus2", "audit_export_jobs", "audit_export_jobs_status_check"),
-        ("eduplus2", "external_client_registrations", "external_client_registrations_registered_by_surface_check"),
+        (
+            "eduplus2",
+            "external_client_registrations",
+            "external_client_registrations_registered_by_surface_check",
+        ),
         ("eduplus2", "external_client_registrations", "external_client_registrations_status_check"),
-        ("eduplus2", "external_client_registrations", "external_client_registrations_provider_check"),
+        (
+            "eduplus2",
+            "external_client_registrations",
+            "external_client_registrations_provider_check",
+        ),
         ("eduplus2", "identity_bindings", "identity_bindings_status_check"),
         ("eduplus2", "identity_bindings", "identity_bindings_provider_check"),
         ("eduplus2", "lifecycle_actor_candidates", "lifecycle_actor_candidate_resolution_check"),
@@ -180,7 +188,6 @@ def _extension_accepted_checksums(expected):
 
 class MigrationRunner(CoreMigrationRunner):
     """保留 core runner 语义，并追加 EduPlus2 与 OMS 独立 schema 迁移。"""
-
 
     async def _verify_no_database_owned_business_rules(self, c, schema: str) -> None:
         routines = await (
@@ -441,11 +448,7 @@ class MigrationRunner(CoreMigrationRunner):
         actor_function = await (
             await c.execute("SELECT to_regprocedure('eduplus2.guard_lifecycle_actor_candidate()')")
         ).fetchone()
-        if (
-            actor_column != (True,)
-            or actor_trigger is not None
-            or actor_function != (None,)
-        ):
+        if actor_column != (True,) or actor_trigger is not None or actor_function != (None,):
             raise RuntimeError("eduplus2 schema drift: lifecycle actor terminal state missing")
         await self._verify_no_database_owned_business_rules(c, _EXTENSION_SCHEMA)
 
@@ -554,6 +557,7 @@ class MigrationRunner(CoreMigrationRunner):
             "attempt_allocations",
             "attempt_evidence_events",
             "entitlement_commands",
+            "tenant_service_access_grants",
             "skill_revisions",
             "skill_publications",
             "skill_grants",
@@ -684,14 +688,11 @@ class MigrationRunner(CoreMigrationRunner):
             )
         ).fetchall()
         binding_constraints = dict(school_binding)
-        if (
-            not any(
-                "UNIQUE (eduplus_tenant_id)" in definition
-                for definition in binding_constraints.values()
-            )
-            or not any(
-                "eduplus_tenant_id > 0" in definition for definition in binding_constraints.values()
-            )
+        if not any(
+            "UNIQUE (eduplus_tenant_id)" in definition
+            for definition in binding_constraints.values()
+        ) or not any(
+            "eduplus_tenant_id > 0" in definition for definition in binding_constraints.values()
         ):
             raise RuntimeError("oms schema drift: school binding constraints missing")
         self._validate_oms_school_binding_facts(await self._oms_school_binding_snapshot(c))
@@ -1260,7 +1261,9 @@ class MigrationRunner(CoreMigrationRunner):
             ("oms", "ops.permissions.manage"),
             ("tms", "tenant.permissions.manage"),
         }
-        if any(snapshot.get(key, (None, None, None, None))[2] != "active" for key in required_active):
+        if any(
+            snapshot.get(key, (None, None, None, None))[2] != "active" for key in required_active
+        ):
             raise RuntimeError("management action catalog fact is invalid")
 
     @staticmethod
@@ -1320,7 +1323,9 @@ class MigrationRunner(CoreMigrationRunner):
         ).fetchone()
         if platform_admin is None:
             oms_principals = await (
-                await c.execute("SELECT 1 FROM management.principals WHERE application='oms' LIMIT 1")
+                await c.execute(
+                    "SELECT 1 FROM management.principals WHERE application='oms' LIMIT 1"
+                )
             ).fetchone()
             if oms_principals is not None:
                 raise RuntimeError("management last administrator fact is invalid")
@@ -1677,9 +1682,7 @@ class MigrationRunner(CoreMigrationRunner):
                         current_approvals, before=previous_approvals
                     )
                     current_audits = await self._management_audit_snapshot(c)
-                    self._validate_management_audit_snapshot(
-                        current_audits, before=previous_audits
-                    )
+                    self._validate_management_audit_snapshot(current_audits, before=previous_audits)
                     previous_actions = current_actions
                     previous_roles = current_roles
                     previous_delegations = current_delegations

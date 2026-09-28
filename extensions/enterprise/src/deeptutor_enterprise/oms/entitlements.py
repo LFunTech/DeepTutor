@@ -91,12 +91,29 @@ class OmsEntitlementLedger:
     def _reject_value_error(error: OmsValueError) -> None:
         raise EntitlementRejected(str(error)) from None
 
-    async def set(self, scope: TenantScope, request: EntitlementRequest) -> EntitlementResult:
+    async def set(
+        self,
+        scope: TenantScope,
+        request: EntitlementRequest,
+        *,
+        management_identity=None,
+    ) -> EntitlementResult:
         _validate(scope, request)
         tenant_id = UUID(scope.tenant_id)
         fingerprint = _fingerprint(scope, request)
         action = "service_entitlement.set"
         async with self.db.transaction(scope) as c:
+            if management_identity is not None:
+                from ..management.authorization import require_management_permission
+
+                await require_management_permission(
+                    c,
+                    management_identity,
+                    "ops.entitlements.manage",
+                    target_school_id=tenant_id,
+                    write=True,
+                    _lock_school_id=tenant_id,
+                )
             claimed = await (
                 await c.execute(
                     "INSERT INTO oms.entitlement_commands"
