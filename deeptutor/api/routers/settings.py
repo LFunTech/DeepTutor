@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Any, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -55,6 +55,7 @@ from deeptutor.services.config.settings_draft import (
 )
 from deeptutor.services.llm.config import clear_llm_config_cache
 from deeptutor.services.model_selection import list_llm_options
+from deeptutor.services.session.usage_statistics import UsageStatistics
 from deeptutor.services.settings.interface_settings import (
     DEFAULT_UI_SETTINGS as INTERFACE_DEFAULTS,
 )
@@ -1905,3 +1906,52 @@ async def reopen_tour():
         "message": "Run the terminal setup guide from the project root to re-open the guided setup.",
         "command": "deeptutor init",
     }
+
+
+@router.get("/usage", response_model=UsageStatistics)
+async def get_usage_statistics(
+    year: int = Query(..., ge=1970, le=9998),
+    timezone: str = Query("UTC", max_length=100),
+) -> UsageStatistics:
+    """Return per-account usage statistics without introducing local DB state.
+
+    Upstream exposes this settings view by combining durable session history
+    with a local usage ledger. 企业运行边界要求受支持运行时必须是
+    PostgreSQL-only，因此这里保留同一 API 契约，但只聚合真实会话存储中
+    已持久化的用量记录；本地 ledger 适配层是无副作用的合并器。
+    """
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from deeptutor.services.llm.usage_ledger import combined_usage_records
+    from deeptutor.services.session import get_session_store
+    from deeptutor.services.session.usage_statistics import aggregate_usage
+    from deeptutor.services.workspace import get_content_workspace_service
+    from deeptutor.services.workspace.activity import data_activity
+    from deeptutor.services.workspace.context import workspace_context
+    from deeptutor.services.workspace.models import WorkspaceError
+
+    try:
+        zone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid timezone") from exc
+
+    start = datetime(year, 1, 1, tzinfo=zone).timestamp()
+    end = datetime(year + 1, 1, 1, tzinfo=zone).timestamp()
+    records: list[dict[str, Any]] = []
+    with data_activity():
+        workspace_ids = [""] + [
+            row["workspace_id"]
+            for row in get_content_workspace_service()._catalog()
+            if row.get("kind") == "workspace"
+        ]
+        for workspace_id in workspace_ids:
+            try:
+                with workspace_context(workspace_id):
+                    records.extend(await get_session_store().usage_records(start, end))
+            except WorkspaceError:
+                continue
+
+    combined = await asyncio.to_thread(combined_usage_records, records, start, end)
+    return await asyncio.to_thread(aggregate_usage, combined, year=year, timezone=timezone)

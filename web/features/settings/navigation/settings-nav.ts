@@ -517,6 +517,25 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
 
 export const SETTINGS_HUB_HREF = "/settings";
 
+/** Stable aliases keep older deep links and new per-page helpers aligned. */
+export const SETTINGS_ALIASES: Record<string, string> = {
+  tts: "voice",
+  stt: "voice",
+  imagegen: "multimodal",
+  videogen: "multimodal",
+  overview: "general",
+  models: "llm",
+  chat: "starters",
+  agents: "agent-claude-code",
+  "document-parsing": "knowledge",
+  image: "multimodal",
+  video: "multimodal",
+};
+
+export function resolveSettingsKey(key: string): string {
+  return SETTINGS_ALIASES[key] ?? key;
+}
+
 /** The canonical in-document URL used by the persistent settings navigator. */
 export function settingsAnchorHref(key: string): string {
   return `${SETTINGS_HUB_HREF}#${key}`;
@@ -545,6 +564,8 @@ const STORAGE_PATHS: Record<string, string> = {
   appearance: "data/user/settings/interface.json",
   network: "data/user/settings/system.json",
   workspace: "data/user/settings/content_workspace.json",
+  voice: "data/user/settings/model_catalog.json",
+  multimodal: "data/user/settings/model_catalog.json",
   connections: "data/user/settings/model_catalog.json",
   "task-models": "data/user/settings/model_catalog.json",
   knowledge: "data/user/settings/document_parsing.json",

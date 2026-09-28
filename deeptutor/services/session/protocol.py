@@ -69,7 +69,9 @@ class SessionRepository(Protocol):
         messages: list[dict[str, Any]],
     ) -> dict[str, Any]: ...
 
-    async def list_sessions(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]: ...
+    async def list_sessions(
+        self, limit: int = 50, offset: int = 0, *, workspace_id: str | None = None
+    ) -> list[dict[str, Any]]: ...
 
     async def search_sessions(
         self, query: str, limit: int = 50, offset: int = 0
@@ -108,6 +110,8 @@ class TurnRepository(Protocol):
 
     async def list_active_turns(self, session_id: str) -> list[dict[str, Any]]: ...
 
+    async def list_orphaned_failed_turns(self, session_id: str) -> list[dict[str, Any]]: ...
+
     async def list_nonterminal_turns(self) -> list[dict[str, Any]]: ...
 
     async def transition_turn(
@@ -135,6 +139,8 @@ class TurnRepository(Protocol):
 
 @runtime_checkable
 class MessageRepository(Protocol):
+    async def usage_records(self, start_at: float, end_at: float) -> list[dict[str, Any]]: ...
+
     async def add_message(
         self,
         session_id: str,
@@ -267,6 +273,8 @@ class SessionStoreProtocol(
 
     async def list_active_turns(self, session_id: str) -> list[dict[str, Any]]: ...
 
+    async def list_orphaned_failed_turns(self, session_id: str) -> list[dict[str, Any]]: ...
+
     async def update_turn_status(self, turn_id: str, status: str, error: str = "") -> bool: ...
 
     async def append_turn_event(self, turn_id: str, event: dict[str, Any]) -> dict[str, Any]: ...
@@ -325,6 +333,8 @@ class SessionStoreProtocol(
         self,
         limit: int = 50,
         offset: int = 0,
+        *,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
     async def search_sessions(

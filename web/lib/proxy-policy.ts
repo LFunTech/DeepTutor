@@ -7,14 +7,12 @@
 // can be unit-tested in the node harness without booting the Next runtime.
 
 export const LOGIN_PATH = "/login";
+export const HANDOFF_PATH = "/handoff";
 export const COOKIE_NAME = "dt_token";
 export const CODEX_CALLBACK_PATH = "/auth/callback";
 export const CODEX_CALLBACK_API_PATH = "/api/auth/openai-codex/callback";
-const RETIRED_PAGE_PATHS = new Set(["/partners/groups", "/oms", "/tms"]);
-const SELF_AUTHENTICATING_PAGE_PATHS = new Set([
-  "/enterprise/eduplus2/conversation-test",
-  "/enterprise/eduplus2/fronting-demo",
-]);
+const RETIRED_PAGE_PATHS = new Set(["/partners/groups"]);
+const DEVELOPMENT_ONLY_PAGE_PREFIXES = ["/oms/prototype", "/tms/prototype"];
 
 export function isCodexCallbackPath(pathname: string): boolean {
   return pathname === CODEX_CALLBACK_PATH;
@@ -22,12 +20,13 @@ export function isCodexCallbackPath(pathname: string): boolean {
 
 /** Exact retired pages that would otherwise collide with a dynamic route. */
 export function isRetiredPagePath(pathname: string): boolean {
-  return RETIRED_PAGE_PATHS.has(pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname);
+  return RETIRED_PAGE_PATHS.has(pathname);
 }
 
-/** 通用开发态原型路径约定；生产环境由 proxy 在响应流开始前返回 404。 */
+/** Prototype-only pages that must not render in non-development deployments. */
 export function isDevelopmentOnlyPagePath(pathname: string): boolean {
-  return !isBackendPath(pathname) && pathname.replace(/\/+$/, "").endsWith("/prototype");
+  const normalized = pathname.endsWith("/") && pathname !== "/" ? pathname.slice(0, -1) : pathname;
+  return DEVELOPMENT_ONLY_PAGE_PREFIXES.some((prefix) => normalized === prefix);
 }
 
 // Paths whose responses come from the backend, not the Next app. The middleware
@@ -37,10 +36,13 @@ export function isDevelopmentOnlyPagePath(pathname: string): boolean {
 export function isBackendPath(pathname: string): boolean {
   return (
     pathname.startsWith("/api/") ||
-    pathname === "/ws" ||
-    pathname.startsWith("/ws/") ||
+    isWebSocketPath(pathname) ||
     pathname.startsWith("/files/")
   );
+}
+
+export function isWebSocketPath(pathname: string): boolean {
+  return pathname === "/ws" || pathname.startsWith("/ws/");
 }
 
 // Static assets served straight out of `web/public` (logos, favicons, fonts,
@@ -55,19 +57,11 @@ const STATIC_ASSET =
 
 // Paths the auth gate must never block: the auth pages themselves, Next.js
 // internals, and public static assets (see STATIC_ASSET above).
-function trimTrailingSlash(pathname: string): string {
-  return pathname.length > 1 ? pathname.replace(/\/+$/g, "") : pathname;
-}
-
-function isSelfAuthenticatingPagePath(pathname: string): boolean {
-  return SELF_AUTHENTICATING_PAGE_PATHS.has(trimTrailingSlash(pathname));
-}
-
 export function isAuthExempt(pathname: string): boolean {
   return (
     pathname.startsWith(LOGIN_PATH) ||
     pathname.startsWith("/register") ||
-    isSelfAuthenticatingPagePath(pathname) ||
+    pathname === HANDOFF_PATH ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     STATIC_ASSET.test(pathname)

@@ -16,10 +16,10 @@ export type ClientCommand =
   | SubmitUserReplyCommand
   | UserInputCommand
   | CheckActiveTurnCommand
-  | AuthRefreshCommand
   | PingCommand;
 export type Base64 = string | null;
 export type Filename = string | null;
+export type Id = string | null;
 export type MimeType = string | null;
 export type Type = string;
 export type Url = string | null;
@@ -29,8 +29,10 @@ export type BookId = string;
 export type PageIds = string[];
 export type BookReferences = BookReference[];
 export type Capability = string | null;
+export type CapabilityOnce = boolean;
+export type ClientSubmissionId = string | null;
+export type ConsultPartnerId = string | null;
 export type Content = string;
-export type ContextPolicy = "auto" | "best_effort" | "required";
 export type CourseId = string | null;
 export type FollowupQuestionContext = {
   [k: string]: unknown;
@@ -46,20 +48,21 @@ export type MasteryPathId = string | null;
 export type MasteryPathLeaseManaged = boolean;
 export type MasterySessionMode = string | null;
 export type QuestionId1 = string;
-export type McpTools = string[];
+export type Mcp = string[];
 export type MemoryReferences = (
   "recent" | "profile" | "scope" | "preferences" | "summary"
 )[];
 export type NotebookId = string;
 export type RecordIds = string[];
 export type NotebookReferences = NotebookReference[];
-export type OperationId = string | null;
 export type ParentMessageId = number | null;
+export type PartnerDiscussionGroupId = string | null;
 export type PartnerGroupReferences = {
   [k: string]: unknown;
 }[];
 export type PersistUserMessage = boolean;
 export type Persona = string | null;
+export type PreserveSessionPreferences = boolean;
 export type ProtocolVersion = "2.0";
 export type QuestionNotebookReferences = number[];
 export type ReadingMaterialId = string | null;
@@ -72,8 +75,8 @@ export type Locator = number | null;
 export type Selection = string | null;
 export type ReadingWorkspaceId = string | null;
 export type Regenerate = boolean;
-export type RegeneratedFromMessageId = number | null;
-export type ResourceIds = string[];
+export type RegeneratedFromMessageId = number | string | null;
+export type ReplyLanguageOverride = string | null;
 export type SelectionTutorContext = {
   [k: string]: unknown;
 } | null;
@@ -85,7 +88,13 @@ export type TimedMediaId = string | null;
 export type TimeSeconds = number;
 export type Tools = string[] | null;
 export type Type1 = "message" | "start_turn";
+export type WorkspaceId = string | null;
 export type WorkspaceMode = string | null;
+/**
+ * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
+ * via the `definition` "ContextPolicy".
+ */
+export type ContextPolicy = "auto" | "required";
 export type AfterSeq = number;
 export type ProtocolVersion1 = "2.0";
 export type TurnId = string;
@@ -125,29 +134,21 @@ export type Type9 = "user_input";
 export type ProtocolVersion9 = "2.0";
 export type SessionId4 = string;
 export type Type10 = "check_active_turn";
-export type CommandId3 = string;
-export type DtToken = string | null;
-export type ExternalToken = string | null;
 export type ProtocolVersion10 = "2.0";
-export type Type11 = "auth_refresh";
-export type ProtocolVersion11 = "2.0";
-export type Type12 = "ping";
+export type Type11 = "ping";
 export type CorrelationId = string | null;
 export type ErrorCode = string;
 export type Message = string;
 export type Retryable = boolean;
 export type MinimumWebProtocolVersion = "2.0";
-export type ProtocolVersion12 = "2.0";
-export type CleanupBacklog = number;
+export type ProtocolVersion11 = "2.0";
 export type CoordinationMode = "memory" | "redis";
-export type DataGate = string;
 export type LeaderHealthy = boolean | null;
 export type LeaderId = string | null;
 export type LeaseTtlSeconds = number;
-export type MigrationVersion = string;
 export type MinimumWebProtocolVersion1 = "2.0";
 export type OwnerTurnCount = number;
-export type ProtocolVersion13 = "2.0";
+export type ProtocolVersion12 = "2.0";
 export type RecoveryBacklog = number;
 export type RecoveryIntervalSeconds = number;
 export type RedisConfigured = boolean;
@@ -160,12 +161,9 @@ export type ServerEvent =
   | ActiveTurnInfo
   | PongEvent
   | CommandAckEvent
-  | ProtocolErrorEvent
-  | AuthExpiringEvent
-  | AuthAckEvent
-  | AuthRevokedEvent;
+  | ProtocolErrorEvent;
 export type Content2 = string;
-export type ProtocolVersion14 = "2.0";
+export type ProtocolVersion13 = "2.0";
 export type Seq1 = number;
 export type SessionId5 = string;
 export type Source = string;
@@ -193,7 +191,7 @@ export type StreamEventType =
   | "wait_for_input"
   | "done";
 export type OwnerId = string;
-export type ProtocolVersion15 = "2.0";
+export type ProtocolVersion14 = "2.0";
 export type Status = TurnQueryState | "none";
 /**
  * Client observation state, including server-side recovery windows.
@@ -210,38 +208,24 @@ export type TurnQueryState =
   | "failed"
   | "cancelled";
 export type TurnId7 = string;
-export type Type13 = "active_turn_info";
-export type ProtocolVersion16 = "2.0";
-export type Type14 = "pong";
+export type Type12 = "active_turn_info";
+export type ProtocolVersion15 = "2.0";
+export type Type13 = "pong";
 export type Accepted = boolean;
-export type CommandId4 = string;
+export type CommandId3 = string;
 export type CommandType = "cancel_turn" | "submit_user_reply" | "user_input";
 export type ErrorCode1 = string;
 export type Message1 = string;
-export type ProtocolVersion17 = "2.0";
+export type ProtocolVersion16 = "2.0";
 export type TurnId8 = string;
-export type Type15 = "command_ack";
+export type Type14 = "command_ack";
 export type ErrorCode2 = string;
 export type Message2 = string;
-export type ProtocolVersion18 = "2.0";
+export type ProtocolVersion17 = "2.0";
 export type Retryable1 = boolean;
 export type SessionId6 = string;
 export type TurnId9 = string;
-export type Type16 = "protocol_error";
-export type ExpiresAt = number;
-export type ProtocolVersion19 = "2.0";
-export type RefreshDeadline = number;
-export type RequestId = string;
-export type Type17 = "auth_expiring";
-export type Accepted1 = boolean;
-export type CommandId5 = string;
-export type ExpiresAt1 = number;
-export type ProtocolVersion20 = "2.0";
-export type RefreshDeadline1 = number;
-export type Type18 = "auth_ack";
-export type ProtocolVersion21 = "2.0";
-export type Reason = string;
-export type Type19 = "auth_revoked";
+export type Type15 = "protocol_error";
 export type Capability1 = string;
 export type CreatedAt = number | null;
 export type Error = string;
@@ -256,13 +240,8 @@ export type TurnFailureCode =
   | "provider_error"
   | "internal_error"
   | "rejected"
-  | "required_context_unavailable"
-  | "knowledge_base_unavailable"
-  | "skill_unavailable"
-  | "mcp_tool_unavailable"
-  | "context_authorization_failed"
   | "server_shutdown";
-export type Id = string;
+export type Id1 = string;
 export type LastSeq = number;
 export type OwnerId1 = string;
 export type Retryable2 = boolean;
@@ -275,14 +254,14 @@ export type TurnStatus =
   "queued" | "running" | "waiting_input" | "completed" | "failed" | "cancelled";
 export type UpdatedAt = number | null;
 export type CreatedAt1 = number | null;
-export type Id1 = string;
+export type Id2 = string;
 export type Messages = {
   [k: string]: unknown;
 }[];
 export type Title = string;
 export type UpdatedAt1 = number | null;
 export type CreatedAt2 = number | null;
-export type Id2 = string;
+export type Id3 = string;
 export type Title1 = string;
 export type UpdatedAt2 = number | null;
 
@@ -290,7 +269,7 @@ export interface TurnProtocolDocument {
   client_command: ClientCommand;
   error: ErrorEnvelope;
   minimum_web_protocol_version?: MinimumWebProtocolVersion;
-  protocol_version?: ProtocolVersion12;
+  protocol_version?: ProtocolVersion11;
   runtime_status: RuntimeStatus;
   server_event: ServerEvent;
   session_detail: SessionDetail;
@@ -305,9 +284,11 @@ export interface StartTurnCommand {
   auto_route?: AutoRoute;
   book_references?: BookReferences;
   capability?: Capability;
+  capability_once?: CapabilityOnce;
+  client_submission_id?: ClientSubmissionId;
   config?: Config;
+  consult_partner_id?: ConsultPartnerId;
   content: Content;
-  context_policy?: ContextPolicy;
   course_id?: CourseId;
   followup_question_context?: FollowupQuestionContext;
   history_references?: HistoryReferences;
@@ -319,14 +300,15 @@ export interface StartTurnCommand {
   mastery_path_lease_managed?: MasteryPathLeaseManaged;
   mastery_session_mode?: MasterySessionMode;
   mastery_skip?: MasteryCardSkip | null;
-  mcp_tools?: McpTools;
+  mcp?: Mcp;
   memory_references?: MemoryReferences;
   notebook_references?: NotebookReferences;
-  operation_id?: OperationId;
   parent_message_id?: ParentMessageId;
+  partner_discussion_group_id?: PartnerDiscussionGroupId;
   partner_group_references?: PartnerGroupReferences;
   persist_user_message?: PersistUserMessage;
   persona?: Persona;
+  preserve_session_preferences?: PreserveSessionPreferences;
   protocol_version: ProtocolVersion;
   question_notebook_references?: QuestionNotebookReferences;
   reading_material_id?: ReadingMaterialId;
@@ -336,7 +318,7 @@ export interface StartTurnCommand {
   reading_workspace_id?: ReadingWorkspaceId;
   regenerate?: Regenerate;
   regenerated_from_message_id?: RegeneratedFromMessageId;
-  resource_ids?: ResourceIds;
+  reply_language_override?: ReplyLanguageOverride;
   selection_tutor_context?: SelectionTutorContext;
   session_id?: SessionId;
   skills?: Skills;
@@ -346,7 +328,11 @@ export interface StartTurnCommand {
   timed_media_viewport?: TimedMediaViewport | null;
   tools?: Tools;
   type?: Type1;
+  workspace_id?: WorkspaceId;
   workspace_mode?: WorkspaceMode;
+  context_policy?: ContextPolicy;
+  mcp_tools?: string[];
+  resource_ids?: string[];
 }
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
@@ -355,6 +341,7 @@ export interface StartTurnCommand {
 export interface OutgoingAttachment {
   base64?: Base64;
   filename?: Filename;
+  id?: Id;
   mime_type?: MimeType;
   type: Type;
   url?: Url;
@@ -545,22 +532,11 @@ export interface CheckActiveTurnCommand {
 }
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
- * via the `definition` "AuthRefreshCommand".
- */
-export interface AuthRefreshCommand {
-  command_id: CommandId3;
-  dt_token?: DtToken;
-  external_token?: ExternalToken;
-  protocol_version: ProtocolVersion10;
-  type?: Type11;
-}
-/**
- * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
  * via the `definition` "PingCommand".
  */
 export interface PingCommand {
-  protocol_version: ProtocolVersion11;
-  type?: Type12;
+  protocol_version: ProtocolVersion10;
+  type?: Type11;
 }
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
@@ -577,17 +553,13 @@ export interface ErrorEnvelope {
  * via the `definition` "RuntimeStatus".
  */
 export interface RuntimeStatus {
-  cleanup_backlog?: CleanupBacklog;
   coordination_mode: CoordinationMode;
-  data_gate?: DataGate;
   leader_healthy?: LeaderHealthy;
   leader_id?: LeaderId;
   lease_ttl_seconds: LeaseTtlSeconds;
-  migration_version?: MigrationVersion;
   minimum_web_protocol_version?: MinimumWebProtocolVersion1;
   owner_turn_count?: OwnerTurnCount;
-  protocol_version?: ProtocolVersion13;
-  providers?: Providers;
+  protocol_version?: ProtocolVersion12;
   recovery_backlog?: RecoveryBacklog;
   recovery_interval_seconds: RecoveryIntervalSeconds;
   redis_configured: RedisConfigured;
@@ -596,9 +568,6 @@ export interface RuntimeStatus {
   worker_count: WorkerCount;
   worker_id: WorkerId;
 }
-export interface Providers {
-  [k: string]: string;
-}
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
  * via the `definition` "StreamEvent".
@@ -606,7 +575,7 @@ export interface Providers {
 export interface StreamEvent {
   content?: Content2;
   metadata?: Metadata;
-  protocol_version?: ProtocolVersion14;
+  protocol_version?: ProtocolVersion13;
   seq?: Seq1;
   session_id?: SessionId5;
   source?: Source;
@@ -624,18 +593,18 @@ export interface Metadata {
  */
 export interface ActiveTurnInfo {
   owner_id?: OwnerId;
-  protocol_version?: ProtocolVersion15;
+  protocol_version?: ProtocolVersion14;
   status?: Status;
   turn_id?: TurnId7;
-  type?: Type13;
+  type?: Type12;
 }
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
  * via the `definition` "PongEvent".
  */
 export interface PongEvent {
-  protocol_version?: ProtocolVersion16;
-  type?: Type14;
+  protocol_version?: ProtocolVersion15;
+  type?: Type13;
 }
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
@@ -643,13 +612,13 @@ export interface PongEvent {
  */
 export interface CommandAckEvent {
   accepted: Accepted;
-  command_id: CommandId4;
+  command_id: CommandId3;
   command_type: CommandType;
   error_code?: ErrorCode1;
   message?: Message1;
-  protocol_version?: ProtocolVersion17;
+  protocol_version?: ProtocolVersion16;
   turn_id?: TurnId8;
-  type?: Type15;
+  type?: Type14;
 }
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
@@ -658,43 +627,11 @@ export interface CommandAckEvent {
 export interface ProtocolErrorEvent {
   error_code: ErrorCode2;
   message: Message2;
-  protocol_version?: ProtocolVersion18;
+  protocol_version?: ProtocolVersion17;
   retryable?: Retryable1;
   session_id?: SessionId6;
   turn_id?: TurnId9;
-  type?: Type16;
-}
-/**
- * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
- * via the `definition` "AuthExpiringEvent".
- */
-export interface AuthExpiringEvent {
-  expires_at: ExpiresAt;
-  protocol_version?: ProtocolVersion19;
-  refresh_deadline: RefreshDeadline;
-  request_id?: RequestId;
-  type?: Type17;
-}
-/**
- * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
- * via the `definition` "AuthAckEvent".
- */
-export interface AuthAckEvent {
-  accepted: Accepted1;
-  command_id: CommandId5;
-  expires_at: ExpiresAt1;
-  protocol_version?: ProtocolVersion20;
-  refresh_deadline: RefreshDeadline1;
-  type?: Type18;
-}
-/**
- * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
- * via the `definition` "AuthRevokedEvent".
- */
-export interface AuthRevokedEvent {
-  protocol_version?: ProtocolVersion21;
-  reason?: Reason;
-  type?: Type19;
+  type?: Type15;
 }
 /**
  * This interface was referenced by `TurnProtocolDocument`'s JSON-Schema
@@ -703,7 +640,7 @@ export interface AuthRevokedEvent {
 export interface SessionDetail {
   active_turn?: TurnSummary | null;
   created_at?: CreatedAt1;
-  id: Id1;
+  id: Id2;
   messages?: Messages;
   preferences?: Preferences;
   title: Title;
@@ -718,7 +655,7 @@ export interface TurnSummary {
   created_at?: CreatedAt;
   error?: Error;
   error_code?: TurnFailureCode | null;
-  id: Id;
+  id: Id1;
   last_seq?: LastSeq;
   owner_id?: OwnerId1;
   query_state?: TurnQueryState | null;
@@ -737,7 +674,7 @@ export interface Preferences {
 export interface SessionSummary {
   active_turn?: TurnSummary | null;
   created_at?: CreatedAt2;
-  id: Id2;
+  id: Id3;
   title: Title1;
   updated_at?: UpdatedAt2;
 }

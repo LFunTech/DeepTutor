@@ -22,6 +22,7 @@ from deeptutor.multi_user.context import get_current_user
 from deeptutor.multi_user.roles import can_manage_deployment
 from deeptutor.runtime import memory_probe
 from deeptutor.services.app_update import (
+    SYSTEMD_UPDATE_REASON,
     Installation,
     UpdateInProgressError,
     UpdateJob,
@@ -32,6 +33,7 @@ from deeptutor.services.app_update import (
     detect_installation,
     get_version_check_service,
     launcher_available,
+    running_under_systemd_service,
     update_store_root,
 )
 from deeptutor.services.config import (
@@ -270,6 +272,8 @@ async def request_managed_update(_request: ManagedUpdateRequest) -> dict[str, An
     settings = get_runtime_settings_service().load_system()
     if not settings["version_check_enabled"]:
         raise HTTPException(status_code=409, detail="Version checks are disabled")
+    if running_under_systemd_service():
+        raise HTTPException(status_code=409, detail=SYSTEMD_UPDATE_REASON)
     if not launcher_available():
         raise HTTPException(
             status_code=409,

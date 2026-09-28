@@ -516,6 +516,11 @@ class AgenticLoopPipeline:
                     "[Conversation summary]",
                 )
                 messages.append({"role": "system", "content": f"{header}\n{content}"})
+        # AgentLoop persists the model-facing turn slice after the run.  Keep
+        # the boundary immediately before the new user input so enterprise PG
+        # turn history excludes the stable system prompt and already-built
+        # context prefix while retaining the current model/user exchange.
+        self._model_turn_start = len(messages)
         messages.append({"role": "user", "content": user_content})
         return self._prepare_messages_with_attachments(messages, context)
 

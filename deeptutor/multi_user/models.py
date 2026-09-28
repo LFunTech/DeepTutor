@@ -6,9 +6,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-Role = Literal["admin", "user", "tenant_admin"]
+Role = Literal["admin", "teacher", "student", "user", "tenant_admin"]
 AccountPreset = Literal["standard", "learner", "custom"]
 ScopeKind = Literal["admin", "user", "tenant"]
+
+#: The single source of truth for valid role values. Authorization remains
+#: least-privilege: only ``admin`` elevates to local instance admin, and only
+#: ``tenant_admin`` with a tenant scope may manage tenant accounts.
+VALID_ROLES: frozenset[str] = frozenset(
+    {"admin", "teacher", "student", "user", "tenant_admin"}
+)
+
+
+def normalize_role(value: str, default: str = "user") -> str:
+    """Return ``value`` when legal, otherwise fall back without gaining power."""
+    return value if value in VALID_ROLES else default
 
 
 @dataclass(frozen=True, slots=True)
