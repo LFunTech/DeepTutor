@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
@@ -20,6 +21,17 @@ LEARNING_AGE_BANDS = {"6-8", "9-12", "13-15"}
 LEARNING_PERSONAS = {"teacher"}
 LEARNING_SURFACES = {"chat", "reading"}
 _EXTENSION_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+
+@dataclass(frozen=True)
+class GrantWriteReceipt:
+    """Snapshot used to restore a grant only if our own write is still current."""
+
+    backend: str
+    previous_grant: dict[str, Any]
+    written_grant: dict[str, Any]
+    previous_text: str | None = None
+    written_text: str | None = None
 
 
 def _pg_runtime():
@@ -273,6 +285,13 @@ def load_grant(user_id: str) -> dict[str, Any]:
 
 
 def save_grant(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    grant, _receipt = _write_grant(user_id, payload, with_receipt=False)
+    return grant
+
+
+def _write_grant(
+    user_id: str, payload: dict[str, Any], *, with_receipt: bool
+) -> tuple[dict[str, Any], GrantWriteReceipt | None]:
     user_record = grant_subject_record(user_id)
     if user_record is None:
         raise ValueError(f"Unknown user id: {user_id}")
@@ -281,12 +300,59 @@ def save_grant(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Admin users use the main workspace and cannot receive assignments.")
     grant = normalize_grant(user_id, payload)
     validate_grant(grant)
-    if _save_pg_grant(user_id, grant):
-        return grant
+    previous_grant = load_grant(user_id) if with_receipt else empty_grant(user_id)
+    if _pg_runtime() is not None and _save_pg_grant(user_id, grant):
+        receipt = (
+            GrantWriteReceipt("pg", deepcopy(previous_grant), deepcopy(grant))
+            if with_receipt
+            else None
+        )
+        return grant, receipt
     path = grant_path(user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(grant, indent=2, ensure_ascii=False), encoding="utf-8")
-    return grant
+    previous_text = path.read_text(encoding="utf-8") if with_receipt and path.exists() else None
+    written_text = json.dumps(grant, indent=2, ensure_ascii=False)
+    path.write_text(written_text, encoding="utf-8")
+    receipt = (
+        GrantWriteReceipt(
+            "local",
+            deepcopy(previous_grant),
+            deepcopy(grant),
+            previous_text=previous_text,
+            written_text=written_text,
+        )
+        if with_receipt
+        else None
+    )
+    return grant, receipt
+
+
+def save_grant_with_receipt(
+    user_id: str, payload: dict[str, Any]
+) -> tuple[dict[str, Any], GrantWriteReceipt]:
+    """Save a grant and capture enough state for conditional rollback."""
+
+    grant, receipt = _write_grant(user_id, payload, with_receipt=True)
+    assert receipt is not None
+    return grant, receipt
+
+
+def restore_grant_if_unchanged(user_id: str, receipt: GrantWriteReceipt) -> bool:
+    """Restore a failed multi-step update only if no later grant edit won."""
+
+    current = load_grant(user_id)
+    if current != receipt.written_grant:
+        return False
+    if receipt.backend == "pg":
+        return _save_pg_grant(user_id, deepcopy(receipt.previous_grant))
+    path = grant_path(user_id)
+    if receipt.previous_text is None:
+        if path.exists():
+            path.unlink()
+        return True
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(receipt.previous_text, encoding="utf-8")
+    return True
 
 
 def validate_grant(grant: dict[str, Any]) -> None:
