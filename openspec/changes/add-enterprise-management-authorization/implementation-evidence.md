@@ -391,3 +391,10 @@
 - 运行时新增前端网关：对外仍只暴露 `FRONTEND_PORT=3782`，网关将 `/oms/*` 分流到 OMS standalone、`/tms/*` 分流到 TMS standalone、`/api/*`/`/ws/*`/`/health*` 分流到后端，其余路径保留核心 Web 前端；同 Pod 内部端口不新增 Kubernetes Service 暴露面。
 - 本地验证：`woodpecker-cli lint .woodpecker/protected-k8s-release.yml` 通过（仅保留既有 clone image allowlist warning）；`pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py extensions/enterprise/tests/test_webhook_release_secret.py extensions/enterprise/tests/test_preflight.py -q` → **49 passed**；`npm test -- formal-management-gates.test.tsx oms-auth-callback.test.tsx school-routing.test.tsx` → **32 passed**；`npm run typecheck:oms && npm run build:oms && npm run typecheck:tms && npm run build:tms` 通过；本地 gateway smoke 验证 `/oms/auth/callback` → 200、`/tms/test-school` → 200、`/api/v1/oms/auth/status` → 后端 401。
 - 说明：该切片修正的是部署产物与前端职责边界的运行时可达性问题，不新增任何 `ops.*` 或 `tenant.*` 授权事实，不改变 EduPlus2 仓库/配置；test-cn 仍需重新打 tag 部署后复测真实 OMS BFF 回调与正式 TMS URL。
+
+### 2026-09-29 test-cn OMS query 落地页网关修正切片
+
+- rc.59 部署后真实浏览器复测显示：`/oms/auth/callback` 已能返回 OMS 回调页面，但缺少 `code/state` 时前端跳转到 `/oms?oms_login=failed&reason=code_or_state_missing` 后显示核心 Web 404。原因是前端网关使用原始 `req.url` 做精确匹配，带 query 的 `/oms?...` 未命中 `/oms`，被错误转发到 core frontend。
+- 修正：网关先用 `new URL(req.url, ...)` 提取 pathname，再按 pathname 分流；`/oms?*`、`/oms/*?*`、`/tms/*?*`、`/api/*?*` 和 `/health?*` 均保留原始 path+query 转发到正确 upstream。
+- 回归验证：新增 `extensions/enterprise/tests/test_frontend_gateway.py`，用本地 dummy backend/core/oms/tms 验证 `/oms?oms_login=ok`、`/oms/auth/callback?code=x`、`/tms/test-school?tab=members`、`/api/v1/oms/auth/status?probe=1`、`/health?probe=1` 与普通 core 路由的分流；`pytest extensions/enterprise/tests/test_frontend_gateway.py ... test_preflight.py -q` → **50 passed**，`woodpecker-cli lint .woodpecker/protected-k8s-release.yml` 仅保留既有 clone allowlist warning。
+- 说明：该切片只修复网关查询串分流，不改变 BFF token 交换、EduPlus2 配置或本地授权事实；仍需重新发布后在 test-cn 复测真实浏览器回调落地。

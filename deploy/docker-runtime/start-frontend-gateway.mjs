@@ -10,7 +10,16 @@ const targets = {
   tms: { host: "127.0.0.1", port: Number.parseInt(process.env.TMS_FRONTEND_PORT || "3784", 10) },
 };
 
-function targetFor(pathname = "/") {
+function pathnameFor(url = "/") {
+  try {
+    return new URL(url, "http://deeptutor.local").pathname;
+  } catch {
+    return "/";
+  }
+}
+
+function targetFor(url = "/") {
+  const pathname = pathnameFor(url);
   if (pathname === "/oms" || pathname.startsWith("/oms/")) return targets.oms;
   if (pathname === "/tms" || pathname.startsWith("/tms/")) return targets.tms;
   if (
