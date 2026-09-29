@@ -52,6 +52,7 @@ async def test_management_schema_is_versioned_repeatable_and_default_deny(pg_dsn
         ("0006_remove_role_action_function",),
         ("0007_custom_role_school_owner",),
         ("0008_relocate_database_business_rules",),
+        ("0009_approval_apply_payload",),
     ]
     assert principals == (0,)
     assert assignments == (0,)

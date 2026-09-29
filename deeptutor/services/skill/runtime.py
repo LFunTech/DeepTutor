@@ -63,6 +63,20 @@ def get_runtime_skill_service(*, builtin_root: Path | None = BUILTIN_SKILLS_ROOT
     return get_skill_service()
 
 
+def skill_sources(*, workspace_id: str = "", builtin_root: Path | None = BUILTIN_SKILLS_ROOT):
+    """Return skill catalogs visible to workspace/resource callers.
+
+    Older workspace code expected a ``skill_sources`` helper that yielded
+    ``(service, allowed_ids, source_label)`` tuples.  The runtime now resolves a
+    single request-scoped skill service through ``get_runtime_skill_service``;
+    keep this small compatibility seam so workspace resource validation and
+    legacy tests do not reach into local user skill folders directly.
+    """
+
+    del workspace_id
+    yield (get_runtime_skill_service(builtin_root=builtin_root), None, "runtime")
+
+
 async def call_skill_service(service: Any, method: str, *args: Any, **kwargs: Any) -> Any:
     result = getattr(service, method)(*args, **kwargs)
     if inspect.isawaitable(result):
@@ -70,4 +84,4 @@ async def call_skill_service(service: Any, method: str, *args: Any, **kwargs: An
     return result
 
 
-__all__ = ["call_skill_service", "get_runtime_skill_service"]
+__all__ = ["call_skill_service", "get_runtime_skill_service", "skill_sources"]

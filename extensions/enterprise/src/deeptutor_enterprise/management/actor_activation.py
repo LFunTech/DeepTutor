@@ -202,7 +202,8 @@ async def activate_first_school_administrator(
             "INSERT INTO management.assignments(id,application,principal_id,role_key,"
             "role_version,scope_kind,school_id,school_binding_version,valid_from,"
             "expires_at,command_id,created_by) "
-            "VALUES(%s,'tms',%s,'school_admin',1,'school',%s,%s,clock_timestamp(),"
+            "VALUES(%s,'tms',%s,'school_admin',1,'school',%s,%s,"
+            "clock_timestamp()-interval '1 second',"
             "%s,%s,'@webhook-actor-activation')",
             (
                 assignment_id,
@@ -213,6 +214,31 @@ async def activate_first_school_administrator(
                 command_id,
             ),
         )
+        delegation_actions = await (
+            await c.execute(
+                "SELECT ra.action_key FROM management.role_actions ra "
+                "JOIN management.action_catalog ac ON ac.application=ra.application "
+                "AND ac.action_key=ra.action_key "
+                "WHERE ra.application='tms' AND ra.role_key='school_admin' "
+                "AND ra.role_version=1 AND ac.status='active' "
+                "AND ac.allowed_scope='school' AND NOT ac.sensitive "
+                "ORDER BY ra.action_key"
+            )
+        ).fetchall()
+        for row in delegation_actions:
+            await c.execute(
+                "INSERT INTO management.delegation_policies"
+                "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,"
+                "expires_at) VALUES(%s,'tms',%s,%s,'school',%s,"
+                "clock_timestamp()-interval '1 second',%s)",
+                (
+                    uuid4(),
+                    principal_id,
+                    row["action_key"],
+                    identity.school_id,
+                    _SCHOOL_ADMIN_EXPIRES_AT,
+                ),
+            )
         next_policy_version = await advance_principal_policy_version(
             c, principal_id, expected_before=identity.policy_version
         )

@@ -383,6 +383,59 @@ class Enterprise:
             os.environ.get("DT_EDUPLUS2_ALLOWED_CLIENTS"),
             default_internal_tenant_id=str(self.deployment.tenant_id),
         )
+        oms_requested = (
+            os.environ.get("DT_EDUPLUS2_OMS_ENABLED", "").strip().lower() == "true"
+            or any(
+                os.environ.get(name)
+                for name in (
+                    "DT_EDUPLUS2_OMS_DISCOVERY_URL",
+                    "DT_EDUPLUS2_OMS_OIDC_ISSUER",
+                    "DT_EDUPLUS2_OMS_AUDIENCE",
+                    "DT_EDUPLUS2_OMS_CLIENT_ID",
+                    "DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL",
+                )
+            )
+        )
+        if oms_requested:
+            from .oms.identity import (
+                BearerAccountStatusClient,
+                PlatformOidcJwtVerifier,
+                TokenOnlyAccountStatusClient,
+            )
+
+            oms_discovery_url = os.environ.get("DT_EDUPLUS2_OMS_DISCOVERY_URL", "").strip() or discovery_url
+            oms_issuer = os.environ.get("DT_EDUPLUS2_OMS_OIDC_ISSUER", "").strip() or issuer
+            oms_client_id = (
+                os.environ.get("DT_EDUPLUS2_OMS_CLIENT_ID", "").strip()
+                or "eduplus-platform-admin"
+            )
+            oms_audience = (
+                os.environ.get("DT_EDUPLUS2_OMS_AUDIENCE", "").strip() or oms_client_id
+            )
+            oms_status_url, oms_status_disabled = _optional_url_env(
+                "DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL"
+            )
+            if not oms_status_url and base_url and not oms_status_disabled:
+                oms_status_url = base_url + "/api/v1/me/profile"
+            if not (
+                oms_discovery_url
+                and oms_issuer
+                and oms_audience
+                and oms_client_id
+                and (oms_status_url or oms_status_disabled)
+            ):
+                raise RuntimeError("OMS identity configuration is incomplete")
+            self.oms_platform_verifier = PlatformOidcJwtVerifier(
+                discovery_url=oms_discovery_url,
+                issuer=oms_issuer,
+                audience=oms_audience,
+                client_id=oms_client_id,
+            )
+            self.oms_account_status = (
+                TokenOnlyAccountStatusClient()
+                if oms_status_disabled
+                else BearerAccountStatusClient(profile_url=oms_status_url)
+            )
         if discovery_url:
             self.eduplus2_verifier = EduPlus2OidcJwtVerifier(
                 discovery_url=discovery_url,

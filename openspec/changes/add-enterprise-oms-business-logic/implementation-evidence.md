@@ -274,3 +274,25 @@ TDD 红灯为缺少 `deeptutor_enterprise.oms.service_access` 模块；绿灯 `t
 本轮 lint/格式/规范验证：`ruff check` 与 `ruff format --check` 覆盖 16 个改动/新增 Python 文件并通过；`openspec validate add-enterprise-oms-business-logic --strict` 通过；`git diff --check` 通过。`openspec instructions apply` 当前进度为 **14/23**。
 
 上游兼容门禁仍未完成：`git merge-tree $(git merge-base HEAD upstream/main) HEAD upstream/main` 对当前 `upstream/main=a053fecf6eeca51ded680de8b8fc41ef63857b11` 显示多处 textual conflict，因此 3.2 不能勾选。4.2/7.7 仍依赖既存 EduPlus2 OIDC/在线账号/学校接口的真实核实与 test-cn 联调；7.4–7.6 仍缺真实 CLI/HTTP/WS/SDK/后台/Agent 执行边界、供应商 usage 核对和 OMS-only 成本视图；6.3 仍缺全服务配置测试/逐执行者确认/独立前端；6.5 仍缺 TMS tenant Skill 管理与 builtin 打包版本授权目录。正式跨学校写入、真实可计费调用和生产发布继续关闭。
+
+## 2026-09-28 任务 6.3：受控配置草稿、执行者确认、发布与回退
+
+完成任务：6.3。
+
+实现内容：
+
+- 模型目录：`oms.model_catalog_config` 与 `/api/v1/oms/models/*` 已支持 draft、test、publish、rollback；发布前通过当前 backend/canary 执行者确认 `env:` Secret 可解析和真实模型配置可装载，失败时保留旧 active。
+- 全服务 Provider 设置：`oms.provider_setting_configs` 与 `/api/v1/oms/provider-settings/*` 已支持 legacy JSON dry-run、draft、test、publish、rollback；应用层校验 section 白名单、HTTPS endpoint、Secret ref，不接受明文 Secret；逐执行者确认写入 `provider_setting_confirmations`。
+- 权限与旁路：所有写 API 均经 `ops.providers.manage` + `ops.oms.access` 的 DeepTutor Enterprise 本地 PEP；无写权限 403、旧版本 409、坏 Secret/配置 422/503；旧云端 settings/skills/partners 等管理写路由仍未挂载。
+- 安全响应：读 API 只返回脱敏 desired/active、安全状态和 descriptor，不回显 Secret ref 明文、环境变量名、供应商密钥或审计中的敏感字段。
+
+验证：
+
+- 模型目录相关测试：`test_oms_model_draft_is_versioned_audited_and_never_active_without_publish`、`test_oms_model_test_confirms_target_executors_without_activating`、`test_oms_model_publish_confirms_backend_and_becomes_runtime_active`、`test_oms_model_publish_failure_keeps_active_and_rollback_discards_bad_draft`。
+- Provider 设置相关测试：`test_oms_provider_settings_are_versioned_redacted_confirmed_and_permissioned`。
+- 企业 route allowlist：`test_enterprise_management_route_allowlist_is_narrow`。
+- 本轮已运行上述 Provider/allowlist 目标测试与 ruff；最终回归会再次跑 `test_application.py` 相关切片。
+
+限制：
+
+- 6.3 完成的是后端正式 API 与执行者确认状态机；独立 OMS 正式前端接入、逐服务真实 adapter 探针和可计费学校测试仍归 6.4、Provider 设置 2.3/2.4 与 OMS 7.4/7.5。

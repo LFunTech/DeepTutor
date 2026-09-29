@@ -210,3 +210,73 @@ async def test_platform_verifier_requires_https_and_same_origin_jwks(oidc_fixtur
         )
         with pytest.raises(PermissionError, match="JWKS"):
             await verifier.verify(token())
+
+
+async def test_bearer_account_status_requires_matching_active_subject():
+    from deeptutor_enterprise.oms.identity import BearerAccountStatusClient
+
+    calls = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {"profile": {"sub": "platform-user-123", "status": "active"}},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        status = BearerAccountStatusClient(
+            profile_url="https://eduplus-test.example/api/v1/me/profile",
+            http_client=client,
+        )
+        assert await status.check(
+            "platform-token", issuer=ISSUER, subject="platform-user-123"
+        ) is True
+    assert calls == ["Bearer platform-token"]
+
+
+async def test_bearer_account_status_fails_closed_on_mismatch_or_missing_status():
+    from deeptutor_enterprise.oms.identity import BearerAccountStatusClient
+
+    async def mismatch_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"sub": "other", "status": "active"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mismatch_handler)) as client:
+        status = BearerAccountStatusClient(
+            profile_url="https://eduplus-test.example/api/v1/me/profile",
+            http_client=client,
+        )
+        with pytest.raises(PermissionError, match="subject mismatch"):
+            await status.check("platform-token", issuer=ISSUER, subject="platform-user-123")
+
+    async def missing_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"sub": "platform-user-123"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(missing_handler)) as client:
+        status = BearerAccountStatusClient(
+            profile_url="https://eduplus-test.example/api/v1/me/profile",
+            http_client=client,
+        )
+        with pytest.raises(RuntimeError, match="missing status"):
+            await status.check("platform-token", issuer=ISSUER, subject="platform-user-123")
+
+    async def forbidden_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"detail": "forbidden"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(forbidden_handler)) as client:
+        status = BearerAccountStatusClient(
+            profile_url="https://eduplus-test.example/api/v1/me/profile",
+            http_client=client,
+        )
+        assert await status.check("platform-token", issuer=ISSUER, subject="platform-user-123") is False
+
+
+async def test_token_only_account_status_trusts_verified_oidc_subject_without_profile_call():
+    from deeptutor_enterprise.oms.identity import TokenOnlyAccountStatusClient
+
+    status = TokenOnlyAccountStatusClient()
+
+    assert await status.check("platform-token", issuer=ISSUER, subject="platform-user-123") is True

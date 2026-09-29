@@ -1,6 +1,6 @@
 # 设计：OMS 配置管理复用现有设置语义
 
-> 重订待单独审阅。云端 OMS 是唯一平台写入口，本地 `/settings` 继续工作；供给/额度/用量以 `add-enterprise-oms-business-logic` 为唯一权威。
+> 2026-09-29 执行版：当前修订版已获批准，descriptor/执行者矩阵、PG 配置事实迁移与 OMS 后端配置 API 已完成。云端 OMS 是唯一平台配置写入口，本地 `/settings` 继续工作；供给/额度/用量以 `add-enterprise-oms-business-logic` 为唯一权威；正式前端接入归 `add-c1-c2-oms-operator-interface`。
 
 ## 服务覆盖矩阵
 

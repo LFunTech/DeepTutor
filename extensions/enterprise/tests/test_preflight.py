@@ -53,6 +53,25 @@ def test_missing_or_incompatible_hook_fails_before_database(deployment, monkeypa
         Enterprise(deployment)
 
 
+def test_oms_identity_can_explicitly_use_token_only_status_policy(deployment, monkeypatch):
+    from deeptutor_enterprise.oms.identity import TokenOnlyAccountStatusClient
+
+    monkeypatch.setenv("DT_EDUPLUS2_OMS_ENABLED", "true")
+    monkeypatch.setenv(
+        "DT_EDUPLUS2_OMS_DISCOVERY_URL",
+        "https://eduplus-auth.test/realms/eduplus/.well-known/openid-configuration",
+    )
+    monkeypatch.setenv("DT_EDUPLUS2_OMS_OIDC_ISSUER", "https://eduplus-auth.test/realms/eduplus")
+    monkeypatch.setenv("DT_EDUPLUS2_OMS_AUDIENCE", "account")
+    monkeypatch.setenv("DT_EDUPLUS2_OMS_CLIENT_ID", "eduplus-platform-admin")
+    monkeypatch.setenv("DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL", "off")
+
+    enterprise = Enterprise(deployment)
+
+    assert enterprise.oms_platform_verifier is not None
+    assert isinstance(enterprise.oms_account_status, TokenOnlyAccountStatusClient)
+
+
 async def test_startup_requires_initialized_tenant_and_matching_epoch(
     pg_dsn, deployment, monkeypatch
 ):

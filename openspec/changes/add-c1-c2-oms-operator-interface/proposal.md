@@ -1,6 +1,6 @@
 # 面向普通运营人员的 OMS 界面
 
-> **2026-09-27 权威边界修订，待重新审阅**：本版替换旧只读 Provider、Token 费用/欠费界面目标；以 `add-c1-oms-operations-prototype` 的五类资源、列表→详情 IA 及 `add-enterprise-oms-business-logic` 为准。旧版获批不自动覆盖本次权限权威修订；真实 API/权限未就绪前不得把原型当生产界面。
+> **2026-09-29 执行版**：当前修订版已获批准，且页面/API/动作矩阵任务已完成；本 change 现在只负责**独立 OMS 正式前端**的呈现、路由守卫、真实 API client 与 E2E 验收，不再承载 Provider/Skill/额度/用量后端业务规则。后端能力分别以 `add-enterprise-management-authorization`、`add-enterprise-oms-business-logic`、`add-enterprise-all-service-provider-settings` 与 `add-enterprise-exact-token-usage-ledger` 为权威；真实 API/权限未就绪前不得把原型当生产界面。
 
 ## Why
 当前本地 `/oms` 是规划/原型路径，不是独立生产 OMS。完成可信平台身份和数据面后，普通运营人员需要按资源→服务→供给→租户授权/额度→实际使用→核对逐级操作，不必理解底层 LLM/PG/RLS，也不能越权进入 EduPlus2 租户控制或 TMS 私有内容。

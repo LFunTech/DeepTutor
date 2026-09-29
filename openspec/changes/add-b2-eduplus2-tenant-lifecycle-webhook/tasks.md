@@ -1,4 +1,4 @@
-> **2026-09-27 Webhook 权威修订稿实施中**：学校接入与生命周期只采信已验签 Webhook，不再 online resolve 二次核验。仅 DeepTutor 代码；不修改 EduPlus2/Keycloak/OpenFGA 仓库。`rc.53` 已由 Woodpecker #64 部署到 test-cn，静态目标应用 ID 参数已移除。真实非 mock `subscription.terminated`、`subscription.created`、`subscription.suspended`、`subscription.reactivated` 均已成功投递并在 PG 只读核对；**完整回归及上游兼容审查仍未验收**。正式 TMS 尚未交付，真实本人登录/激活改由管理授权/TMS 提案验收；本 change 不以此为前置，但也不因 204 授权学校人员。不自动授权再次变更学校订阅、提交或归档。
+> **2026-09-27 Webhook 权威修订稿实施中**：学校接入与生命周期只采信已验签 Webhook，不再 online resolve 二次核验。仅 DeepTutor 代码；不修改 EduPlus2/Keycloak/OpenFGA 仓库。`rc.53` 已由 Woodpecker #64 部署到 test-cn，静态目标应用 ID 参数已移除。真实非 mock `subscription.terminated`、`subscription.created`、`subscription.suspended`、`subscription.reactivated` 均已成功投递并在 PG 只读核对；**完整回归及上游兼容审查已于 2026-09-28 验收**。正式 TMS 尚未交付，真实本人登录/激活改由管理授权/TMS 提案验收；本 change 不以此为前置，但也不因 204 授权学校人员。不自动授权再次变更学校订阅、提交或归档。
 
 ## A. 已保留的接收基础
 - [x] 0.1 控制台签名 mock 接收路径：HMAC、时效、大小、event/header、mock 标记与 ID 校验；mock 不改变业务状态。
@@ -18,4 +18,4 @@
 
 ## D. 受控联调与完成证据
 - [x] 3.1 隔离合成双学校 PG/Webhook-TMS 管理入口集成及合成 JWT 激活正负例已通过；test-cn 非 mock terminated/created 及独立测试学校新增订阅→暂停→恢复，四类回调均成功。该测试学校 PG inbox 顺序为 `created(verified)`→`suspended(denied)`→`reactivated(verified)`，资格 `allowed(generation=1)`→`denied(2)`→`allowed(3)`；绑定、client、PG onboarding 和 actor 待核验候选已脱敏核对，AI `local_enabled=false`、资源 pending、bootstrap 未完成，恢复未覆盖本地隔离或授予人员权限。真实 actor 本人登录/激活归管理授权/TMS 提案，在正式 TMS 未交付时不是本项前置。AI 资源 ready、跨校会话/HTTP/WS/下载/后台、单服务额度及短 TTL URL 由 B1/B2/OMS/TMS 分别联调。不手工补数或从 Webhook 204 直接赋权。详见 `implementation-evidence.md`。
-- [ ] 3.2 完整回归、迁移重复执行/漂移、上游中立 seam 的认证/HTTP/WS/session owner/审计关联审查、OpenSpec strict validation；记录 Webhook-only 残余风险、真实候选交接证据及本人激活/学校正式放行的跨提案待验收门禁。未完成不得标记 change 完成、宣称强一致或归档。
+- [x] 3.2 完整回归、迁移重复执行/漂移、上游中立 seam 的认证/HTTP/WS/session owner/审计关联审查、OpenSpec strict validation；记录 Webhook-only 残余风险、真实候选交接证据及本人激活/学校正式放行的跨提案待验收门禁。未完成不得标记 change 完成、宣称强一致或归档。

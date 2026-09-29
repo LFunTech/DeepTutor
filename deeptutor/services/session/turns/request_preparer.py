@@ -320,9 +320,11 @@ class TurnRequestPreparer:
             raise RuntimeError(str(exc)) from exc
         if llm_selection:
             try:
+                from deeptutor.multi_user.context import get_current_user_or_none
                 from deeptutor.multi_user.model_access import apply_allowed_llm_selection
 
-                llm_selection = apply_allowed_llm_selection(llm_selection) or {}
+                if get_current_user_or_none() is not None:
+                    llm_selection = apply_allowed_llm_selection(llm_selection) or {}
             except PermissionError as exc:
                 raise RuntimeError(str(exc)) from exc
         else:
@@ -331,15 +333,15 @@ class TurnRequestPreparer:
             # configured from admin runtime settings). Deployment-model-pool
             # users (legacy admin and PG tenant_admin) keep the existing
             # behavior (None llm_selection → default config from admin scope).
-            from deeptutor.multi_user.context import get_current_user
+            from deeptutor.multi_user.context import get_current_user_or_none
             from deeptutor.multi_user.model_access import (
                 has_capability_access,
                 redacted_model_access,
                 uses_deployment_llm_pool,
             )
 
-            current_user = get_current_user()
-            if not uses_deployment_llm_pool(current_user):
+            current_user = get_current_user_or_none()
+            if current_user is not None and not uses_deployment_llm_pool(current_user):
                 # Single gate, shared with the frontend lock and any HTTP
                 # surface: no usable LLM grant → a clear terminal error here
                 # instead of a silent fall-through to the global client.
@@ -435,6 +437,7 @@ class TurnRequestPreparer:
             "tools": list(payload.get("tools") or []),
             "knowledge_bases": list(payload.get("knowledge_bases") or []),
             "language": str(payload.get("language") or "en"),
+            "workspace_id": None,
         }
         # Missing legacy chat fields should not manufacture an empty stored
         # preference. Explicit empties still clear a workspace, while a
@@ -796,11 +799,25 @@ class TurnRequestPreparer:
                 if "timed_media_id" in overrides
                 else snapshot.get("timedMediaId")
             ),
+            "consult_partner_id": (
+                overrides.get("consult_partner_id")
+                if "consult_partner_id" in overrides
+                else snapshot.get("consultPartnerId")
+            ),
+            "partner_discussion_group_id": (
+                overrides.get("partner_discussion_group_id")
+                if "partner_discussion_group_id" in overrides
+                else snapshot.get("partnerDiscussionGroupId")
+            ),
             "config": config,
             "persist_user_message": False,
             "regenerate": True,
             "regenerated_from_message_id": int(last_user["id"]),
         }
+        if overrides.get("replay_snapshot") is True and isinstance(
+            snapshot.get("masteryAnswer"), dict
+        ):
+            payload["mastery_answer"] = dict(snapshot["masteryAnswer"])
         if previous_turn_id:
             payload["superseded_turn_id"] = previous_turn_id
         if llm_selection:

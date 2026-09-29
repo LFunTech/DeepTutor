@@ -82,7 +82,7 @@ TMS 管当前租户获授权的 KB、文档、共享资源及业务任务的元�
 
 ## Migration Plan
 
-1. 用户审阅本 proposal 与 OMS 业务契约；B1/B2 实施提案及 `docs/enterprise/02-*`、`11-*`、`12-*` 重订单体 Web、配额写入和 OMS 只读的旧内容。不得因文档校验就把 TMS 当作已批准生产实现。
-2. 先落可信身份/当前租户与双应用域权限事实迁移、真实订阅 actor 一次性首位管理员本人激活，再落成员及资源 owner/grant、EduPlus2 client 注册/注销与服务访问 grant；采用 DeepTutor 版本化 PG migration，不修改 EduPlus2/OpenFGA/Keycloak。原数据回填保留 owner、client 历史与撤权，不把旧 admin/tenant_admin 标记提升为本产品管理权限。
+1. 当前修订版已获批准，且 `docs/enterprise/02-*`、`11-*`、`12-*` 中单体 Web、配额写入和 OMS 只读的旧内容已按新边界收敛；不得因文档校验或开发态原型通过就把 TMS 正式入口视为已交付。
+2. 先落可信身份/当前租户与双应用域权限事实迁移、真实订阅 actor 一次性首位管理员本人激活，再落成员及资源 owner/grant、EduPlus2 client 注册/注销与服务访问 grant；采用 DeepTutor 版本化 PG migration，不修改 EduPlus2/OpenFGA/Keycloak。当前系统可按首次部署思路处理 DeepTutor 自有目标库，但仍不得手工改库跳过迁移、审计或程序校验；旧 admin/tenant_admin 不提升为本产品管理权限。
 3. 接入 OMS 只读配额投影、DeepTutor 逐调用用量及 KB/文档任务服务；分别验收正常、跨租户、失联、待核对、额度耗尽和权限撤销。前端迁入独立 TMS 构建，只在真实 API/权限/数据验收后开启正式 `/tms`；开发 `/tms/prototype` 与生产 404 保持隔离。
 4. 切换/回退保留上版兼容前端和 API 契约，client/grant/审计及用量历史不得因回滚删除；多实例前另经 H/G-H。若必须调整 DeepTutor 核心，仅提交 upstream-neutral seam 经严格审阅，未获批准不修改。

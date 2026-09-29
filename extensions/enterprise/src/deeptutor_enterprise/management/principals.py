@@ -10,6 +10,7 @@ from psycopg.pq import TransactionStatus
 from .authorization import (
     ManagementAuthorizationDenied,
     ManagementIdentity,
+    _column,
     _identity_is_current,
     require_management_permission,
 )
@@ -80,9 +81,9 @@ async def disable_management_principal(
             (command.target_principal_id, actor.application, command.target_school_id),
         )
     ).fetchone()
-    if target is None or target[1] != "active":
+    if target is None or _column(target, "status", 1) != "active":
         raise ManagementAuthorizationDenied("management principal is not active")
-    if target[2] != command.expected_policy_version:
+    if _column(target, "policy_version", 2) != command.expected_policy_version:
         raise ManagementAuthorizationDenied("management principal policy version changed")
 
     admin_role = "platform_security_admin" if actor.application == "oms" else "school_admin"
@@ -143,7 +144,7 @@ async def disable_management_principal(
             (command.target_principal_id, actor.application, command.expected_policy_version),
         )
     ).fetchone()
-    if updated is None or updated[0] != command.expected_policy_version + 1:
+    if updated is None or _column(updated, "policy_version", 0) != command.expected_policy_version + 1:
         raise ManagementAuthorizationDenied("management principal changed during disable")
     await connection.execute(
         "INSERT INTO management.audit_events"
@@ -153,7 +154,7 @@ async def disable_management_principal(
         (
             uuid4(), actor.application, command.target_school_id, actor.issuer,
             actor.subject, action, str(command.target_principal_id), command.request_id.strip(),
-            command.reason.strip(), command.expected_policy_version, updated[0],
+            command.reason.strip(), command.expected_policy_version, _column(updated, "policy_version", 0),
         ),
     )
-    return DisablePrincipalResult(command.target_principal_id, updated[0])
+    return DisablePrincipalResult(command.target_principal_id, _column(updated, "policy_version", 0))

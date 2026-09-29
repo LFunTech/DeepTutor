@@ -38,6 +38,11 @@ class CreateApprovalRequestCommand:
     request_id: str
     external_qualification_ref: str
     external_qualification_version: str
+    target_role_key: str | None = None
+    target_role_version: int | None = None
+    target_action_keys: tuple[str, ...] = ()
+    target_expires_at: datetime | None = None
+    confirmed_role_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,26 @@ class ApprovalWithdrawResult:
     replayed: bool
 
 
+@dataclass(frozen=True)
+class ApplyApprovalCommand:
+    approval_id: UUID
+    expected_target_policy_version: int
+    command_id: UUID
+    reason: str
+    request_id: str
+
+
+@dataclass(frozen=True)
+class ApprovalApplyResult:
+    approval_id: UUID
+    assignment_id: UUID | None
+    role_key: str
+    target_policy_version: int
+    replayed: bool
+    applied_kind: str = "assignment"
+    delegation_ids: tuple[UUID, ...] = ()
+
+
 def _governance_action(application: str) -> str:
     return "ops.permissions.manage" if application == "oms" else "tenant.permissions.manage"
 
@@ -86,6 +111,12 @@ def _validate_text(value: object, *, max_len: int = 1000) -> bool:
 
 
 def _validate_create_command(command: CreateApprovalRequestCommand) -> None:
+    role_payload_empty = (
+        command.target_role_key is None
+        and command.target_role_version is None
+        and command.confirmed_role_version is None
+    )
+    action_payload_empty = not command.target_action_keys
     if (
         not isinstance(command, CreateApprovalRequestCommand)
         or command.operation not in {"platform_grant", "delegation_expand", "school_activation"}
@@ -104,6 +135,79 @@ def _validate_create_command(command: CreateApprovalRequestCommand) -> None:
         or not _validate_text(command.request_id, max_len=128)
         or not _validate_text(command.external_qualification_ref)
         or not _validate_text(command.external_qualification_version, max_len=256)
+        or (
+            command.target_role_key is not None
+            and (
+                not _validate_text(command.target_role_key, max_len=128)
+                or command.target_role_key.startswith(("ops.", "tenant."))
+            )
+        )
+        or (
+            command.target_role_version is not None
+            and (type(command.target_role_version) is not int or command.target_role_version < 1)
+        )
+        or (
+            command.confirmed_role_version is not None
+            and (
+                type(command.confirmed_role_version) is not int
+                or command.confirmed_role_version < 1
+                or command.confirmed_role_version != command.target_role_version
+            )
+        )
+        or not isinstance(command.target_action_keys, tuple)
+        or len(command.target_action_keys) != len(set(command.target_action_keys))
+        or any(not _validate_text(key, max_len=128) for key in command.target_action_keys)
+        or (
+            command.target_expires_at is not None
+            and (
+                not isinstance(command.target_expires_at, datetime)
+                or command.target_expires_at.tzinfo is None
+                or command.target_expires_at <= datetime.now(timezone.utc)
+                or command.target_expires_at > command.expires_at
+            )
+        )
+        or (
+            command.operation == "platform_grant"
+            and (
+                action_payload_empty is False
+                or (
+                    not role_payload_empty
+                    and (
+                        command.target_role_key is None
+                        or command.target_role_version is None
+                        or command.confirmed_role_version is None
+                        or command.target_expires_at is None
+                    )
+                )
+            )
+        )
+        or (
+            command.operation == "delegation_expand"
+            and (
+                role_payload_empty is False
+                or (
+                    not action_payload_empty
+                    and (
+                        command.target_expires_at is None
+                        or any(not key.startswith("ops.") for key in command.target_action_keys)
+                    )
+                )
+            )
+        )
+        or (
+            command.operation == "school_activation"
+            and (
+                not action_payload_empty
+                or (
+                    not role_payload_empty
+                    and (
+                        command.target_role_key != "school_admin"
+                        or command.target_role_version != 1
+                        or command.confirmed_role_version != 1
+                    )
+                )
+            )
+        )
     ):
         raise ManagementAuthorizationDenied("approval command is invalid")
 
@@ -129,6 +233,19 @@ def _validate_withdraw_command(command: WithdrawApprovalCommand) -> None:
         or not _validate_text(command.request_id, max_len=128)
     ):
         raise ManagementAuthorizationDenied("approval withdraw command is invalid")
+
+
+def _validate_apply_command(command: ApplyApprovalCommand) -> None:
+    if (
+        not isinstance(command, ApplyApprovalCommand)
+        or not isinstance(command.approval_id, UUID)
+        or type(command.expected_target_policy_version) is not int
+        or command.expected_target_policy_version < 1
+        or not isinstance(command.command_id, UUID)
+        or not _validate_text(command.reason)
+        or not _validate_text(command.request_id, max_len=128)
+    ):
+        raise ManagementAuthorizationDenied("approval apply command is invalid")
 
 
 def _assert_identity(identity: ManagementIdentity, *, write: bool = True) -> None:
@@ -265,7 +382,9 @@ async def create_management_approval_request(
         await connection.execute(
             "SELECT id,operation,target_principal_id,school_id,expected_policy_version,"
             "expires_at,reason,request_id,external_qualification_ref,"
-            "external_qualification_version,status FROM management.approval_requests "
+            "external_qualification_version,target_role_key,target_role_version,"
+            "target_action_keys,target_expires_at,confirmed_role_version,status "
+            "FROM management.approval_requests "
             "WHERE application=%s AND proposer_issuer=%s AND proposer_subject=%s "
             "AND idempotency_key=%s FOR SHARE",
             (actor.application, actor.issuer, actor.subject, command.idempotency_key),
@@ -282,6 +401,11 @@ async def create_management_approval_request(
             _column(existing, "request_id", 7),
             _column(existing, "external_qualification_ref", 8),
             _column(existing, "external_qualification_version", 9),
+            _column(existing, "target_role_key", 10),
+            _column(existing, "target_role_version", 11),
+            tuple(_column(existing, "target_action_keys", 12) or ()),
+            _column(existing, "target_expires_at", 13),
+            _column(existing, "confirmed_role_version", 14),
         ) != (
             command.operation,
             command.target_principal_id,
@@ -292,9 +416,14 @@ async def create_management_approval_request(
             command.request_id,
             command.external_qualification_ref,
             command.external_qualification_version,
+            command.target_role_key,
+            command.target_role_version,
+            command.target_action_keys,
+            command.target_expires_at,
+            command.confirmed_role_version,
         ):
             raise ApprovalConflict("idempotency key was used for another approval")
-        return ApprovalRequestResult(_column(existing, "id", 0), _column(existing, "status", 10), True)
+        return ApprovalRequestResult(_column(existing, "id", 0), _column(existing, "status", 15), True)
 
     approval_id = uuid4()
     fact = _approval_fact_from_create(
@@ -309,8 +438,10 @@ async def create_management_approval_request(
             "INSERT INTO management.approval_requests"
             "(id,application,operation,target_principal_id,school_id,proposer_issuer,"
             "proposer_subject,external_qualification_ref,external_qualification_version,"
-            "expected_policy_version,status,expires_at,idempotency_key,reason,request_id) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s)",
+            "expected_policy_version,status,expires_at,idempotency_key,reason,request_id,"
+            "target_role_key,target_role_version,target_action_keys,target_expires_at,"
+            "confirmed_role_version) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 approval_id,
                 actor.application,
@@ -326,6 +457,11 @@ async def create_management_approval_request(
                 command.idempotency_key,
                 command.reason,
                 command.request_id,
+                command.target_role_key,
+                command.target_role_version,
+                list(command.target_action_keys),
+                command.target_expires_at,
+                command.confirmed_role_version,
             ),
         )
     except UniqueViolation as exc:
@@ -351,7 +487,9 @@ async def _load_approval_for_update(connection, approval_id: UUID):
         await connection.execute(
             "SELECT id,application,operation,target_principal_id,school_id,"
             "proposer_issuer,proposer_subject,reviewer_issuer,reviewer_subject,"
-            "expected_policy_version,status,expires_at,decided_at "
+            "expected_policy_version,status,expires_at,decided_at,"
+            "target_role_key,target_role_version,target_action_keys,target_expires_at,"
+            "confirmed_role_version "
             "FROM management.approval_requests WHERE id=%s FOR UPDATE",
             (approval_id,),
         )
@@ -536,3 +674,587 @@ async def withdraw_management_approval(
         safe_summary={"operation": operation, "status": "withdrawn"},
     )
     return ApprovalWithdrawResult(command.approval_id, "withdrawn", False)
+
+
+def _approval_payload(row) -> dict[str, object]:
+    return {
+        "target_role_key": _column(row, "target_role_key", 13),
+        "target_role_version": _column(row, "target_role_version", 14),
+        "target_action_keys": tuple(_column(row, "target_action_keys", 15) or ()),
+        "target_expires_at": _column(row, "target_expires_at", 16),
+        "confirmed_role_version": _column(row, "confirmed_role_version", 17),
+    }
+
+
+def _assert_approved_for_apply(
+    row, actor: ManagementIdentity, command: ApplyApprovalCommand
+) -> tuple[str, str, UUID | None, UUID, int]:
+    application = _column(row, "application", 1)
+    operation = _column(row, "operation", 2)
+    school_id = _column(row, "school_id", 4)
+    target_principal_id = _column(row, "target_principal_id", 3)
+    if actor.application != application:
+        raise ManagementAuthorizationDenied("approval application differs from actor")
+    _assert_operation_scope(actor, operation, school_id)
+    status = _column(row, "status", 10)
+    if status != "approved":
+        raise ApprovalConflict("approval request is not approved")
+    expected = _column(row, "expected_policy_version", 9)
+    if command.expected_target_policy_version != expected:
+        raise ApprovalConflict("target policy version changed")
+    return application, operation, school_id, target_principal_id, expected
+
+
+async def _insert_apply_audit(
+    connection,
+    *,
+    audit_id: UUID,
+    application: str,
+    school_id: UUID | None,
+    actor: ManagementIdentity,
+    action_key: str,
+    target_kind: str,
+    target_id: str,
+    request_id: str,
+    reason: str,
+    before_version: int,
+    after_version: int,
+    approval_id: UUID,
+    safe_summary: dict[str, object],
+) -> None:
+    await connection.execute(
+        "INSERT INTO management.audit_events"
+        "(id,application,school_id,actor_issuer,actor_subject,action_key,target_kind,"
+        "target_id,request_id,result,reason,before_version,after_version,approval_id,safe_summary) "
+        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'success',%s,%s,%s,%s,%s)",
+        (
+            audit_id,
+            application,
+            school_id,
+            actor.issuer,
+            actor.subject,
+            action_key,
+            target_kind,
+            target_id,
+            request_id,
+            reason,
+            before_version,
+            after_version,
+            approval_id,
+            Jsonb(safe_summary),
+        ),
+    )
+
+
+async def _apply_approved_platform_grant(
+    connection,
+    actor: ManagementIdentity,
+    command: ApplyApprovalCommand,
+    row,
+) -> ApprovalApplyResult:
+    from .assignment_rules import validate_assignment_relation
+    from .grants import validate_role_action_owner_for_grant, validate_role_owner_for_grant
+    from .policy_version import advance_principal_policy_version
+    from .authorization import require_management_delegation
+
+    application, operation, school_id, target_principal_id, expected = _assert_approved_for_apply(
+        row, actor, command
+    )
+    if application != "oms" or operation != "platform_grant" or school_id is not None:
+        raise ManagementAuthorizationDenied("approval operation is not applicable")
+    payload = _approval_payload(row)
+    role_key = payload["target_role_key"]
+    role_version = payload["target_role_version"]
+    target_expires_at = payload["target_expires_at"]
+    confirmed_role_version = payload["confirmed_role_version"]
+    if (
+        not isinstance(role_key, str)
+        or type(role_version) is not int
+        or confirmed_role_version != role_version
+        or not isinstance(target_expires_at, datetime)
+        or target_expires_at.tzinfo is None
+        or target_expires_at <= datetime.now(timezone.utc)
+    ):
+        raise ApprovalConflict("approval apply payload is unavailable")
+    governance = await require_management_permission(
+        connection, actor, _governance_action(application), write=True
+    )
+    replay = await (
+        await connection.execute(
+            "SELECT id,principal_id,role_key,role_version,scope_kind,school_id,status "
+            "FROM management.assignments WHERE application='oms' AND command_id=%s "
+            "FOR SHARE",
+            (command.command_id,),
+        )
+    ).fetchone()
+    if replay is not None:
+        if (
+            _column(replay, "principal_id", 1) != target_principal_id
+            or _column(replay, "role_key", 2) != role_key
+            or _column(replay, "role_version", 3) != role_version
+            or _column(replay, "scope_kind", 4) != "platform"
+            or _column(replay, "school_id", 5) is not None
+            or _column(replay, "status", 6) != "active"
+        ):
+            raise ApprovalConflict("idempotency key was used for another assignment")
+        target = await _lock_target_principal(
+            connection,
+            application="oms",
+            principal_id=target_principal_id,
+            school_id=None,
+        )
+        return ApprovalApplyResult(
+            command.approval_id,
+            _column(replay, "id", 0),
+            role_key,
+            _column(target, "policy_version", 2),
+            True,
+        )
+
+    target = await _lock_target_principal(
+        connection,
+        application="oms",
+        principal_id=target_principal_id,
+        school_id=None,
+    )
+    if _column(target, "policy_version", 2) != expected:
+        raise ApprovalConflict("target policy version changed")
+    role = await (
+        await connection.execute(
+            "SELECT scope_kind,is_template,owner_school_id FROM management.role_versions "
+            "WHERE application='oms' AND role_key=%s AND version=%s FOR SHARE",
+            (role_key, role_version),
+        )
+    ).fetchone()
+    validate_role_owner_for_grant(role, application="oms", target_school_id=None)
+    if _column(role, "is_template", 1) is True and confirmed_role_version != role_version:
+        raise ManagementAuthorizationDenied("role template version confirmation is required")
+    actions = await (
+        await connection.execute(
+            "SELECT ra.action_key,ac.status,ac.sensitive,ra.owner_school_id "
+            "FROM management.role_actions ra "
+            "JOIN management.action_catalog ac ON ac.application=ra.application "
+            "AND ac.action_key=ra.action_key "
+            "WHERE ra.application='oms' AND ra.role_key=%s AND ra.role_version=%s "
+            "ORDER BY ra.action_key FOR SHARE OF ra,ac",
+            (role_key, role_version),
+        )
+    ).fetchall()
+    validate_role_action_owner_for_grant(actions, owner_school_id=_column(role, "owner_school_id", 2))
+    if not actions or any(_column(action, "status", 1) != "active" for action in actions):
+        raise ManagementAuthorizationDenied("role has no active action set")
+    for action in actions:
+        action_key = _column(action, "action_key", 0)
+        await require_management_delegation(
+            connection,
+            actor,
+            action_key,
+            target_school_id=None,
+            grant_expires_at=target_expires_at,
+        )
+    validate_assignment_relation(
+        application="oms",
+        principal_application="oms",
+        principal_school_id=_column(target, "school_id", 3),
+        role_application="oms",
+        role_scope_kind=_column(role, "scope_kind", 0),
+        assignment_scope_kind="platform",
+        assignment_school_id=None,
+    )
+    existing = await (
+        await connection.execute(
+            "SELECT 1 FROM management.assignments WHERE application='oms' "
+            "AND principal_id=%s AND role_key=%s AND scope_kind='platform' "
+            "AND status='active' LIMIT 1",
+            (target_principal_id, role_key),
+        )
+    ).fetchone()
+    if existing:
+        raise ApprovalConflict("target already has an active role assignment")
+    if _column(target, "status", 1) == "pending":
+        await connection.execute(
+            "UPDATE management.principals SET status='active',updated_at=clock_timestamp() "
+            "WHERE id=%s AND application='oms'",
+            (target_principal_id,),
+        )
+    assignment_id = uuid4()
+    await connection.execute(
+        "INSERT INTO management.assignments(id,application,principal_id,role_key,"
+        "role_version,scope_kind,school_id,school_binding_version,valid_from,expires_at,"
+        "command_id,created_by) VALUES(%s,'oms',%s,%s,%s,'platform',NULL,NULL,"
+        "clock_timestamp()-interval '1 second',%s,%s,%s)",
+        (
+            assignment_id,
+            target_principal_id,
+            role_key,
+            role_version,
+            target_expires_at,
+            command.command_id,
+            str(governance.principal_id),
+        ),
+    )
+    next_policy_version = await advance_principal_policy_version(
+        connection, target_principal_id, expected_before=expected
+    )
+    await _insert_apply_audit(
+        connection,
+        audit_id=uuid4(),
+        application="oms",
+        school_id=None,
+        actor=actor,
+        action_key=_governance_action(application),
+        target_kind="approval_apply_assignment",
+        target_id=str(assignment_id),
+        request_id=command.request_id,
+        reason=command.reason,
+        before_version=expected,
+        after_version=next_policy_version,
+        approval_id=command.approval_id,
+        safe_summary={
+            "approval_id": str(command.approval_id),
+            "operation": operation,
+            "role_key": role_key,
+            "role_version": role_version,
+        },
+    )
+    return ApprovalApplyResult(
+        command.approval_id, assignment_id, role_key, next_policy_version, False
+    )
+
+
+async def _apply_approved_delegation_expand(
+    connection,
+    actor: ManagementIdentity,
+    command: ApplyApprovalCommand,
+    row,
+) -> ApprovalApplyResult:
+    from .authorization import require_management_delegation
+    from .delegation_rules import validate_delegation_relation
+    from .policy_version import advance_principal_policy_version
+
+    application, operation, school_id, target_principal_id, expected = _assert_approved_for_apply(
+        row, actor, command
+    )
+    if application != "oms" or operation != "delegation_expand" or school_id is not None:
+        raise ManagementAuthorizationDenied("approval operation is not applicable")
+    payload = _approval_payload(row)
+    action_keys = tuple(payload["target_action_keys"] or ())
+    target_expires_at = payload["target_expires_at"]
+    if (
+        not action_keys
+        or any(not isinstance(action, str) or not action.startswith("ops.") for action in action_keys)
+        or not isinstance(target_expires_at, datetime)
+        or target_expires_at.tzinfo is None
+        or target_expires_at <= datetime.now(timezone.utc)
+    ):
+        raise ApprovalConflict("approval apply payload is unavailable")
+    await require_management_permission(
+        connection, actor, _governance_action(application), write=True
+    )
+    replay = await (
+        await connection.execute(
+            "SELECT id,target_id,after_version,safe_summary FROM management.audit_events "
+            "WHERE id=%s AND application='oms' AND target_kind='approval_apply_delegation' "
+            "FOR SHARE",
+            (command.command_id,),
+        )
+    ).fetchone()
+    if replay is not None:
+        summary = _column(replay, "safe_summary", 3)
+        ids = tuple(UUID(value) for value in summary.get("delegation_ids", ()))
+        return ApprovalApplyResult(
+            command.approval_id,
+            None,
+            "",
+            _column(replay, "after_version", 2),
+            True,
+            "delegation",
+            ids,
+        )
+    target = await _lock_target_principal(
+        connection,
+        application="oms",
+        principal_id=target_principal_id,
+        school_id=None,
+    )
+    if _column(target, "policy_version", 2) != expected:
+        raise ApprovalConflict("target policy version changed")
+    delegation_ids: list[UUID] = []
+    for action_key in action_keys:
+        await require_management_delegation(
+            connection,
+            actor,
+            action_key,
+            target_school_id=None,
+            grant_expires_at=target_expires_at,
+        )
+        action = await (
+            await connection.execute(
+                "SELECT status,allowed_scope FROM management.action_catalog "
+                "WHERE application='oms' AND action_key=%s FOR SHARE",
+                (action_key,),
+            )
+        ).fetchone()
+        try:
+            validate_delegation_relation(
+                application="oms",
+                principal_application="oms",
+                principal_school_id=None,
+                action_application="oms" if action else None,
+                action_status=_column(action, "status", 0) if action else None,
+                action_allowed_scope=_column(action, "allowed_scope", 1) if action else None,
+                delegation_scope_kind="platform",
+                delegation_school_id=None,
+            )
+        except ManagementAuthorizationDenied as exc:
+            raise ManagementAuthorizationDenied("delegation expansion target is invalid") from exc
+        existing = await (
+            await connection.execute(
+                "SELECT id FROM management.delegation_policies WHERE application='oms' "
+                "AND principal_id=%s AND action_key=%s AND scope_kind='platform' "
+                "AND school_id IS NULL AND status='active' AND expires_at>now() LIMIT 1",
+                (target_principal_id, action_key),
+            )
+        ).fetchone()
+        if existing:
+            raise ApprovalConflict("target already has an active delegation policy")
+        delegation_id = uuid4()
+        await connection.execute(
+            "INSERT INTO management.delegation_policies"
+            "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,expires_at) "
+            "VALUES(%s,'oms',%s,%s,'platform',NULL,clock_timestamp()-interval '1 second',%s)",
+            (delegation_id, target_principal_id, action_key, target_expires_at),
+        )
+        delegation_ids.append(delegation_id)
+    next_policy_version = await advance_principal_policy_version(
+        connection, target_principal_id, expected_before=expected
+    )
+    await _insert_apply_audit(
+        connection,
+        audit_id=command.command_id,
+        application="oms",
+        school_id=None,
+        actor=actor,
+        action_key=_governance_action(application),
+        target_kind="approval_apply_delegation",
+        target_id=str(target_principal_id),
+        request_id=command.request_id,
+        reason=command.reason,
+        before_version=expected,
+        after_version=next_policy_version,
+        approval_id=command.approval_id,
+        safe_summary={
+            "approval_id": str(command.approval_id),
+            "operation": operation,
+            "action_keys": list(action_keys),
+            "delegation_ids": [str(item) for item in delegation_ids],
+        },
+    )
+    return ApprovalApplyResult(
+        command.approval_id,
+        None,
+        "",
+        next_policy_version,
+        False,
+        "delegation",
+        tuple(delegation_ids),
+    )
+
+
+async def apply_approved_management_approval(
+    connection,
+    actor: ManagementIdentity,
+    command: ApplyApprovalCommand,
+) -> ApprovalApplyResult:
+    """应用已批准的管理审批请求。
+
+    学校首管激活、平台敏感角色授予和委托上界扩展共用同一审批终态、
+    目标 policy version、显式模板版本与命令幂等校验。
+    """
+
+    _assert_identity(actor)
+    _validate_apply_command(command)
+    await connection.execute(
+        "SELECT set_config('app.management_app',%s,true)", (actor.application,)
+    )
+    row = await _load_approval_for_update(connection, command.approval_id)
+    _validate_loaded_approval(row)
+    operation = _column(row, "operation", 2)
+    if operation == "school_activation":
+        return await apply_approved_school_activation(connection, actor, command)
+    if operation == "platform_grant":
+        return await _apply_approved_platform_grant(connection, actor, command, row)
+    if operation == "delegation_expand":
+        return await _apply_approved_delegation_expand(connection, actor, command, row)
+    raise ManagementAuthorizationDenied("approval operation is not applicable")
+
+
+async def apply_approved_school_activation(
+    connection,
+    actor: ManagementIdentity,
+    command: ApplyApprovalCommand,
+) -> ApprovalApplyResult:
+    """将已批准的学校高风险授权请求应用为 school_admin assignment。
+
+    此函数只处理 DeepTutor 本地授权事实；不创建或修改外部账号。调用方
+    必须在当前学校事务中执行并保持事务到提交。
+    """
+
+    from .assignment_rules import validate_assignment_relation
+    from .policy_version import advance_principal_policy_version
+
+    _assert_identity(actor)
+    _validate_apply_command(command)
+    await connection.execute("SELECT set_config('app.management_app','tms',true)")
+    row = await _load_approval_for_update(connection, command.approval_id)
+    _validate_loaded_approval(row)
+    application = _column(row, "application", 1)
+    operation = _column(row, "operation", 2)
+    school_id = _column(row, "school_id", 4)
+    target_principal_id = _column(row, "target_principal_id", 3)
+    if application != "tms" or actor.application != "tms" or operation != "school_activation":
+        raise ManagementAuthorizationDenied("approval operation is not applicable")
+    _assert_operation_scope(actor, operation, school_id)
+    await require_management_permission(
+        connection,
+        actor,
+        _governance_action(application),
+        target_school_id=actor.school_id,
+        write=True,
+    )
+    status = _column(row, "status", 10)
+    if status != "approved":
+        raise ApprovalConflict("approval request is not approved")
+    expected = _column(row, "expected_policy_version", 9)
+    if command.expected_target_policy_version != expected:
+        raise ApprovalConflict("target policy version changed")
+
+    replay = await (
+        await connection.execute(
+            "SELECT id,principal_id,role_key,role_version,school_id,status "
+            "FROM management.assignments WHERE application='tms' AND command_id=%s "
+            "FOR SHARE",
+            (command.command_id,),
+        )
+    ).fetchone()
+    if replay is not None:
+        if (
+            _column(replay, "principal_id", 1) != target_principal_id
+            or _column(replay, "role_key", 2) != "school_admin"
+            or _column(replay, "role_version", 3) != 1
+            or _column(replay, "school_id", 4) != school_id
+            or _column(replay, "status", 5) != "active"
+        ):
+            raise ApprovalConflict("idempotency key was used for another assignment")
+        target = await _lock_target_principal(
+            connection,
+            application="tms",
+            principal_id=target_principal_id,
+            school_id=school_id,
+        )
+        return ApprovalApplyResult(
+            command.approval_id,
+            _column(replay, "id", 0),
+            "school_admin",
+            _column(target, "policy_version", 2),
+            True,
+        )
+
+    target = await _lock_target_principal(
+        connection,
+        application="tms",
+        principal_id=target_principal_id,
+        school_id=school_id,
+    )
+    if _column(target, "policy_version", 2) != expected:
+        raise ApprovalConflict("target policy version changed")
+    existing_admin = await (
+        await connection.execute(
+            "SELECT 1 FROM management.assignments WHERE application='tms' "
+            "AND principal_id=%s AND role_key='school_admin' AND school_id=%s "
+            "AND status='active' AND valid_from<=now() AND expires_at>now()",
+            (target_principal_id, school_id),
+        )
+    ).fetchone()
+    if existing_admin is not None:
+        raise ApprovalConflict("target already has an active school administrator role")
+    role = await (
+        await connection.execute(
+            "SELECT scope_kind FROM management.role_versions "
+            "WHERE application='tms' AND role_key='school_admin' AND version=1 FOR SHARE"
+        )
+    ).fetchone()
+    validate_assignment_relation(
+        application="tms",
+        principal_application="tms",
+        principal_school_id=_column(target, "school_id", 3),
+        role_application="tms" if role else None,
+        role_scope_kind=_column(role, "scope_kind", 0) if role else None,
+        assignment_scope_kind="school",
+        assignment_school_id=school_id,
+    )
+    assignment_id = uuid4()
+    expires_at = datetime(9998, 1, 1, tzinfo=timezone.utc)
+    await connection.execute(
+        "UPDATE management.principals SET status='active',updated_at=clock_timestamp() "
+        "WHERE id=%s AND application='tms'",
+        (target_principal_id,),
+    )
+    await connection.execute(
+        "INSERT INTO management.assignments(id,application,principal_id,role_key,"
+        "role_version,scope_kind,school_id,school_binding_version,valid_from,expires_at,"
+        "command_id,created_by) VALUES(%s,'tms',%s,'school_admin',1,'school',%s,%s,"
+        "clock_timestamp()-interval '1 second',%s,%s,%s)",
+        (
+            assignment_id,
+            target_principal_id,
+            school_id,
+            actor.school_binding_version,
+            expires_at,
+            command.command_id,
+            actor.subject,
+        ),
+    )
+    delegation_actions = await (
+        await connection.execute(
+            "SELECT ra.action_key FROM management.role_actions ra "
+            "JOIN management.action_catalog ac ON ac.application=ra.application "
+            "AND ac.action_key=ra.action_key "
+            "WHERE ra.application='tms' AND ra.role_key='school_admin' "
+            "AND ra.role_version=1 AND ac.status='active' "
+            "AND ac.allowed_scope='school' AND NOT ac.sensitive "
+            "ORDER BY ra.action_key"
+        )
+    ).fetchall()
+    for action in delegation_actions:
+        await connection.execute(
+            "INSERT INTO management.delegation_policies"
+            "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,expires_at) "
+            "VALUES(%s,'tms',%s,%s,'school',%s,clock_timestamp()-interval '1 second',%s)",
+            (
+                uuid4(),
+                target_principal_id,
+                _column(action, "action_key", 0),
+                school_id,
+                expires_at,
+            ),
+        )
+    next_policy_version = await advance_principal_policy_version(
+        connection, target_principal_id, expected_before=expected
+    )
+    await _audit(
+        connection,
+        application="tms",
+        school_id=school_id,
+        actor=actor,
+        target_id=assignment_id,
+        request_id=command.request_id,
+        result="success",
+        reason=command.reason,
+        before_version=expected,
+        after_version=next_policy_version,
+        safe_summary={"approval_id": str(command.approval_id), "role_key": "school_admin"},
+    )
+    return ApprovalApplyResult(
+        command.approval_id, assignment_id, "school_admin", next_policy_version, False
+    )

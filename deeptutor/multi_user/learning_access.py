@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .context import get_current_user
+from .context import get_current_user_or_none
 from .grants import load_grant
 
 
@@ -27,7 +27,9 @@ def learning_policy_for_user(user_id: str, *, is_admin: bool = False) -> dict[st
 
 
 def current_learning_policy() -> dict[str, Any] | None:
-    user = get_current_user()
+    user = get_current_user_or_none()
+    if user is None:
+        return None
     if user.scope.kind == "tenant":
         return deepcopy(user.learning_policy)
     return learning_policy_for_user(user.id, is_admin=user.is_admin)

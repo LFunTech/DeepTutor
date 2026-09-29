@@ -14,6 +14,7 @@ from deeptutor.services.session.artifact_attachments import (
     artifact_attachments,
     fill_preview_text,
 )
+from deeptutor.services.session.model_history import normalize_model_turn
 from deeptutor.services.session.provider_response_state import (
     normalize_provider_response_state,
 )
@@ -170,6 +171,7 @@ class TurnExecutor:
         provider_response_state: dict[str, Any] | None = None
         context_resolution = initial_context_resolution(payload)
         capability_usage_summary: dict[str, Any] | None = None
+        context: Any | None = None
         model_label = ""
         # Per-round content segments + narration call_ids: a chat-loop round's
         # text is captured live but a round that resolves as narration is
@@ -523,7 +525,7 @@ class TurnExecutor:
             # token). Resolution: the user's own workspace first; non-admin
             # users fall back to admin-authored presets (personas carry no
             # privileged workflow, so no grant gate applies).
-            from deeptutor.multi_user.context import get_current_user
+            from deeptutor.multi_user.context import get_current_user_or_none
             from deeptutor.multi_user.paths import get_admin_path_service
             from deeptutor.multi_user.roles import is_grant_restricted_user
             from deeptutor.multi_user.skill_access import assigned_skill_ids
@@ -538,9 +540,9 @@ class TurnExecutor:
             )
             from deeptutor.services.skill.service import SkillService, render_skills_manifest
 
-            current_user = get_current_user()
+            current_user = get_current_user_or_none()
             learner_profile_prompt = ""
-            if is_grant_restricted_user(current_user):
+            if current_user is not None and is_grant_restricted_user(current_user):
                 from deeptutor.multi_user.identity import get_user_by_id
                 from deeptutor.multi_user.learner_profile import prompt_block
 
@@ -557,6 +559,7 @@ class TurnExecutor:
                 if (
                     not persona_context
                     and isinstance(runtime_persona_service, PersonaService)
+                    and current_user is not None
                     and is_grant_restricted_user(current_user)
                 ):
                     with contextlib.suppress(Exception):
@@ -574,7 +577,11 @@ class TurnExecutor:
             skill_entries = await call_skill_service(user_skill_service, "summary_entries")
             always_blocks = [await call_skill_service(user_skill_service, "load_always_for_context")]
             assigned_service = None
-            if isinstance(user_skill_service, SkillService) and is_grant_restricted_user(current_user):
+            if (
+                current_user is not None
+                and isinstance(user_skill_service, SkillService)
+                and is_grant_restricted_user(current_user)
+            ):
                 with contextlib.suppress(Exception):
                     assigned_service = SkillService(
                         root=get_admin_path_service().get_workspace_dir() / "skills",
@@ -904,7 +911,11 @@ class TurnExecutor:
                     capability=capability_name,
                     attachments=persisted_attachment_records,
                     metadata=_request_snapshot_metadata(
-                        payload={**payload, "context_resolution": context_resolution},
+                        payload={
+                            **payload,
+                            "context_resolution": context_resolution,
+                            "turn_id": turn_id,
+                        },
                         content=raw_user_content,
                         capability=capability_name,
                         config=request_config,
@@ -944,6 +955,12 @@ class TurnExecutor:
                     turn_id=turn_id,
                     wait_for_user_reply=_wait_for_user_reply,
                     subagent_consult_budget=payload.get("subagent_consult_budget"),
+                    consult_partner_id=(
+                        str(payload.get("consult_partner_id") or "").strip() or None
+                    ),
+                    partner_discussion_group_id=(
+                        str(payload.get("partner_discussion_group_id") or "").strip() or None
+                    ),
                     workspace=get_content_workspace_service().create_runtime_context(
                         capability=capability_name,
                         session_id=session_id,
@@ -1066,11 +1083,14 @@ class TurnExecutor:
             provider_response_state = normalize_provider_response_state(
                 context.runtime.provider_response_state
             )
-            assistant_provider_metadata = (
-                {"provider_response_state": provider_response_state}
-                if provider_response_state is not None
-                else None
-            )
+            assistant_provider_metadata: dict[str, Any] = {}
+            if provider_response_state is not None:
+                assistant_provider_metadata["provider_response_state"] = provider_response_state
+            model_turn = normalize_model_turn(context.runtime.model_turn)
+            if model_turn is not None:
+                assistant_provider_metadata["model_turn"] = model_turn
+            if not assistant_provider_metadata:
+                assistant_provider_metadata = None
 
             # A mastery turn may have changed which path it is on
             # (``mastery_switch`` / ``mastery_leave``). The conversation's

@@ -16,6 +16,8 @@ _LEGACY_RUNTIME_CONFIG_KEYS: dict[str, str] = {
     "selection_tutor_context": "selection_tutor_context",
     "_course_id": "course_id",
     "subagent_consult_budget": "subagent_consult_budget",
+    "consult_partner_id": "consult_partner_id",
+    "partner_discussion_group_id": "partner_discussion_group_id",
     "auto_route": "auto_route",
 }
 
@@ -169,6 +171,9 @@ class TurnRequest(BaseModel):
     followup_question_context: dict[str, Any] | None = None
     selection_tutor_context: dict[str, Any] | None = None
     subagent_consult_budget: int | None = Field(default=None, ge=0)
+    consult_partner_id: str | None = None
+    partner_discussion_group_id: str | None = None
+    client_submission_id: str | None = Field(default=None, max_length=256)
     auto_route: bool | None = None
 
     @model_validator(mode="before")

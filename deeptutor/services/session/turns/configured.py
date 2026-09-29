@@ -429,7 +429,11 @@ class ConfiguredTurnRuntime:
                     payload["content"],
                     capability="chat",
                     metadata=_request_snapshot_metadata(
-                        payload={**payload, "context_resolution": context_resolution},
+                        payload={
+                            **payload,
+                            "context_resolution": context_resolution,
+                            "turn_id": execution.turn_id,
+                        },
                         content=payload["content"],
                         capability="chat",
                         config={},
@@ -464,6 +468,12 @@ class ConfiguredTurnRuntime:
                 runtime=TurnRuntimeContext(
                     turn_id=execution.turn_id,
                     wait_for_user_reply=waiter,
+                    consult_partner_id=(
+                        str(payload.get("consult_partner_id") or "").strip() or None
+                    ),
+                    partner_discussion_group_id=(
+                        str(payload.get("partner_discussion_group_id") or "").strip() or None
+                    ),
                     resource_capabilities=frozenset(),
                     llm_config=prepared.llm_config,
                     chat_params=prepared.chat_params,

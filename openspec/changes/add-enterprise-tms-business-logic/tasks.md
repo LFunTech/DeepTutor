@@ -1,9 +1,11 @@
-> **2026-09-27 双应用域权限修订，待重新审阅批准。** 本 change 是正式 TMS 业务逻辑的未来实施清单；以下任务全部未实施。TMS 原型交互仍由 `add-b2-tms-management-prototype` 承担，OMS 配额写入和真实用量由 OMS/DeepTutor 业务 change 承担。
+> **实施中；任务 1.1、1.2 已完成，证据见 tms-storage-permission-inventory.md 与 tms-permission-test-matrix.md。** 本 change 是正式 TMS 业务逻辑实施清单；当前修订版已获批准。TMS 原型交互仍由 `add-b2-tms-management-prototype` 承担，OMS 配额写入和真实用量由 OMS/DeepTutor 业务 change 承担。当前只负责学校侧成员/应用/资源/tenant Skill/只读投影和独立 TMS 入口；不承担 OMS global Skill 审核发布、Provider Secret 或额度写入。
+
+> **学校侧推进顺序（非勾选项）**：先消费 lifecycle Webhook 的学校—应用有效投影和管理授权 change 的首位 actor 本人激活；再开放当前学校成员/应用/资源/服务访问 grant；随后接 KB/文档、tenant Skill ZIP 和只读额度/用量。TMS 无法通过前端按钮、服务访问 grant、成员角色或 tenant Skill 给学校增加 OMS 服务授权、额度或 Provider Secret。
 
 ## 1. A1：租户与资源归属基线
 
-- [ ] 1.1 盘点 PG 可信 tenant scope、成员/owner/显式 grant、应用与 KB/文件的现有存储，给出 TMS 所需版本化迁移及回填/权限负例清单；不把旧全局 admin 自动变成租户授权。
-- [ ] 1.2 建立管理元数据读取、私有正文读取和资源写入的分层权限测试矩阵，覆盖 HTTP/WS/SDK/下载入口与同租户不同 owner。
+- [x] 1.1 盘点 PG 可信 tenant scope、成员/owner/显式 grant、应用与 KB/文件的现有存储，给出 TMS 所需版本化迁移及回填/权限负例清单；不把旧全局 admin 自动变成租户授权。
+- [x] 1.2 建立管理元数据读取、私有正文读取和资源写入的分层权限测试矩阵，覆盖 HTTP/WS/SDK/下载入口与同租户不同 owner。
 
 ## 2. A2：知识与内容业务基础
 

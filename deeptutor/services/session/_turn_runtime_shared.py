@@ -777,7 +777,7 @@ def _request_snapshot_metadata(
         snapshot["workspaceMode"] = workspace_mode
     if attachments:
         snapshot["attachments"] = attachments
-    if config:
+    if config or "config" in payload:
         snapshot["config"] = dict(config)
     capability_route = payload.get("capability_route")
     if isinstance(capability_route, dict):
@@ -814,13 +814,28 @@ def _request_snapshot_metadata(
     timed_media_id = _timed_media_id(payload.get("timed_media_id"))
     if timed_media_id:
         snapshot["timedMediaId"] = timed_media_id
-    if persona:
+    if persona or "persona" in payload:
         snapshot["persona"] = persona
-    if memory_references:
-        snapshot["memoryReferences"] = memory_references
+    snapshot["memoryReferences"] = list(memory_references)
     if llm_selection:
         snapshot["llmSelection"] = llm_selection
-    return {"request_snapshot": snapshot}
+    consult_partner_id = str(payload.get("consult_partner_id") or "").strip()
+    if consult_partner_id:
+        snapshot["consultPartnerId"] = consult_partner_id
+    partner_discussion_group_id = str(payload.get("partner_discussion_group_id") or "").strip()
+    if partner_discussion_group_id:
+        snapshot["partnerDiscussionGroupId"] = partner_discussion_group_id
+    mastery_answer = payload.get("mastery_answer")
+    if isinstance(mastery_answer, dict):
+        snapshot["masteryAnswer"] = dict(mastery_answer)
+    metadata: dict[str, Any] = {"request_snapshot": snapshot}
+    turn_id = str(payload.get("turn_id") or "").strip()
+    if turn_id:
+        metadata["turn_id"] = turn_id
+    client_submission_id = str(payload.get("client_submission_id") or "").strip()
+    if client_submission_id:
+        metadata["client_submission_id"] = client_submission_id
+    return metadata
 
 
 def _format_question_bank_entry(entry: dict[str, Any]) -> str:

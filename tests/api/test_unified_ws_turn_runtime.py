@@ -22,13 +22,32 @@ def _fake_skill_service() -> SimpleNamespace:
     )
 
 
+def _fake_workspace_service() -> SimpleNamespace:
+    from deeptutor.core.context import WorkspaceRuntimeContext
+
+    return SimpleNamespace(
+        create_runtime_context=lambda **_kwargs: WorkspaceRuntimeContext(
+            workspace_id="test",
+            root="",
+            output_dir="",
+            logical_output_dir="outputs",
+            security_level="off",
+        )
+    )
+
+
 @pytest.fixture(autouse=True)
-def _isolate_runtime_skills(monkeypatch):
-    # Runtime now resolves multiple skill libraries; these turn tests use an
-    # empty catalog and must not inspect the developer's real skill folders.
+def _isolate_runtime_resources(monkeypatch):
+    # Runtime now resolves request-scoped resources; these turn tests use empty
+    # catalogs and must not inspect the developer's real account/workspace
+    # folders.
     monkeypatch.setattr(
-        "deeptutor.services.skill.runtime.skill_sources",
-        lambda **kwargs: [(_fake_skill_service(), None, "account")],
+        "deeptutor.services.skill.runtime.get_runtime_skill_service",
+        lambda **kwargs: _fake_skill_service(),
+    )
+    monkeypatch.setattr(
+        "deeptutor.services.workspace.get_content_workspace_service",
+        lambda: _fake_workspace_service(),
     )
 
 
@@ -186,7 +205,7 @@ async def test_turn_runtime_replays_events_and_materializes_messages(
         _fake_skill_service,
     )
     monkeypatch.setattr(
-        "deeptutor.services.persona.get_persona_service",
+        "deeptutor.services.persona.runtime.get_runtime_persona_service",
         _fake_persona_service,
     )
 
@@ -379,7 +398,7 @@ async def test_turn_runtime_persists_private_provider_response_state(
         _fake_skill_service,
     )
     monkeypatch.setattr(
-        "deeptutor.services.persona.get_persona_service",
+        "deeptutor.services.persona.runtime.get_runtime_persona_service",
         _fake_persona_service,
     )
 
@@ -477,7 +496,7 @@ async def test_turn_runtime_persists_llm_selection_in_turn_snapshot(
         ),
     )
     monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
-    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+    monkeypatch.setattr("deeptutor.services.persona.runtime.get_runtime_persona_service", _fake_persona_service)
 
     selection = {"profile_id": "p-alt", "model_id": "m-alt"}
     session, turn = await runtime.start_turn(
@@ -554,7 +573,7 @@ async def test_turn_runtime_session_persona_persists_falls_back_and_clears(
         lambda: SimpleNamespace(read_l3_concat=lambda: "", emit=_noop_async),
     )
     monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
-    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+    monkeypatch.setattr("deeptutor.services.persona.runtime.get_runtime_persona_service", _fake_persona_service)
 
     async def run_turn(session_id, extra):
         session, turn = await runtime.start_turn(
@@ -707,7 +726,7 @@ async def test_turn_runtime_tenant_admin_uses_deployment_default_without_grant(
         ),
     )
     monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
-    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+    monkeypatch.setattr("deeptutor.services.persona.runtime.get_runtime_persona_service", _fake_persona_service)
 
     current = CurrentUser(
         id="tenant-admin",
@@ -814,7 +833,7 @@ async def test_turn_runtime_allows_model_switching_within_same_session(
         ),
     )
     monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
-    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+    monkeypatch.setattr("deeptutor.services.persona.runtime.get_runtime_persona_service", _fake_persona_service)
 
     first_selection = {"profile_id": "p-default", "model_id": "m-default"}
     second_selection = {"profile_id": "p-alt", "model_id": "m-alt"}
@@ -967,7 +986,7 @@ async def test_turn_runtime_bootstraps_question_followup_context_once(
         ),
     )
     monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
-    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+    monkeypatch.setattr("deeptutor.services.persona.runtime.get_runtime_persona_service", _fake_persona_service)
 
     session, turn = await runtime.start_turn(
         {
@@ -1092,7 +1111,7 @@ async def test_turn_runtime_persists_deep_research_session_preference(
         ),
     )
     monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
-    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+    monkeypatch.setattr("deeptutor.services.persona.runtime.get_runtime_persona_service", _fake_persona_service)
 
     session, turn = await runtime.start_turn(
         {
@@ -1185,7 +1204,7 @@ async def test_turn_runtime_injects_memory_and_refreshes_after_completion(
         ),
     )
     monkeypatch.setattr("deeptutor.services.skill.get_skill_service", _fake_skill_service)
-    monkeypatch.setattr("deeptutor.services.persona.get_persona_service", _fake_persona_service)
+    monkeypatch.setattr("deeptutor.services.persona.runtime.get_runtime_persona_service", _fake_persona_service)
 
     _session, turn = await runtime.start_turn(
         {
@@ -1300,7 +1319,7 @@ async def test_prior_image_attachments_are_reattached_on_the_next_turn(
         _fake_skill_service,
     )
     monkeypatch.setattr(
-        "deeptutor.services.persona.get_persona_service",
+        "deeptutor.services.persona.runtime.get_runtime_persona_service",
         _fake_persona_service,
     )
 
@@ -1405,7 +1424,7 @@ async def test_reattaching_the_same_image_does_not_duplicate_it(
         _fake_skill_service,
     )
     monkeypatch.setattr(
-        "deeptutor.services.persona.get_persona_service",
+        "deeptutor.services.persona.runtime.get_runtime_persona_service",
         _fake_persona_service,
     )
 

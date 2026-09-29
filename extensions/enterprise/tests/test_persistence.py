@@ -59,6 +59,7 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "oms/0016_skill_review_publication_fences",
     "oms/0017_relocate_database_business_rules",
     "oms/0018_tenant_service_access_grants",
+    "oms/0019_provider_settings_configs",
     "management/0001_authorization_base",
     "management/0002_approval_delegation_guards",
     "management/0003_assignment_school_binding_version",

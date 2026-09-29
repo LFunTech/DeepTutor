@@ -1,6 +1,8 @@
 > 2026-09-27 用户确认 EduPlus2 身份/学校/生命周期与 DeepTutor OMS 应用权限拆分，且本代理不得修改 EduPlus2；本 change 权限权威修订版及直接依赖提案随后已分别获批。内部总账实施授权和隔离合成数据限制保持。真实租户数据、生产发布、归档、此次提交/推送均未授权；test-cn Webhook mock 联调不改变 OMS 写入门禁。只在各项证据真实完成后勾选，实施证据见 `implementation-evidence.md`。
 
-> **首个 Agent 的 test-cn 交付优先顺序**：用户指定正式 OMS 维护模型/global Skill，由指定测试学校的受控服务主体先联调，不开放学校用户入口。按 `design.md` 的“test-cn 首个 Agent”切片，优先贯通管理授权 1.2/2.1/3.2、Provider 设置 1.1–2.4、OMS 6.2–6.5/7.3–7.5、独立 OMS 界面 1.1/1.2/3.1 与 B1/B2 的学校运行时门禁；旧原型 fixture、核心本地设置和手工改库均不能替代。此交付顺序不勾选未完成任务，也不豁免后续完整 OMS/Provider/Skill 的全服务验收。
+> **首个 Agent 的 test-cn 交付优先顺序**：用户指定正式 OMS 维护模型/global Skill，由指定测试学校的受控服务主体先联调，不开放学校用户入口。按 `design.md` 的“test-cn 首个 Agent”切片，优先贯通管理授权 1.2/2.1/3.2、Provider 设置 1.1–2.4、OMS 6.2–6.5/7.3–7.5、独立 OMS 界面 1.1/1.2/3.1 与 B1/B2 的学校运行时门禁；旧原型 fixture、核心本地设置和手工改库均不能替代。此交付顺序不勾选未完成任务，也不豁免后续完整 OMS/Provider/Skill 的全服务验收。**职责拆分**：本 change 只定义/实现 OMS 后端业务闭环；正式 OMS 前端归 `add-c1-c2-oms-operator-interface`，TMS tenant Skill 和学校成员/应用归 `add-enterprise-tms-business-logic`，统一鉴权归 `add-enterprise-management-authorization`。
+
+> **跨 proposal 切片（非勾选项）**：先以 `add-enterprise-management-authorization` 的 OMS 会话/PEP/动作目录作为所有写 API 门禁；再完成 `add-enterprise-all-service-provider-settings` 的真实执行者加载与可计费测试准入；随后本 change 完成 global/builtin Skill 审核发布/学校授权、OMS 服务授权/额度和执行前预留；`add-enterprise-exact-token-usage-ledger` 负责逐 attempt 对账/更正；`add-c1-c2-oms-operator-interface` 只在上述真实 API 可用后接正式界面。任何单项提前完成都不能替代 7.7 的端到端验收。
 
 ## 1. A1：状态与迁移基线
 
@@ -31,9 +33,9 @@
 
 - [x] 6.1 按新权威边界重新审阅 `add-enterprise-management-authorization`、`add-b2-oms-platform-read-governance` 和 `add-enterprise-all-service-provider-settings`：OMS 平台动作与目标学校授权由 DeepTutor Enterprise 程序判定、仅将事实迁移到本仓库企业 PG，EduPlus2 仅消费既存身份/学校接口，不代做其 OpenFGA/Keycloak 迁移；同时保持 Secret/导出边界、Provider 全服务入口。三份当前修订版已分别获用户批准，旧版批准不作新合同证据；审阅与 strict validation 见 `implementation-evidence.md` §6.1。此项只完成依赖契约复核，不等于外部接口或正式写 API 验收。
 - [x] 6.2 建立五类平台资源与现有 DeepTutor descriptor/registry 的映射和安全状态 API；逐项验证 search、task 回退、embedding、TTS/STT、image/video、解析/RAG、外部 Agent/工具的条件字段与本地 Web 语义一致。见 `implementation-evidence.md` §2026-09-28 OMS 平台资源安全状态 API；该 API 只返回脱敏 descriptor/status，不执行探针、不保存配置、不替代 6.3 发布确认。
-- [ ] 6.3 实施并验证受控配置草稿、测试、目标执行者逐实例版本确认、部分确认/超时失败保留旧 active、新实例就绪前装载及回退；Secret 明文不进入响应、日志或审计，云端旧管理旁路被阻断。
+- [x] 6.3 实施并验证受控配置草稿、测试、目标执行者逐实例版本确认、部分确认/超时失败保留旧 active、新实例就绪前装载及回退；Secret 明文不进入响应、日志或审计，云端旧管理旁路被阻断。见 `implementation-evidence.md` §2026-09-28 任务 6.3。
 - [ ] 6.4 同步 OMS 原型中供给/调用扣量的简化文案与 fixture，再将独立 OMS 前端接入真实平台身份和资源管理 API；按列表→详情检查普通运营/高权限角色、加载/空/错误/无权限/待生效、审计关联与生产原型 404。
-- [ ] 6.5 与 TMS 业务 change 实施云端 Skill `global`/`tenant` owner 和安全来源模型：非 builtin 创建/更新只接收完整 ZIP，服务端校验包并以 `SKILL.md` 作为全部内容元数据来源，保存不可变版本/摘要且审查前不运行脚本或 `always`；builtin 不可编辑、默认零租户授权并按打包版本复核；OMS 管 global 授权与审核发布，验证无需 TMS 二次分配、未授权 builtin 在清单/`read_skill`/显式请求/`always` 各入口不可达、依赖不足不可用、同名 tenant 优先且本地 DeepTutor 行为不变。
+- [ ] 6.5 与 TMS 业务 change 实施云端 Skill `global`/`tenant` owner 和安全来源模型：**本 change 负责 OMS global/builtin 包登记、审核、发布、学校授权及运行时过滤规则**；TMS change 负责 tenant ZIP 创建/更新与本校自用。非 builtin 创建/更新只接收完整 ZIP，服务端校验包并以 `SKILL.md` 作为全部内容元数据来源，保存不可变版本/摘要且审查前不运行脚本或 `always`；builtin 不可编辑、默认零租户授权并按打包版本复核；验证无需 TMS 二次分配、未授权 builtin 在清单/`read_skill`/显式请求/`always` 各入口不可达、依赖不足不可用、同名 tenant 优先且本地 DeepTutor 行为不变。
 
 ## 7. C2：供给、配额、真实消耗与治理
 

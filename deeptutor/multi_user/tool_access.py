@@ -29,14 +29,16 @@ Enforcement points:
 
 from __future__ import annotations
 
-from .context import get_current_user
+from .context import get_current_user_or_none
 from .grants import load_grant
 from .roles import can_manage_deployment
 
 
 def _current_grant() -> dict | None:
     """The current user's grant, or ``None`` when unrestricted (admin)."""
-    user = get_current_user()
+    user = get_current_user_or_none()
+    if user is None:
+        return None
     if can_manage_deployment(user):
         return None
     return load_grant(user.id)

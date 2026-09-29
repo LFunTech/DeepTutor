@@ -85,6 +85,21 @@ async def _assignment(connection, app: str, principal_id, role: str, scope: str,
     return assignment_id
 
 
+async def _delegation(connection, app: str, principal_id, action: str, scope: str, school_id=None):
+    delegation_id = uuid.uuid4()
+    await connection.execute(
+        "INSERT INTO management.delegation_policies"
+        "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,expires_at) "
+        "VALUES(%s,%s,%s,%s,%s,%s,now()-interval '1 minute',now()+interval '2 hours')",
+        (delegation_id, app, principal_id, action, scope, school_id),
+    )
+    await connection.execute(
+        "UPDATE management.principals SET policy_version=policy_version+1 WHERE id=%s",
+        (principal_id,),
+    )
+    return delegation_id
+
+
 async def test_sensitive_platform_approval_requires_independent_reviewer_and_is_idempotent(pg_dsn):
     from deeptutor_enterprise.management.approvals import (
         ApprovalConflict,
@@ -343,3 +358,261 @@ async def test_competing_reviewers_leave_one_terminal_decision(pg_dsn):
             )
         ).fetchone()
     assert status[0] in {"approved", "rejected"}
+
+
+async def test_approved_platform_grant_applies_confirmed_template_version_only(pg_dsn):
+    from deeptutor_enterprise.management.approvals import (
+        ApplyApprovalCommand,
+        CreateApprovalRequestCommand,
+        ReviewApprovalCommand,
+        apply_approved_management_approval,
+        create_management_approval_request,
+        review_management_approval,
+    )
+    from deeptutor_enterprise.management.authorization import (
+        ManagementAuthorizationDenied,
+        require_management_permission,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        proposer = await _principal(c, "oms", "proposer")
+        reviewer = await _principal(c, "oms", "reviewer")
+        target = await _principal(c, "oms", "target", status="pending")
+        for principal in (proposer, reviewer):
+            await _assignment(c, "oms", principal, "platform_security_admin", "platform")
+            await _delegation(c, "oms", principal, "ops.oms.access", "platform")
+            await _delegation(c, "oms", principal, "ops.providers.read", "platform")
+            await _delegation(c, "oms", principal, "ops.providers.manage", "platform")
+            await _delegation(c, "oms", principal, "ops.credentials.manage", "platform")
+
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with await psycopg.AsyncConnection.connect(runtime_dsn) as c:
+        create = CreateApprovalRequestCommand(
+            operation="platform_grant",
+            target_principal_id=target,
+            target_school_id=None,
+            expected_target_policy_version=1,
+            expires_at=expires_at,
+            idempotency_key="platform-config-v1",
+            reason="明确只授予已确认的 v1 模板",
+            request_id="platform-create-v1",
+            external_qualification_ref="contract://platform/config-admin/v1",
+            external_qualification_version="v1",
+            target_role_key="platform_config_admin",
+            target_role_version=1,
+            target_expires_at=expires_at,
+            confirmed_role_version=1,
+        )
+        approval = await create_management_approval_request(
+            c, _identity("oms", "proposer", version=6), create
+        )
+        reviewed = await review_management_approval(
+            c,
+            _identity("oms", "reviewer", version=6),
+            ReviewApprovalCommand(
+                approval_id=approval.approval_id,
+                decision="approved",
+                expected_target_policy_version=1,
+                reason="独立复核通过",
+                request_id="platform-review-v1",
+            ),
+        )
+        assert reviewed.status == "approved"
+        applied = await apply_approved_management_approval(
+            c,
+            _identity("oms", "reviewer", version=6),
+            ApplyApprovalCommand(
+                approval_id=approval.approval_id,
+                expected_target_policy_version=1,
+                command_id=uuid.uuid4(),
+                reason="应用已批准平台授权",
+                request_id="platform-apply-v1",
+            ),
+        )
+        assert applied.role_key == "platform_config_admin"
+        assert applied.target_policy_version == 2
+        row = await (
+            await c.execute(
+                "SELECT role_version FROM management.assignments WHERE id=%s",
+                (applied.assignment_id,),
+            )
+        ).fetchone()
+        assert row[0] == 1
+        target_identity = _identity("oms", "target", version=2)
+        await require_management_permission(c, target_identity, "ops.providers.manage", write=False)
+        with pytest.raises(ManagementAuthorizationDenied):
+            await require_management_permission(c, target_identity, "ops.skills.manage", write=False)
+
+
+async def test_approved_delegation_expand_applies_requested_actions_idempotently(pg_dsn):
+    from deeptutor_enterprise.management.approvals import (
+        ApplyApprovalCommand,
+        CreateApprovalRequestCommand,
+        ReviewApprovalCommand,
+        apply_approved_management_approval,
+        create_management_approval_request,
+        review_management_approval,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        proposer = await _principal(c, "oms", "proposer")
+        reviewer = await _principal(c, "oms", "reviewer")
+        target = await _principal(c, "oms", "target")
+        for principal in (proposer, reviewer):
+            await _assignment(c, "oms", principal, "platform_security_admin", "platform")
+            await _delegation(c, "oms", principal, "ops.providers.manage", "platform")
+
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with await psycopg.AsyncConnection.connect(runtime_dsn) as c:
+        create = CreateApprovalRequestCommand(
+            operation="delegation_expand",
+            target_principal_id=target,
+            target_school_id=None,
+            expected_target_policy_version=1,
+            expires_at=expires_at,
+            idempotency_key="delegation-platform-provider-manage",
+            reason="扩大供应商配置委托上界",
+            request_id="delegation-create-provider-manage",
+            external_qualification_ref="contract://delegation/provider-manage",
+            external_qualification_version="v1",
+            target_action_keys=("ops.providers.manage",),
+            target_expires_at=expires_at,
+        )
+        approval = await create_management_approval_request(
+            c, _identity("oms", "proposer", version=3), create
+        )
+        await review_management_approval(
+            c,
+            _identity("oms", "reviewer", version=3),
+            ReviewApprovalCommand(
+                approval_id=approval.approval_id,
+                decision="approved",
+                expected_target_policy_version=1,
+                reason="独立复核委托扩大",
+                request_id="delegation-review-provider-manage",
+            ),
+        )
+        command = ApplyApprovalCommand(
+            approval_id=approval.approval_id,
+            expected_target_policy_version=1,
+            command_id=uuid.uuid4(),
+            reason="应用委托扩大",
+            request_id="delegation-apply-provider-manage",
+        )
+        applied = await apply_approved_management_approval(
+            c, _identity("oms", "reviewer", version=3), command
+        )
+        replay = await apply_approved_management_approval(
+            c, _identity("oms", "reviewer", version=3), command
+        )
+        assert applied.replayed is False
+        assert replay.replayed is True
+        assert replay.delegation_ids == applied.delegation_ids
+        assert applied.target_policy_version == 2
+        rows = await (
+            await c.execute(
+                "SELECT action_key,scope_kind,status FROM management.delegation_policies "
+                "WHERE principal_id=%s ORDER BY action_key",
+                (target,),
+            )
+        ).fetchall()
+        assert rows == [("ops.providers.manage", "platform", "active")]
+
+
+async def test_competing_approval_apply_leaves_single_assignment(pg_dsn):
+    from deeptutor_enterprise.management.approvals import (
+        ApplyApprovalCommand,
+        ApprovalConflict,
+        CreateApprovalRequestCommand,
+        ReviewApprovalCommand,
+        apply_approved_management_approval,
+        create_management_approval_request,
+        review_management_approval,
+    )
+
+    await MigrationRunner(pg_dsn).apply()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        proposer = await _principal(c, "oms", "proposer")
+        reviewer = await _principal(c, "oms", "reviewer")
+        target = await _principal(c, "oms", "target", status="pending")
+        for principal in (proposer, reviewer):
+            await _assignment(c, "oms", principal, "platform_security_admin", "platform")
+            await _delegation(c, "oms", principal, "ops.oms.access", "platform")
+            await _delegation(c, "oms", principal, "ops.providers.read", "platform")
+            await _delegation(c, "oms", principal, "ops.providers.manage", "platform")
+            await _delegation(c, "oms", principal, "ops.credentials.manage", "platform")
+
+    runtime_dsn = single_database_user_dsn(pg_dsn)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with await psycopg.AsyncConnection.connect(runtime_dsn) as c:
+        create = CreateApprovalRequestCommand(
+            operation="platform_grant",
+            target_principal_id=target,
+            target_school_id=None,
+            expected_target_policy_version=1,
+            expires_at=expires_at,
+            idempotency_key="platform-config-race",
+            reason="审批 apply 并发竞态",
+            request_id="platform-create-race",
+            external_qualification_ref="contract://platform/config-race",
+            external_qualification_version="v1",
+            target_role_key="platform_config_admin",
+            target_role_version=1,
+            target_expires_at=expires_at,
+            confirmed_role_version=1,
+        )
+        approval = await create_management_approval_request(
+            c, _identity("oms", "proposer", version=6), create
+        )
+        await review_management_approval(
+            c,
+            _identity("oms", "reviewer", version=6),
+            ReviewApprovalCommand(
+                approval_id=approval.approval_id,
+                decision="approved",
+                expected_target_policy_version=1,
+                reason="独立复核通过",
+                request_id="platform-review-race",
+            ),
+        )
+
+    async def apply_once(label: str) -> str:
+        try:
+            async with await psycopg.AsyncConnection.connect(runtime_dsn) as c:
+                result = await apply_approved_management_approval(
+                    c,
+                    _identity("oms", "reviewer", version=6),
+                    ApplyApprovalCommand(
+                        approval_id=approval.approval_id,
+                        expected_target_policy_version=1,
+                        command_id=uuid.uuid4(),
+                        reason=f"并发应用 {label}",
+                        request_id=f"platform-apply-race-{label}",
+                    ),
+                )
+                return "applied" if result.assignment_id else result.applied_kind
+        except ApprovalConflict:
+            return "conflict"
+
+    outcomes = sorted(await asyncio.gather(apply_once("a"), apply_once("b")))
+    assert outcomes == ["applied", "conflict"]
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        rows = await (
+            await c.execute(
+                "SELECT role_key,status FROM management.assignments "
+                "WHERE application='oms' AND principal_id=%s AND role_key='platform_config_admin'",
+                (target,),
+            )
+        ).fetchall()
+        target_row = await (
+            await c.execute(
+                "SELECT policy_version,status FROM management.principals WHERE id=%s",
+                (target,),
+            )
+        ).fetchone()
+    assert rows == [("platform_config_admin", "active")]
+    assert target_row == (2, "active")

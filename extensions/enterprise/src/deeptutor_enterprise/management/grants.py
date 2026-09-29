@@ -229,14 +229,14 @@ async def grant_management_role(
             ),
         )
     ).fetchone()
-    if not principal or principal[1] not in ("pending", "active"):
+    if not principal or _column(principal, "status", 1) not in ("pending", "active"):
         raise ManagementAuthorizationDenied("target principal is unavailable")
-    if principal[2] != target.policy_version:
+    if _column(principal, "policy_version", 2) != target.policy_version:
         raise ManagementGrantConflict("target identity policy version changed")
     validate_assignment_relation(
         application=actor.application,
         principal_application=target.application,
-        principal_school_id=principal[3],
+        principal_school_id=_column(principal, "school_id", 3),
         role_application=actor.application,
         role_scope_kind=_column(role, "scope_kind", 0),
         assignment_scope_kind=scope_kind,
@@ -256,8 +256,30 @@ async def grant_management_role(
         )
     ).fetchone()
     if replay:
+        replay_facts = tuple(
+            _column(replay, key, index)
+            for index, key in enumerate(
+                (
+                    "id",
+                    "principal_id",
+                    "role_key",
+                    "role_version",
+                    "scope_kind",
+                    "school_id",
+                    "expires_at",
+                    "created_by",
+                    "status",
+                    "actor_issuer",
+                    "actor_subject",
+                    "reason",
+                    "request_id",
+                    "before_version",
+                    "after_version",
+                )
+            )
+        )
         if (
-            replay[1:6]
+            replay_facts[1:6]
             != (
                 command.target_principal_id,
                 command.role_key,
@@ -265,16 +287,17 @@ async def grant_management_role(
                 scope_kind,
                 command.target_school_id,
             )
-            or replay[6] != command.expires_at
-            or replay[7] != str(governance.principal_id)
-            or replay[8] != "active"
-            or replay[9:13] != (actor.issuer, actor.subject, command.reason, command.request_id)
-            or replay[13] != command.expected_target_policy_version
+            or replay_facts[6] != command.expires_at
+            or replay_facts[7] != str(governance.principal_id)
+            or replay_facts[8] != "active"
+            or replay_facts[9:13]
+            != (actor.issuer, actor.subject, command.reason, command.request_id)
+            or replay_facts[13] != command.expected_target_policy_version
         ):
             raise ManagementGrantConflict("idempotency key was used for another grant")
-        return GrantRoleResult(replay[0], replay[14], True)
+        return GrantRoleResult(replay_facts[0], replay_facts[14], True)
 
-    if principal[2] != command.expected_target_policy_version:
+    if _column(principal, "policy_version", 2) != command.expected_target_policy_version:
         raise ManagementGrantConflict("target policy version changed")
     existing = await (
         await connection.execute(
@@ -292,7 +315,7 @@ async def grant_management_role(
     ).fetchone()
     if existing:
         raise ManagementGrantConflict("target already has an active role assignment")
-    if principal[1] == "pending":
+    if _column(principal, "status", 1) == "pending":
         await connection.execute(
             "UPDATE management.principals SET status='active',updated_at=now() WHERE id=%s",
             (command.target_principal_id,),
@@ -319,7 +342,9 @@ async def grant_management_role(
         ),
     )
     next_policy_version = await advance_principal_policy_version(
-        connection, command.target_principal_id, expected_before=principal[2]
+        connection,
+        command.target_principal_id,
+        expected_before=_column(principal, "policy_version", 2),
     )
     await connection.execute(
         "INSERT INTO management.audit_events"
@@ -336,7 +361,7 @@ async def grant_management_role(
             str(assignment_id),
             command.request_id,
             command.reason,
-            principal[2],
+            _column(principal, "policy_version", 2),
             next_policy_version,
         ),
     )
@@ -406,7 +431,7 @@ async def revoke_management_role(
         await connection.execute(
             "SELECT id,policy_version,school_id FROM management.principals WHERE id=%s "
             "AND application=%s FOR UPDATE",
-            (preliminary[0], actor.application),
+            (_column(preliminary, "principal_id", 0), actor.application),
         )
     ).fetchone()
     if not target:
@@ -420,19 +445,23 @@ async def revoke_management_role(
             (command.assignment_id, actor.application, scope_kind, command.target_school_id),
         )
     ).fetchone()
-    if not assignment or assignment[0] != target[0]:
+    if not assignment or _column(assignment, "principal_id", 0) != _column(target, "id", 0):
         raise ManagementGrantConflict("target assignment changed")
     role = await (
         await connection.execute(
             "SELECT scope_kind FROM management.role_versions WHERE application=%s "
             "AND role_key=%s AND version=%s FOR SHARE",
-            (actor.application, assignment[3], assignment[4]),
+            (
+                actor.application,
+                _column(assignment, "role_key", 3),
+                _column(assignment, "role_version", 4),
+            ),
         )
     ).fetchone()
     validate_assignment_relation(
         application=actor.application,
         principal_application=actor.application,
-        principal_school_id=target[2],
+        principal_school_id=_column(target, "school_id", 2),
         role_application=actor.application if role else None,
         role_scope_kind=_column(role, "scope_kind", 0) if role else None,
         assignment_scope_kind=scope_kind,
@@ -448,8 +477,25 @@ async def revoke_management_role(
         )
     ).fetchone()
     if previous:
+        previous_facts = tuple(
+            _column(previous, key, index)
+            for index, key in enumerate(
+                (
+                    "application",
+                    "school_id",
+                    "actor_issuer",
+                    "actor_subject",
+                    "action_key",
+                    "target_kind",
+                    "target_id",
+                    "request_id",
+                    "result",
+                    "reason",
+                )
+            )
+        )
         if (
-            previous[:10]
+            previous_facts
             != (
                 actor.application,
                 command.target_school_id,
@@ -462,22 +508,28 @@ async def revoke_management_role(
                 "success",
                 command.reason,
             )
-            or previous[10] != command.expected_target_policy_version
-            or previous[12].get("expected_assignment_version")
+            or _column(previous, "before_version", 10)
+            != command.expected_target_policy_version
+            or _column(previous, "safe_summary", 12).get("expected_assignment_version")
             != command.expected_assignment_version
-            or assignment[2] != "revoked"
+            or _column(assignment, "status", 2) != "revoked"
         ):
             raise ManagementGrantConflict("idempotency key was used for another revoke")
-        return RevokeRoleResult(command.assignment_id, assignment[1], previous[11], True)
+        return RevokeRoleResult(
+            command.assignment_id,
+            _column(assignment, "version", 1),
+            _column(previous, "after_version", 11),
+            True,
+        )
     if (
-        assignment[2] != "active"
-        or assignment[1] != command.expected_assignment_version
-        or target[1] != command.expected_target_policy_version
+        _column(assignment, "status", 2) != "active"
+        or _column(assignment, "version", 1) != command.expected_assignment_version
+        or _column(target, "policy_version", 1) != command.expected_target_policy_version
     ):
         raise ManagementGrantConflict("assignment or target policy version changed")
     admin_role = "platform_security_admin" if actor.application == "oms" else "school_admin"
     admin_action = governance_action
-    if assignment[3] == admin_role:
+    if _column(assignment, "role_key", 3) == admin_role:
         governs = await (
             await connection.execute(
                 "SELECT 1 FROM management.role_actions ra "
@@ -488,10 +540,10 @@ async def revoke_management_role(
                 (
                     actor.application,
                     admin_role,
-                    assignment[4],
+                    _column(assignment, "role_version", 4),
                     admin_action,
-                    assignment[5],
-                    assignment[6],
+                    _column(assignment, "valid_from", 5),
+                    _column(assignment, "expires_at", 6),
                 ),
             )
         ).fetchone()
@@ -521,18 +573,19 @@ async def revoke_management_role(
             if not remaining:
                 raise ManagementGrantConflict("last active administrator cannot be revoked")
     try:
-        async with connection.transaction():
-            await connection.execute(
-                "UPDATE management.assignments SET status='revoked',revoked_at=now(),"
-                "version=version+1 WHERE id=%s",
-                (command.assignment_id,),
-            )
+        await connection.execute(
+            "UPDATE management.assignments SET status='revoked',revoked_at=now(),"
+            "version=version+1 WHERE id=%s",
+            (command.assignment_id,),
+        )
     except CheckViolation as exc:
         if "last active management administrator" not in str(exc):
             raise
         raise ManagementGrantConflict("last active administrator cannot be revoked") from exc
     next_policy_version = await advance_principal_policy_version(
-        connection, target[0], expected_before=target[1]
+        connection,
+        _column(target, "id", 0),
+        expected_before=_column(target, "policy_version", 1),
     )
     await connection.execute(
         "INSERT INTO management.audit_events"
@@ -549,9 +602,14 @@ async def revoke_management_role(
             str(command.assignment_id),
             command.request_id,
             command.reason,
-            target[1],
+            _column(target, "policy_version", 1),
             next_policy_version,
             Jsonb({"expected_assignment_version": command.expected_assignment_version}),
         ),
     )
-    return RevokeRoleResult(command.assignment_id, assignment[1] + 1, next_policy_version, False)
+    return RevokeRoleResult(
+        command.assignment_id,
+        _column(assignment, "version", 1) + 1,
+        next_policy_version,
+        False,
+    )

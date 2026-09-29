@@ -106,7 +106,7 @@ DeepTutor 内部租户 ID 为 UUID，外部学校 ID 的类型及语义须以 Ed
 
 ## Migration Plan
 
-1. 用户先审阅本 proposal 与配套 TMS 业务 proposal；旧实施提案、两份原型中简化的扣量/权限文案、`docs/enterprise/02-*`、`11-*`、`12-*` 及权限矩阵按权威边界重订，不把当前 OpenSpec 文档验证当成实施批准。
-2. 分片完成 EduPlus2 既存可信身份接入、DeepTutor OMS 应用权限、全服务 descriptor 与生效、供给/授予/预留/用量总账；本产品权限和业务状态均用本仓库版本化 PG 迁移，不修改外部 OpenFGA/Keycloak。旧计费/欠费目标不得迁入生产。供应商配置/凭据分别走受控 Secret/PG 来源。
-3. 真实 CLI、HTTP/WS、SDK、后台、Agent/非 Token 服务逐项验证准入/用量/取消/对账；独立 OMS 前端只在 API 与权限通过后接真实适配器，开发 fixture 不进入生产。独立部署、负例、审计、迁移 dry-run/apply/verify、故障与回退证据齐全后才开放正式入口。
+1. 当前修订版及直接依赖提案已获批准；旧实施提案、两份原型中简化的扣量/权限文案、`docs/enterprise/02-*`、`11-*`、`12-*` 及权限矩阵按权威边界重订。不把 OpenSpec 文档验证、开发态原型、Webhook 204 或合成 JWT 当成 OMS 正式业务完成证据。
+2. 分片完成 EduPlus2 既存可信身份接入、DeepTutor OMS 应用权限、全服务 descriptor 与生效、global/builtin Skill 审核发布/学校授权、供给/授予/预留/用量总账；本产品权限和业务状态均用本仓库版本化 PG 迁移，不修改外部 OpenFGA/Keycloak。旧计费/欠费目标不得迁入生产。供应商配置/凭据分别走受控 Secret/PG 来源。
+3. 真实 CLI、HTTP/WS、SDK、后台、Agent/非 Token 服务逐项验证准入/用量/取消/对账；独立 OMS 前端只在 API 与权限通过后接真实适配器，开发 fixture 不进入生产。独立部署、负例、审计、迁移 dry-run/apply/verify、故障与回退证据齐全后才开放正式入口；未完成的后端任务不得通过前端隐藏按钮或手工数据修补宣称完成。
 4. 回退保持上一配置 active、已结算调用和授予历史不可丢；停止新授予/调用或切回上一兼容前端/API 版本前，必须先处理在途预留和待核对调用，不靠删除总账回滚。多执行者前另通过 H/G-H。核心如确需改动，逐处提交 upstream-neutral seam 审阅，未经批准不改。

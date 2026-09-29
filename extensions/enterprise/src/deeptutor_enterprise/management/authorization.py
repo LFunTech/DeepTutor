@@ -15,6 +15,7 @@ from deeptutor_enterprise.oms.value_validation import (
     validate_school_binding_row,
 )
 
+from ..scope import TenantScope
 from .value_validation import (
     ManagementValueError,
     validate_management_action_row,
@@ -111,6 +112,75 @@ def _identity_is_current(identity: ManagementIdentity, *, write: bool) -> bool:
         and type(identity.school_binding_version) is int
         and identity.school_binding_version > 0
     )
+
+
+
+async def tms_permission_summary(enterprise, identity: ManagementIdentity) -> dict[str, object]:
+    """返回正式 TMS 前端可用于显隐/路由守卫的本校动作摘要。
+
+    摘要只来自 DeepTutor Enterprise 本地权限事实，且逐项复用正式 PEP
+    复核；真正业务 API 仍必须在处理请求时再次调用
+    ``require_management_permission``。
+    """
+
+    if (
+        not isinstance(identity, ManagementIdentity)
+        or identity.application != "tms"
+        or not isinstance(identity.school_id, UUID)
+    ):
+        raise ManagementAuthorizationDenied("TMS school identity is required")
+    async with enterprise.db.transaction(
+        TenantScope(str(identity.school_id), "@tms-permissions-summary")
+    ) as c:
+        await c.execute("SELECT set_config('app.management_app','tms',true)")
+        rows = await (
+            await c.execute(
+                "SELECT DISTINCT ra.action_key "
+                "FROM management.principals p "
+                "JOIN management.assignments a ON a.application=p.application "
+                "AND a.principal_id=p.id "
+                "JOIN management.role_actions ra ON ra.application=a.application "
+                "AND ra.role_key=a.role_key AND ra.role_version=a.role_version "
+                "JOIN management.action_catalog ac ON ac.application=ra.application "
+                "AND ac.action_key=ra.action_key "
+                "WHERE p.application='tms' AND p.issuer=%s AND p.subject=%s "
+                "AND p.school_id=%s AND p.status='active' AND p.policy_version=%s "
+                "AND a.scope_kind='school' AND a.school_id=%s "
+                "AND a.status='active' AND a.valid_from<=now() AND a.expires_at>now() "
+                "AND ac.status='active' AND ac.allowed_scope IN ('school','both') "
+                "ORDER BY ra.action_key",
+                (
+                    identity.issuer,
+                    identity.subject,
+                    identity.school_id,
+                    identity.policy_version,
+                    identity.school_id,
+                ),
+            )
+        ).fetchall()
+        actions: set[str] = set()
+        for row in rows:
+            action = row["action_key"]
+            if not isinstance(action, str) or not action.startswith("tenant."):
+                continue
+            try:
+                await require_management_permission(
+                    c,
+                    identity,
+                    action,
+                    target_school_id=identity.school_id,
+                    write=False,
+                )
+            except ManagementAuthorizationDenied:
+                continue
+            actions.add(action)
+    return {
+        "application": "tms",
+        "school_id": str(identity.school_id),
+        "subject": identity.subject,
+        "policy_version": identity.policy_version,
+        "actions": sorted(actions),
+    }
 
 
 async def require_management_permission(
@@ -269,7 +339,6 @@ async def require_management_permission(
                 or identity.webhook_app_id <= 0
             ):
                 raise ManagementAuthorizationDenied("school identity binding is inconsistent")
-            projection_lock = " FOR SHARE" if write else ""
             projected = await (
                 await connection.execute(
                     "SELECT 1 FROM eduplus2.webhook_school_state p "
@@ -284,8 +353,7 @@ async def require_management_permission(
                         ""
                         if lifecycle_governance
                         else "AND p.eligibility='allowed' AND NOT k.frozen "
-                    )
-                    + projection_lock,
+                    ),
                     (
                         binding_school_id,
                         external_school_id,

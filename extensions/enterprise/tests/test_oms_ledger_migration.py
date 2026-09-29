@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from importlib.resources import files
 import re
+from types import SimpleNamespace
 import uuid
 
 from deeptutor_enterprise.migrations.runner import MigrationRunner
@@ -25,6 +27,7 @@ async def test_new_oms_migrations_have_no_database_business_routines_or_enum_che
         "0016_skill_review_publication_fences.sql",
         "0017_relocate_database_business_rules.sql",
         "0018_tenant_service_access_grants.sql",
+        "0019_provider_settings_configs.sql",
     ):
         sql = resources.joinpath(name).read_text(encoding="utf8")
         assert not re.search(r"\bCREATE\s+(?:FUNCTION|PROCEDURE|TRIGGER)\b", sql, re.I)
@@ -53,6 +56,7 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "oms/0016_skill_review_publication_fences",
         "oms/0017_relocate_database_business_rules",
         "oms/0018_tenant_service_access_grants",
+        "oms/0019_provider_settings_configs",
     } <= set(await runner.plan())
 
     await runner.apply()
@@ -92,6 +96,7 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         ("0016_skill_review_publication_fences",),
         ("0017_relocate_database_business_rules",),
         ("0018_tenant_service_access_grants",),
+        ("0019_provider_settings_configs",),
     ]
     assert {row[0]: tuple(row[1:]) for row in tables} == {
         "schema_history": (False, False),
@@ -112,8 +117,74 @@ async def test_oms_ledger_migration_is_versioned_and_repeatable(pg_dsn):
         "skill_publications": (True, True),
         "skill_grants": (True, True),
         "tenant_service_access_grants": (True, True),
+        "provider_setting_configs": (False, False),
+        "provider_setting_confirmations": (False, False),
+        "provider_setting_import_dry_runs": (False, False),
         "skill_reviews": (True, True),
     }
+
+
+async def test_provider_settings_dry_run_is_versioned_and_redacts_legacy_json(pg_dsn):
+    from deeptutor_enterprise.management.authorization import ManagementIdentity
+    from deeptutor_enterprise.oms.provider_settings import record_provider_settings_dry_run
+    from deeptutor_enterprise.stores.postgres.connection import Database
+
+    await MigrationRunner(pg_dsn).apply()
+    now = datetime.now(timezone.utc)
+    actor = ManagementIdentity(
+        application="oms",
+        issuer="https://issuer.example",
+        subject="config-admin",
+        school_id=None,
+        policy_version=1,
+        school_binding_version=None,
+        external_active=True,
+        external_checked_at=now,
+        external_verified_until=now + timedelta(minutes=1),
+    )
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        principal = uuid.uuid4()
+        await connection.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, actor.issuer, actor.subject),
+        )
+        await connection.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_config_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+    raw = {
+        "models": [{"provider": "openai", "api_key": "sk-secret", "model": "gpt"}],
+        "embedding": {"endpoint": "https://embedding.example", "secret": "plain-secret"},
+        "legacy_unknown": {"value": True},
+    }
+    async with Database(single_database_user_dsn(pg_dsn), resource="provider-settings-test") as db:
+        enterprise = SimpleNamespace(db=db)
+        result = await record_provider_settings_dry_run(
+            enterprise, actor, source_kind="legacy-json", raw_settings=raw
+        )
+    assert result.recognized_sections == ("embedding", "models")
+    assert result.unsupported_sections == ("legacy_unknown",)
+    assert result.secret_paths == ("embedding.secret", "models[0].api_key")
+    assert result.result["sanitized_preview"]["models"][0]["api_key"] == "<redacted>"
+    assert result.result["write_ready"] is False
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as connection:
+        row = await (
+            await connection.execute(
+                "SELECT source_kind,source_hash,result,created_by "
+                "FROM oms.provider_setting_import_dry_runs WHERE id=%s",
+                (result.id,),
+            )
+        ).fetchone()
+    assert row[0] == "legacy-json"
+    assert row[1] == result.source_hash
+    assert "sk-secret" not in str(row[2])
+    assert "plain-secret" not in str(row[2])
+    assert row[3] == "config-admin"
 
 
 @pytest.mark.parametrize(

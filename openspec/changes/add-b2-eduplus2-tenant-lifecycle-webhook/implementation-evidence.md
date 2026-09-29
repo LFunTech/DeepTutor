@@ -1,5 +1,13 @@
 # EduPlus2 生命周期 Webhook 实施证据
 
+## 2026-09-28 3.2 完整回归与上游中立 seam 收口
+
+- 在当前工作树补齐上游中立的 core 兼容 seam：`deeptutor.services.skill.runtime.skill_sources()` 兼容旧 workspace 资源目录；`TurnRequest` 恢复旧 WS `client_submission_id`、`consult_partner_id`、`partner_discussion_group_id` 合同并从 legacy `config` 迁移；无当前多用户上下文的本地/legacy runtime 不启用 learner/tool/model grant 限制，真实已认证用户仍按原有 Enterprise/多用户授权路径校验。补齐请求快照中的 `turn_id`、空 `config`、空 `memoryReferences`、`masteryAnswer`、consult 字段与私有 `model_turn` 保留，公共会话详情继续由既有脱敏逻辑移除 `provider_response_state`/`model_turn`。这些修复不引入 EduPlus2、tenant-specific 规则，不修改外部仓库。
+- 回归命令与结果：`PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q tests/api/test_unified_ws_turn_runtime.py --tb=short` → **20 passed, 4 warnings**；`PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q tests/runtime/test_request_contracts_subagent.py tests/services/skill/test_runtime_skill_provider_hook.py tests/runtime/test_externalized_dynamic_resource_entrypoints.py --tb=short` → **21 passed**；`PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests/test_oms_skill_runtime.py extensions/enterprise/tests/test_webhook_authority.py extensions/enterprise/tests/test_management_authorization.py --tb=short` → **64 passed**；企业全量 `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests --tb=short` → **759 passed, 3 skipped, 2 warnings**。
+- 静态与 OpenSpec 验证：`git diff --check` 通过；受影响文件 `ruff check` 通过；`openspec validate add-b2-eduplus2-tenant-lifecycle-webhook --strict` 和 `openspec validate add-enterprise-management-authorization --strict` 均通过。只读 `git merge-tree --write-tree HEAD upstream/main` 退出码 **0**，未执行实际 merge/rebase，未覆盖用户改动。
+- 3.2 风险记录保持有效：Webhook 仍无来源单调版本或受信快照，漏送/迟到旧事件不能由 DeepTutor 自动证明或纠正；本 change 只完成已验签 Webhook 的数据库接收、学校映射/PG onboarding、生命周期投影、真实候选交接与隔离合成激活 API 正负例。真实 `created.actor` 本人登录并激活 TMS 管理员、学校正式管理放行、AI 资源 ready、多学校 HTTP/WS/SDK/session/download/backend 门禁、逐服务额度与 OMS/TMS 正式界面仍分别归 `add-enterprise-management-authorization`、`add-enterprise-tms-business-logic`、`add-b1-b2-trusted-school-integration`、`add-enterprise-oms-business-logic` 等后续提案验收。不得把 Webhook 204、订阅成功或候选 `pending_verification` 解读为真实人员已获权或学校 AI 已可调用。
+- 未修改 EduPlus2、Keycloak、OpenFGA 或真实学校业务数据；未生产发布、未归档。
+
 ## 2026-09-27 独立测试学校新增订阅→暂停→恢复（3.1 完成）
 
 - 用户明确指定并确认在 EduPlus2 **test** 对独立测试学校新增“智能体基座”订阅并完成暂停→恢复；没有修改 EduPlus2 仓库、学校账号或超级管理员。前一所候选测试学校的订阅请求被 EduPlus2 以“须先设置学校超级管理员”拒绝；DeepTutor 只读核对无相应绑定、inbox 或投影，未绕过该前置条件。本次成功学校的操作前 DeepTutor 对该学校绑定、inbox、投影均为 0。
@@ -8,7 +16,7 @@
 - 最终学校本地状态仍为 `local_enabled=false`、`provisioning_status=pending`、`bootstrap_completed=false`，人工冻结控制 `frozen=false`；created actor 候选仍只有 1 条 `pending_verification`。恢复仅改变外部资格，不开放 AI 新调用、不把候选变为管理员。此前隔离合成双校测试覆盖本地开关关闭、人工冻结跨恢复保持、TMS 管理入口与 AI 资源门禁区分、Bearer 激活正负例；因此 3.1 的 Webhook 数据库链路与本地隔离已验收，但真实本人 TMS 登录/激活与 AI 多学校运行时仍属其他提案。
 - 页面恢复结果已在操作当时截图核对；DB 查询均 `SET TRANSACTION READ ONLY`，未读取/输出签名 Secret、原始请求体、OAuth Secret、actor subject、事件 ID 或学校内部 UUID。来源无单调版本或受信快照，不能从本次顺序成功推断漏送/迟到场景会自动纠正。3.2 完整回归和上游兼容审查仍待完成。
 
-## 2026-09-27 3.2 回归与上游兼容审查进度（尚未勾选）
+## 2026-09-27 3.2 回归与上游兼容审查历史进度（已由 2026-09-28 收口取代）
 
 - 当前工作树下重新运行企业测试全集：`PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests --tb=short` → **504 passed, 3 skipped**（199.80s）；覆盖迁移重复执行/漂移、Webhook-TMS/OMS 授权、HTTP/WS、双校 session owner 及审计请求关联。三份受影响 change 的 OpenSpec strict validation 和 `git diff --check` 均通过。
 - 同一配置运行 core 定向认证/PG/WS/session 集合：**12 failed, 32 passed**。12 个失败均在既有 `tests/api/test_unified_ws_turn_runtime.py` 的 `runtime.start_turn`，进入业务断言前由 `apply_learning_policy` 抛出 `authenticated identity is required`；此问题在此前 Webhook 验证中已出现，本轮没有修改 `deeptutor/`、`deeptutor_cli/` 或 core 测试。不能将企业测试通过写成 core 全面回归通过；该测试装配/身份上下文需独立修复并复跑。

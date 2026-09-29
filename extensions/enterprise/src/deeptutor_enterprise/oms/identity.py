@@ -5,11 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
+import logging
 import time
 from urllib.parse import urlsplit
 
 import httpx
 from jose import JWTError, jwt
+
+_ACTIVE_ACCOUNT_STATUSES = frozenset({"active", "enabled", "allowed", "normal", "available"})
+_INACTIVE_ACCOUNT_STATUSES = frozenset({"inactive", "disabled", "locked", "suspended", "deleted", "revoked"})
+logger = logging.getLogger(__name__)
 
 from deeptutor.persistence.postgres.scope import GlobalScope
 from deeptutor_enterprise.eduplus2.client import EduPlus2OidcJwtVerifier
@@ -132,6 +137,168 @@ class PlatformOidcJwtVerifier:
             issued_at=issued_at,
             expires_at=expires_at,
         )
+
+
+
+
+class BearerAccountStatusClient:
+    """用同一个 OMS Bearer token 对既存用户状态端点做在线复核。
+
+    该客户端只确认外部平台账号仍可用；不读取或映射任何 EduPlus2 业务权限，
+    也不会把响应中的角色、部门或学校字段转成本产品 `ops.*` 授权。
+    """
+
+    def __init__(
+        self,
+        *,
+        profile_url: str,
+        http_client: httpx.AsyncClient | None = None,
+        timeout_seconds: float = 5.0,
+    ) -> None:
+        if not profile_url:
+            raise ValueError("OMS account status URL is required")
+        _https_origin(profile_url)
+        self.profile_url = profile_url
+        self.timeout_seconds = float(timeout_seconds)
+        self._http_client = http_client
+
+    async def check(self, token: str, *, issuer: str, subject: str) -> bool:
+        if not isinstance(token, str) or not token or len(token) > 16_384:
+            raise PermissionError("OMS bearer token is invalid")
+        if not subject:
+            raise PermissionError("OMS subject is invalid")
+        client = self._http_client or httpx.AsyncClient()
+        close = self._http_client is None
+        try:
+            response = await client.get(
+                self.profile_url,
+                timeout=self.timeout_seconds,
+                headers={"Accept": "application/json", "Authorization": "Bearer " + token},
+            )
+            if response.status_code in (401, 403):
+                logger.warning(
+                    "OMS account status endpoint denied bearer status_code=%s",
+                    response.status_code,
+                )
+                return False
+            if response.status_code >= 400:
+                raise RuntimeError("OMS account status endpoint rejected request")
+            try:
+                payload = response.json()
+            except ValueError:
+                raise RuntimeError("OMS account status response is invalid") from None
+            if not isinstance(payload, dict):
+                raise RuntimeError("OMS account status response is invalid")
+            return _normalize_account_status(payload, issuer=issuer, subject=subject)
+        except httpx.HTTPError:
+            raise RuntimeError("OMS account status endpoint is unavailable") from None
+        finally:
+            if close:
+                await client.aclose()
+
+
+class TokenOnlyAccountStatusClient:
+    """仅以已验签 OIDC token 的有效期作为外部账号状态复核。
+
+    该策略用于 EduPlus2 只提供认证与身份识别、未向 OMS client 开放独立 profile
+    状态端点的部署。它不会授予任何 DeepTutor `ops.*` 权限，也不会读取 JWT 角色；
+    业务动作仍由本地 Enterprise 授权事实判定。
+    """
+
+    async def check(self, token: str, *, issuer: str, subject: str) -> bool:
+        if not isinstance(token, str) or not token or len(token) > 16_384:
+            raise PermissionError("OMS bearer token is invalid")
+        if not issuer or not subject:
+            raise PermissionError("OMS subject is invalid")
+        return True
+
+
+def _walk_dicts(value: object):
+    if isinstance(value, dict):
+        yield value
+        for item in value.values():
+            yield from _walk_dicts(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_dicts(item)
+
+
+def _first_text(mapping: dict, *keys: str) -> str:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, int):
+            return str(value)
+    return ""
+
+
+def _normalize_account_status(payload: dict, *, issuer: str, subject: str) -> bool:
+    code = payload.get("code")
+    if code not in (None, 0, "0"):
+        logger.warning(
+            "OMS account status response rejected by envelope code=%s keys=%s data_keys=%s",
+            code,
+            sorted(str(key) for key in payload.keys()),
+            sorted(str(key) for key in payload.get("data", {}).keys())
+            if isinstance(payload.get("data"), dict)
+            else [],
+        )
+        return False
+    subject_seen = False
+    status_values: list[str] = []
+    enabled_values: list[bool] = []
+    for mapping in _walk_dicts(payload.get("data", payload)):
+        found_subject = _first_text(
+            mapping,
+            "sub",
+            "subject",
+            "k_user_id",
+            "keycloak_user_id",
+            "keycloakUserId",
+        )
+        if found_subject:
+            if found_subject != subject:
+                raise PermissionError("OMS account status subject mismatch")
+            subject_seen = True
+        found_issuer = _first_text(mapping, "iss", "issuer")
+        if found_issuer and issuer and found_issuer.rstrip("/") != issuer.rstrip("/"):
+            raise PermissionError("OMS account status issuer mismatch")
+        for key in (
+            "status",
+            "account_status",
+            "accountStatus",
+            "user_status",
+            "userStatus",
+            "state",
+        ):
+            value = mapping.get(key)
+            if isinstance(value, str) and value.strip():
+                status_values.append(value.strip().lower())
+        for key in ("active", "enabled", "available"):
+            value = mapping.get(key)
+            if type(value) is bool:
+                enabled_values.append(value)
+    if not subject_seen:
+        raise RuntimeError("OMS account status response missing subject")
+    if any(value in _INACTIVE_ACCOUNT_STATUSES for value in status_values):
+        logger.warning(
+            "OMS account status inactive by status_values=%s enabled_values=%s",
+            status_values,
+            enabled_values,
+        )
+        return False
+    if any(value in _ACTIVE_ACCOUNT_STATUSES for value in status_values):
+        return True
+    if enabled_values:
+        if not all(enabled_values):
+            logger.warning(
+                "OMS account status inactive by enabled_values=%s status_values=%s",
+                enabled_values,
+                status_values,
+            )
+        return all(enabled_values)
+    raise RuntimeError("OMS account status response missing status")
 
 
 class PlatformAccountInactive(PermissionError):

@@ -1,8 +1,8 @@
 # 企业化 proposal 执行顺序与进度
 
-> 状态快照：2026-09-27，基于当前工作区的 `openspec list --json`、各 change 的 proposal/tasks 和执行证据。本文是跨提案的**排序与阻断项索引**，不是实施批准、任务完成证明或发布放行记录。任务完成数以各 change 的 `tasks.md` 为准；OpenSpec artifact 齐备不等于业务完成。已归档的六个历史 change 不再列入待执行队列。
+> 状态快照：2026-09-29，基于当前工作区的 `openspec list --json`、各 change 的 proposal/tasks 和执行证据。本文是跨提案的**排序与阻断项索引**，不是实施批准、任务完成证明或发布放行记录。任务完成数以各 change 的 `tasks.md` 为准；OpenSpec artifact 齐备不等于业务完成。已归档的六个历史 change 不再列入待执行队列。
 
-> 后续授权：2026-09-26 用户已明确批准执行 `add-enterprise-oms-business-logic`，包括依赖提案重订与正式代码/迁移；五份旧版依赖 change 曾分别获批。2026-09-27 用户确认 `add-enterprise-management-authorization` 已完成审阅并要求按跨提案计划继续推进；先前 PG 事实库版受影响提案曾分别获批；用户随后明确 Enterprise 程序授权与真实订阅 actor 首位引导，并分别批准受影响的当前修订版；实施和外部合同验收仍未完成。入口盘点 1.3 与既有 PG 迁移 3.1 已验收，目前 2/14。同日用户又单独批准新 `add-b1-b2-trusted-school-integration` 按现版实施，目前 14 项任务完成 3 项（批准、只读外部契约矩阵、全入口／旁路盘点）。旧 Token 费用/欠费目标获准退役但不归档/同步旧 spec。验证限隔离合成数据；用户此前另行授权了 test-cn 提交、受控发布及 Webhook mock 联调，但本次未授权真实租户数据、生产发布或归档。旧 change 的原版不得继续实施。
+> 后续授权：2026-09-26 用户已明确批准执行 `add-enterprise-oms-business-logic`，包括依赖提案重订与正式代码/迁移；五份旧版依赖 change 曾分别获批。2026-09-27 用户确认 `add-enterprise-management-authorization` 已完成审阅并要求按跨提案计划继续推进；先前 PG 事实库版受影响提案曾分别获批；用户随后明确 Enterprise 程序授权与真实订阅 actor 首位引导，并分别批准受影响的当前修订版；实施和外部合同验收仍未完成。当前管理授权 change 已推进到 51/81；真实外部身份、双学校负例、真实平台目录/账号按钮验收、CLI/WS/SDK 旁路审计与开闸仍未完成。同日用户又单独批准新 `add-b1-b2-trusted-school-integration` 按现版实施，目前 14 项任务完成 3 项（批准、只读外部契约矩阵、全入口／旁路盘点）。旧 Token 费用/欠费目标获准退役但不归档/同步旧 spec。验证限隔离合成数据；用户此前另行授权了 test-cn 提交、受控发布及 Webhook mock 联调，但本次未授权真实租户数据、生产发布或归档。旧 change 的原版不得继续实施。
 
 ## 当前决策与执行原则
 
@@ -25,6 +25,19 @@
 
 **贯穿门禁：**任何波次若实际启用多执行者或要求高可用，应先补 G-H 变更并完成跨实例一致性、故障切换与回退验证；单实例须明示非 HA、容量和恢复目标。迁移、发布、真实外部系统变更和归档各按对应 change 与授权门禁执行。
 
+## OMS / 首个 Agent 集中推进切片
+
+为避免再次把 OMS、TMS、Webhook、Provider 和用量任务混在一起，首个 Agent 的 test-cn 内部受控联调按以下顺序执行。每一行只说明**谁是权威 proposal**，不因另一个 proposal 的局部切片完成而自动勾选本行之外的任务。
+
+| 切片 | 权威 proposal / tasks | 产物与完成条件 |
+| --- | --- | --- |
+| 1. 管理身份与 PEP | `add-enterprise-management-authorization` 1.2、2.1、3.2；`add-b2-oms-platform-read-governance` 1.x、2.1 | OMS/TMS 独立会话、DeepTutor 程序授权服务、`ops.*`/`tenant.*` 动作目录和写事务复核；禁止 `tenant_admin`、JWT role、header、PG role/RLS 直接放权。 |
+| 2. Provider/模型维护 | `add-enterprise-all-service-provider-settings` 2.3、2.4、3.x；`add-enterprise-oms-business-logic` 6.3、7.4 | OMS 后端可维护模型/Provider 配置，执行者真实装载 active 版本；会产生供应商调用的测试必须走学校服务授权、供给/额度预留和 attempt 记录。 |
+| 3. Global Skill 管理 | `add-enterprise-oms-business-logic` 6.5；`add-enterprise-management-authorization` 3.2；TMS 对应 `add-enterprise-tms-business-logic` 5.7 | OMS 管 global/builtin Skill 的登记、审核、发布、学校授权和运行时过滤；TMS 只管本校 tenant ZIP，自用且不二次分配额度。 |
+| 4. 执行前准入与用量 | `add-enterprise-oms-business-logic` 7.4、7.5；`add-enterprise-exact-token-usage-ledger` 2.3、3.1 | CLI/HTTP/WS/SDK/后台/Agent 子调用在发出前完成授权、配置 ready、供给/额度预留；真实 usage/原生单位结算，未知保留待核对，不按零释放。 |
+| 5. 正式 OMS UI | `add-c1-c2-oms-operator-interface` 1.2、2.x、3.x、4.x | 独立 OMS 前端只接真实 `/api/v1/oms/*` 和 `/me/permissions`；未启用/无权安全降级，不使用 fixture 或旧原型；平台人员/角色/学校范围不包含学校账号开通。 |
+| 6. 学校侧闭环 | `add-enterprise-tms-business-logic` 4.x、5.x、6.x、7.x；`add-b1-b2-trusted-school-integration` 3.x | TMS 消费 Webhook 学校有效投影和首位 actor 本人激活，管理本校成员/应用/资源/tenant Skill；只读 OMS 配额/用量，不写额度或 Secret。 |
+
 ## 活跃 change 逐项进度与下一动作
 
 以下 `x/y` 是**任务勾选数的快照**，不是生产完成百分比；其中原型任务含依赖后续正式实现的门禁，不能为了关闭原型而提前勾选。
@@ -33,24 +46,24 @@
 | --- | --- | --- |
 | [`add-ws-required-context-controls`](../../openspec/changes/add-ws-required-context-controls/tasks.md) | 23/23；OpenSpec 显示 complete，仍活跃 | 已实现的协议基线，不再排实施任务；复核证据后，归档须另获明确同意。 |
 | [`add-m1-fixed-tenant-runtime-baseline`](../../openspec/changes/add-m1-fixed-tenant-runtime-baseline/tasks.md) | 32/33；仅余 V.5 确认/归档门禁 | P1：核对运行证据与当前 upstream 兼容性；不以任务数推断 G1 或生产上线完成。 |
-| [`add-g1-woodpecker-k8s-release-baseline`](../../openspec/changes/add-g1-woodpecker-k8s-release-baseline/tasks.md) | 18/29；真实环境与异常/回退等仍有未勾项 | P1：在选定目标环境补全真实登录及 HTTP/WS turn、LightRAG、回退、安全与 release evidence；各环境分别标记 verified/unverified。 |
+| [`add-g1-woodpecker-k8s-release-baseline`](../../openspec/changes/add-g1-woodpecker-k8s-release-baseline/tasks.md) | 22/33；真实环境与异常/回退等仍有未勾项 | P1：在选定目标环境补全真实登录及 HTTP/WS turn、LightRAG、回退、安全与 release evidence；各环境分别标记 verified/unverified。 |
 | [`add-b1-b2-trusted-school-integration`](../../openspec/changes/add-b1-b2-trusted-school-integration/proposal.md) | 3/14；P0 契约矩阵及[逐入口／旁路清单](../../openspec/changes/add-b1-b2-trusted-school-integration/external-contract-and-path-audit-2026-09-27.md)已完成；合成双校 Store/KB 隔离与非 owner RLS 已测，但当前表 owner 运行模式会绕过 core 非 FORCE RLS，学校/账号在线核验亦缺，尚无 B1/G2 放行证据 | 用户确定迁移/运行共用同一个 PG 账号、不拆分；先完成[单账号 FORCE RLS 严格审阅与剩余风险确认](../../openspec/changes/add-b1-b2-trusted-school-integration/external-contract-and-path-audit-2026-09-27.md#单账号-force-rls-严格审阅及实施门禁)，不得将其当作同凭据恶意直连隔离，再推进不可变后续迁移与维护路径改造。`oms.school_bindings` 权威仍归管理授权 change；普通换票 resolve 已改每次在线查询，但 `aud`、本人状态及绑定 epoch 未接通。缺可信接口时入口关闭。 |
 | [`add-c1-oms-operations-prototype`](../../openspec/changes/add-c1-oms-operations-prototype/tasks.md) | 46/49；开发态原型旧交互已验收，非生产 OMS；2.2 因最新 Enterprise 程序授权边界重新打开 | 连接/Profile/模型、搜索/解析控件、平台人员选人及角色/学校范围均为合成演示。双端浏览器矩阵与生产 404 见[审计记录](../../openspec/changes/add-c1-oms-operations-prototype/prototype-browser-audit-2026-09-27.md)。余 4.1、4.2 是旧管理旁路审计及正式实施门禁；不能用原型证明 API 403/409。 |
 | [`add-b2-tms-management-prototype`](../../openspec/changes/add-b2-tms-management-prototype/tasks.md) | 37/41；开发态原型含订阅 actor 新交互已完成合成测试及桌面/窄屏浏览器复核，非生产 TMS | 学校角色、账号查询、事件 actor 本人匹配、访问关系、只读额度及共享服务安全投影已做合成原型；生产原型路径仍为 404。余 3.3、3.5、4.2、4.3 属真实身份/权限/Skill 接口与条件性 HA 门禁，需正式服务端正负例。 |
-| [`add-enterprise-oms-business-logic`](../../openspec/changes/add-enterprise-oms-business-logic/proposal.md) | 8/23；当前修订版已获批、6.1 依赖复核已完成；业务和正式写 API 仍未验收 | DeepTutor 内部 PG/供给/赠送与充值/逐 attempt 事务有隔离合成验证，仍未接真实执行者。OMS 应用 `ops.*`/目标学校授权改归 DeepTutor，EduPlus2 仅消费既存身份/学校接口；发送端草稿已撤销。正式跨学校写 API 未开放，需本仓库权限迁移、现有外部接口核验、双学校撤权负例及全链路验收；不能把内部事务或 Webhook demo 当上线证据。 |
-| [`add-enterprise-management-authorization`](../../openspec/changes/add-enterprise-management-authorization/proposal.md) | 2/14；1.1 因最新 Enterprise 程序授权与订阅 actor 首位引导重新打开，1.3 现有入口盘点与 3.1 企业 PG 基础事实迁移已验收。`oms/0012`、`management/0003` 补学校重绑版本栅栏；事务内权限决策、低风险角色授予/撤权、幂等审计和撤权竞态仍为**未装配局部切片**，正式 API/UI 未验收 | P0 补外部能力证据；P2/P3 补独立会话、权威学校绑定、事件 actor 本人激活与真实 API/UI。缺可信接口时写 API 关闭，不修改 EduPlus2。 |
-| [`add-enterprise-tms-business-logic`](../../openspec/changes/add-enterprise-tms-business-logic/proposal.md) | 0/23；2026-09-27 已按当前修订版单独获批，尚未实施 | P0 与 OMS 固定共享 ID/授权/安全 DTO；随 P2/P4 实施，配额视图依赖真实 OMS 授予和用量。 |
-| [`add-b2-eduplus2-tenant-lifecycle-webhook`](../../openspec/changes/add-b2-eduplus2-tenant-lifecycle-webhook/proposal.md) | 11/12；已实现验签后事务内学校映射、PG onboarding、生命周期投影、TMS 首管候选与隔离合成激活 API、学校—应用资格、本地冻结/诊断和聚合监测；八类事件/重试合同已只读核对 | test-cn `rc.53` 经 Woodpecker #64 部署，静态应用 ID 参数移除；真实非 mock terminated/created 及获批准的独立测试学校新增订阅→暂停→恢复均成功。PG 资格 `allowed→denied→allowed`，本地 AI 开关仍关闭，资源 pending，候选仍待核验。3.1 已验收；剩余 3.2 完整回归及 upstream 兼容审查。正式 TMS 尚未交付，真实本人 OIDC 登录/激活归管理授权/TMS 提案；Webhook 204 不授予人员权限或 AI 资源 ready。无来源版本时漏送/迟到风险继续披露；不修改 EduPlus2 代码、不手工补数。 |
-| [`add-b2-oms-platform-read-governance`](../../openspec/changes/add-b2-oms-platform-read-governance/proposal.md) | 0/8；2026-09-27 四份 artifact 按 DeepTutor OMS 自有权限重订并单独获批，未实施 | P3 核实 EduPlus2 既存 OIDC/账号状态/学校接口；权限 PG 迁移归新 `add-enterprise-management-authorization`；本 change 消费其可信身份、动作、学校范围和撤权，完成负例后才实现跨学校 API。无发送端 OMS 权限迁移。 |
-| [`add-enterprise-all-service-provider-settings`](../../openspec/changes/add-enterprise-all-service-provider-settings/proposal.md) | 0/9；2026-09-27 按本地 OMS 应用权限修订并单独获批，未实施 | P3 先完成既存外部身份核验、DeepTutor OMS 动作权限与 attempt 准入，再实现版本化配置/逐执行者确认；本地 DeepTutor 设置不退化。 |
-| [`add-enterprise-exact-token-usage-ledger`](../../openspec/changes/add-enterprise-exact-token-usage-ledger/proposal.md) | 0/9；2026-09-26 四份 artifact 已重订并获用户单独批准，未实施 | P3 完成硬上界预留、多服务执行证据与待核对；不依赖旧费用/欠费提案，供 P4 消耗结算。 |
+| [`add-enterprise-oms-business-logic`](../../openspec/changes/add-enterprise-oms-business-logic/proposal.md) | 15/23；当前修订版已获批，内部总账、资源状态、模型/Provider 设置/Skill 部分正式 API 与学校额度/权益切片已有合成验证；业务全链路、正式前端和真实执行仍未验收 | DeepTutor 内部 PG/供给/赠送与充值/逐 attempt 事务有隔离合成验证，仍未接真实执行者。OMS 应用 `ops.*`/目标学校授权改归 DeepTutor，EduPlus2 仅消费既存身份/学校接口；发送端草稿已撤销。正式跨学校写 API 未开放，需本仓库权限迁移、现有外部接口核验、双学校撤权负例及全链路验收；不能把内部事务或 Webhook demo 当上线证据。 |
+| [`add-enterprise-management-authorization`](../../openspec/changes/add-enterprise-management-authorization/proposal.md) | 51/81；已接入正式 OMS/TMS 受控入口、TMS 授权写按钮、目录状态、额度/用量/服务访问只读、OMS 模型/Provider/资源/学校/供给/审计/成本/用量任务只读 DTO；新增审批通用 apply、模板版本显式确认、OMS 模型/Provider/Skill 写按钮，以及 OMS 平台人员/角色/学校范围授权、审批、撤权、主体停用写 API 与治理 UI；真实平台登录、真实 actor/OIDC 匹配、双学校真实负例、真实目录/账号按钮验收与开闸仍未完成 | P0/P3 继续补外部身份与真实环境证据；P5 接 OMS 写入/审批/审计回读。缺可信接口时写 API 关闭，不修改 EduPlus2。 |
+| [`add-enterprise-tms-business-logic`](../../openspec/changes/add-enterprise-tms-business-logic/proposal.md) | 2/23；2026-09-28 完成 TMS 存储归属/迁移清单与分层权限测试矩阵；另已实现当前学校配额/用量分页只读与服务访问 grant/revoke HTTP 切片，但不足以勾选完整 TMS 任务；正式前端、成员/应用/资源管理仍未完成 | P0 与 OMS 固定共享 ID/授权/安全 DTO；随 P2/P4 实施，配额视图依赖真实 OMS 授予和用量。 |
+| [`add-b2-eduplus2-tenant-lifecycle-webhook`](../../openspec/changes/add-b2-eduplus2-tenant-lifecycle-webhook/proposal.md) | 12/12；已实现验签后事务内学校映射、PG onboarding、生命周期投影、TMS 首管候选与隔离合成激活 API、学校—应用资格、本地冻结/诊断和聚合监测；八类事件/重试合同已只读核对 | test-cn `rc.53` 经 Woodpecker #64 部署，静态应用 ID 参数移除；真实非 mock terminated/created 及获批准的独立测试学校新增订阅→暂停→恢复均成功。PG 资格 `allowed→denied→allowed`，本地 AI 开关仍关闭，资源 pending，候选仍待核验。3.1 已验收；3.2 完整回归及 upstream 兼容审查已于 2026-09-28 完成；待单独归档，不代表 TMS 本人激活或正式管理写入口已放行。正式 TMS 尚未交付，真实本人 OIDC 登录/激活归管理授权/TMS 提案；Webhook 204 不授予人员权限或 AI 资源 ready。无来源版本时漏送/迟到风险继续披露；不修改 EduPlus2 代码、不手工补数。 |
+| [`add-b2-oms-platform-read-governance`](../../openspec/changes/add-b2-oms-platform-read-governance/proposal.md) | 2/8；2026-09-28 完成 OMS 专用 PEP 入口、最小治理读 API 与后端状态 display catalog；真实身份/学校接口、前端守卫及双校验收仍未完成 | P3 继续核实 EduPlus2 既存 OIDC/账号状态/学校接口；权限 PG 迁移归 `add-enterprise-management-authorization`；本 change 消费其可信身份、动作、学校范围和撤权，完成负例后才开放更多跨学校写 API。无发送端 OMS 权限迁移。 |
+| [`add-enterprise-all-service-provider-settings`](../../openspec/changes/add-enterprise-all-service-provider-settings/proposal.md) | 4/9；2026-09-28 已完成 descriptor/执行者矩阵、PG 配置事实迁移+旧 JSON dry-run、正式 OMS Provider 设置后端读写 API/权限负例/执行者确认/失败回退；正式前端与逐服务真实 adapter 探针仍未完成 | P3 继续完成既存外部身份核验、DeepTutor OMS 动作权限与 attempt 准入、版本化配置读写/逐执行者确认；本地 DeepTutor 设置不退化。 |
+| [`add-enterprise-exact-token-usage-ledger`](../../openspec/changes/add-enterprise-exact-token-usage-ledger/proposal.md) | 6/9；1.1 发出边界矩阵、1.2 Enterprise CallContext 包装、1.3 OMS PG attempt 总账基线、2.1/2.2 预留/准入/幂等结算测试与实现、2.4 OMS/TMS 分级聚合与分页 API 已完成；全入口真实 adapter 接入、账单对账/更正与演练仍未完成 | P3 继续完成硬上界预留、多服务执行证据与待核对；不依赖旧费用/欠费提案，供 P4 消耗结算。 |
 | [`add-oms-token-billing-and-arrears`](../../openspec/changes/add-oms-token-billing-and-arrears/proposal.md) | 0/10；用户已批准退役旧目标，禁止按旧 tasks 实施 | 不归档、不同步冲突旧 spec；现行供给—权益—实际消耗以已批准 OMS change 为准。**不得沿用售价、费用或欠费字段。** |
-| [`add-c1-c2-oms-operator-interface`](../../openspec/changes/add-c1-c2-oms-operator-interface/proposal.md) | 0/10；2026-09-27 按本地 OMS 权限/学校范围修订并单独获批 | P5 待平台权限和真实 API 稳定后接独立 OMS 正式前端，含本产品平台人员/角色/学校操作范围与审计视图，不包含学校账号开通；不把原型作为生产入口，TMS 不继承 OMS 权限。 |
+| [`add-c1-c2-oms-operator-interface`](../../openspec/changes/add-c1-c2-oms-operator-interface/proposal.md) | 10/26；已完成正式 OMS 页面/API/动作矩阵、独立 `/oms` 受控工作台、生产原型 404、资源/学校/供给/审计/成本/用量/任务只读 DTO 首屏接入，并接入模型/Provider/Skill 首批写按钮和平台授权治理写视图；供给/额度/核对动作、完整详情、分页导出和真实角色矩阵仍未完成 | P5 继续接 Provider/Skill/供给/额度写动作与本产品平台人员/角色/学校操作范围、审计回读；不把原型作为生产入口，TMS 不继承 OMS 权限。 |
 
 ## 尚缺的实施 change 与当前阻断项
 
 1. **B1/B2 完整接入与多学校底座：**已归档联邦访问 change 不等于 B1 最终接入、B2 真实多学校与 G2 完成。新 [`add-b1-b2-trusted-school-integration`](../../openspec/changes/add-b1-b2-trusted-school-integration/proposal.md) 已补齐可信学校绑定、资源隔离、放量门禁的实施契约并获单独批准；外部合同和 B1/G2 真实验收仍缺，管理授权/lifecycle/TMS 各自保有权限、学校状态、业务边界。
-2. **服务供给—租户权益/额度—实际消耗：**旧计费/欠费 change 已获准退役，不能重用为实施依据。OMS 内部总账与重订逐 attempt 用量 change 负责 OMS 独占写入、供给可授予量、赠送优先、并发预留、原生单位、未知用量待核对及跨入口服务准入；正式跨学校写入仍须通过最新 Enterprise 程序授权方案的复核和外部身份接口的真实验收。TMS 只读 DTO 需与已批准但尚未实施的 TMS 业务 change 对齐。G2 前须有安全可运营闭环，不能靠手工状态修补。
+2. **服务供给—租户权益/额度—实际消耗：**旧计费/欠费 change 已获准退役，不能重用为实施依据。OMS 内部总账与重订逐 attempt 用量 change 负责 OMS 独占写入、供给可授予量、赠送优先、并发预留、原生单位、未知用量待核对及跨入口服务准入；正式跨学校写入仍须通过最新 Enterprise 程序授权方案的复核和外部身份接口的真实验收。TMS 只读 DTO 需与已批准且尚未全部实施的 TMS 业务 change 对齐。G2 前须有安全可运营闭环，不能靠手工状态修补。
 3. **其他历史文档冲突：**02/11/12 与旧入口占位已同步；本目录其他历史叙述若与现行 OMS/TMS 契约冲突，继续逐项核对，不把旧里程碑文字当作权限或发布授权。
 4. **外部与发布证据：**2026-09-26 test-cn 签名 Webhook 8/8 mock HTTP 204 已验证并复用，仅证明 demo 接收；2026-09-18 discovery/JWKS、M2M、client resolve 与本地交互登录/WS 证据可复用，但 OMS 专用 client/audience、在线账号状态、学校权威核验及管理撤权仍未验收。现有 EduPlus2 lifecycle 事件与 online resolve 在目标环境的适用性、首位 actor 真实事件与本人同校一次性激活、真实测试登录与 WS turn、各目标环境 G1 回退/异常仍需对应真实证据；开发态原型浏览器审计已单独留证，未验证的生产项目保持未完成。
 

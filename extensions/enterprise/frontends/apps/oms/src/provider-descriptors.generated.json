@@ -1,6 +1,6 @@
 {
   "source": "deeptutor.api.routers.settings._provider_choices/_connection_targets",
-  "source_revision": "4f9ccb49b234",
+  "source_revision": "fa56c40d1866",
   "reasoning_source": "web/lib/reasoning-effort.ts",
   "reasoning_source_revision": "995e22861401",
   "providers": {
@@ -104,6 +104,25 @@
           "auto": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
           "openai_chat": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
           "openai_responses": "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "cheaperinference",
+        "label": "Cheaper Inference",
+        "base_url": "https://api.cheaperinference.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.cheaperinference.com/v1",
+          "openai_chat": "https://api.cheaperinference.com/v1",
+          "openai_responses": "https://api.cheaperinference.com/v1"
         },
         "status": "supported"
       },
@@ -582,6 +601,25 @@
           "auto": "https://api.stepfun.com/v1",
           "openai_chat": "https://api.stepfun.com/v1",
           "openai_responses": "https://api.stepfun.com/v1"
+        },
+        "status": "supported"
+      },
+      {
+        "value": "unifically",
+        "label": "Unifically",
+        "base_url": "https://api.unifically.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.unifically.com/v1",
+          "openai_chat": "https://api.unifically.com/v1",
+          "openai_responses": "https://api.unifically.com/v1"
         },
         "status": "supported"
       },
@@ -781,6 +819,25 @@
         "status": "supported"
       },
       {
+        "value": "cheaperinference",
+        "label": "Cheaper Inference",
+        "base_url": "https://api.cheaperinference.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.cheaperinference.com/v1",
+          "openai_chat": "https://api.cheaperinference.com/v1",
+          "openai_responses": "https://api.cheaperinference.com/v1"
+        },
+        "status": "supported"
+      },
+      {
         "value": "codebuddy",
         "label": "CodeBuddy/WorkBuddy",
         "base_url": "",
@@ -1259,6 +1316,25 @@
         "status": "supported"
       },
       {
+        "value": "unifically",
+        "label": "Unifically",
+        "base_url": "https://api.unifically.com/v1",
+        "auth_mode": "api_key",
+        "supports_wire_api_selection": true,
+        "api_formats": [
+          "auto",
+          "openai_chat",
+          "openai_responses"
+        ],
+        "default_api_format": "auto",
+        "base_urls": {
+          "auto": "https://api.unifically.com/v1",
+          "openai_chat": "https://api.unifically.com/v1",
+          "openai_responses": "https://api.unifically.com/v1"
+        },
+        "status": "supported"
+      },
+      {
         "value": "vllm",
         "label": "vLLM/Local",
         "base_url": "",
@@ -1380,6 +1456,12 @@
         "label": "Jina",
         "base_url": "https://api.jina.ai/v1/embeddings",
         "default_dim": "1024"
+      },
+      {
+        "value": "lemonade",
+        "label": "Lemonade Server",
+        "base_url": "http://localhost:13305/v1/embeddings",
+        "default_dim": ""
       },
       {
         "value": "ollama",
@@ -1644,6 +1726,13 @@
         "base_url": "http://localhost:8000/v1",
         "default_model": "",
         "default_voice": ""
+      },
+      {
+        "value": "volcengine_speech",
+        "label": "Volcengine Speech (Doubao)",
+        "base_url": "https://openspeech.bytedance.com/api/v3",
+        "default_model": "seed-tts-2.0",
+        "default_voice": "zh_female_vv_uranus_bigtts"
       }
     ],
     "stt": [
@@ -1694,6 +1783,12 @@
         "label": "vLLM / Local",
         "base_url": "http://localhost:8000/v1",
         "default_model": ""
+      },
+      {
+        "value": "volcengine_speech",
+        "label": "Volcengine Speech (Doubao)",
+        "base_url": "https://openspeech.bytedance.com/api/v3",
+        "default_model": "bigmodel"
       }
     ],
     "imagegen": [
@@ -1863,6 +1958,18 @@
       }
     },
     {
+      "provider": "cheaperinference",
+      "label": "Cheaper Inference",
+      "default_base_url": "https://api.cheaperinference.com/v1",
+      "services": {
+        "llm": {
+          "provider": "cheaperinference",
+          "base_url": "https://api.cheaperinference.com/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
       "provider": "custom_anthropic",
       "label": "Custom (Anthropic API)",
       "default_base_url": "",
@@ -2026,6 +2133,12 @@
           "provider": "lemonade",
           "base_url": "http://localhost:13305/api/v1",
           "default_model": ""
+        },
+        "embedding": {
+          "provider": "lemonade",
+          "base_url": "http://localhost:13305/v1/embeddings",
+          "default_model": "",
+          "default_dim": ""
         }
       }
     },
@@ -2295,6 +2408,18 @@
         "llm": {
           "provider": "stepfun",
           "base_url": "https://api.stepfun.com/v1",
+          "default_model": ""
+        }
+      }
+    },
+    {
+      "provider": "unifically",
+      "label": "Unifically",
+      "default_base_url": "https://api.unifically.com/v1",
+      "services": {
+        "llm": {
+          "provider": "unifically",
+          "base_url": "https://api.unifically.com/v1",
           "default_model": ""
         }
       }

@@ -570,6 +570,9 @@ class MigrationRunner(CoreMigrationRunner):
                 "supply_lots",
                 "school_bindings",
                 "model_catalog_config",
+                "provider_setting_configs",
+                "provider_setting_confirmations",
+                "provider_setting_import_dry_runs",
                 "skill_reviews",
                 "grant_commands",
                 *tenant_tables,
@@ -631,6 +634,8 @@ class MigrationRunner(CoreMigrationRunner):
             "skill_global_publication",
             "skill_tenant_publication",
             "skill_reviews_latest",
+            "provider_setting_confirmations_status",
+            "provider_setting_import_dry_runs_source",
         }
         if not required_indexes.issubset({row[0] for row in indexes}):
             raise RuntimeError("oms schema drift: required index missing")
