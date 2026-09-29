@@ -64,6 +64,31 @@ permitted; missing external capabilities must be recorded as dependencies, and
 affected DeepTutor operations must remain fail closed. Approval of a DeepTutor
 proposal does not authorize work in another team's repository or systems.
 
+## Release and deployment tag rules
+
+Before creating or pushing any deployment tag, inspect the existing remote tag
+history for the target environment and follow the repository's actual pattern;
+do not rely on generic tool examples.
+
+For the current internal test-cn Woodpecker deployment flow, the tag namespace
+and version format is:
+
+```text
+deploy/test-cn/vX.Y.Z-rc.N
+```
+
+Derive `X.Y.Z` from the latest remote test-cn deployment tag and keep that
+release train unless the user or release plan explicitly says to start a new
+train. Only increment the `rc.N` integer. For example, if the latest remote tag
+is `deploy/test-cn/v1.4.0-rc.68`, the next tag is
+`deploy/test-cn/v1.4.0-rc.69`; if the latest is
+`deploy/test-cn/v1.5.2-rc.7`, the next is `deploy/test-cn/v1.5.2-rc.8`.
+
+Do not use `v0.1.N-test`, `v*-test`, or other generic test tag formats for
+this repository's test-cn deployment. If a mistaken tag is created, delete the
+incorrect local and remote tag, then create a new immutable tag with the correct
+`deploy/test-cn/...` name; do not move or reuse an existing deployment tag.
+
 ## Database logic boundary
 
 All supported local, default, and enterprise business runtimes are
