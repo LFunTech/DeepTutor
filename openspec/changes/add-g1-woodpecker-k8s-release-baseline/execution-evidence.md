@@ -2460,3 +2460,35 @@ openspec validate --all --strict
 ```
 
 预期：修复后的首个新 tag 可能仍需填充新的 `npm ci` cache layer；之后在 lockfile 和 workspace manifest 未变时，源码级 OMS/TMS 变更应复用依赖安装层。`compile-enterprise-frontends-test-cn` 仍包含 Kaniko snapshot/cache push 与两个 Next.js build，因此不会变成瞬时步骤，但应避免“每次源码变更都重新安装依赖”的主要浪费，并消除 rc.66 的缺失依赖失败。
+
+### 2026-09-29 test-cn rc.67 发布与企业前端缓存修复验证
+
+提交 `dd175668` 推送后创建 `deploy/test-cn/v1.4.0-rc.67`，Woodpecker pipeline `#83` 最终为 `success`。所有步骤均成功：`validate-release-trigger`、`prepare-release-metadata`、四个并行编译、`secret-preflight-test-cn`、`build-runtime-image-test-cn`、`pre-deploy-check-test-cn` 与 `deploy-test-cn`。
+
+`compile-enterprise-frontends-test-cn` 结果：
+
+- 步骤 #6 从 `1790676593` 到 `1790677073`，耗时约 480 秒并成功；这是修复后首个新 workspace manifest COPY / `npm ci` layer，日志显示该层需重新填充 cache。
+- 日志确认 `apps/oms`、`apps/tms`、`packages/admin-ui`、`packages/api-contracts`、`packages/branding`、`packages/service-components` 的 `package.json` 均在 `npm ci` 前复制。
+- `npm ci` 日志显示 `added 451 packages in 29s`，随后 `typecheck:oms`、`typecheck:tms`、指定 vitest、`build:oms`、`build:tms` 均完成；未再出现 rc.66 的 `Cannot find module` 错误。
+- 后续源码-only 变更若 lockfile/workspace manifest 不变，应复用该依赖安装层；该步骤仍包含 Kaniko snapshot/cache push 与两个 Next.js build，因此首轮耗时不代表缓存未生效。
+
+Kubernetes 只读验证（test / `deeptutor-test-cn`）：
+
+- `deeptutor-backend` 与 `deeptutor-docs` rollout 成功，均 `READY 1/1`，新 Pod `RESTARTS 0`。
+- 当前 backend digest：`runtime@sha256:a4baec7e1e593d653f4760fc0c1134bf13fb5414358ec509025e3933cec1667d`；docs digest：`docs@sha256:6c90329b43ea450767ca117d7847b1695288966c4a578a2df61eaee0c6dd9be4`。
+- migration Job `dt-migrate-test-cn-v1-4-0-rc-67` 为 `Complete 1/1`；日志显示 pending 为空、schema apply/verify 成功、schema history drift verify 已执行。
+- `deeptutor-deployment-config` 的 `origins` 包含 `https://llm-agent-test.f123.pub`；按发布脚本同样的 `indent=2, sort_keys=True` 规范化算法计算出的 hash 与 Deployment annotation `deeptutor.f123.pub/deployment-config-hash=sha256:66164872a326c30eb1445ea5fa89f61d7c41ecc6b76121e80fce2f5f6a737019` 一致。
+- 近期事件中仅有新 backend 启动早期 readiness connection refused，最终 rollout 成功；发布后后端日志尾部未发现 error/traceback/500 关键词。
+
+公网 smoke：
+
+- `check-docs-site.py --origin https://llm-agent-test.f123.pub` 通过：`/docs/` 200，真实 CSS 静态资源 200。
+- HTTP 黑盒 `output/test-cn-smoke/rc67/http-blackbox-v2.json`：56 个用例全部通过，覆盖 `/health/live`、`/health/ready`、`/chat`、`/oms`、`/tms/demo-school`、docs、旧 OMS 学校开通深链 404、未认证/伪造 Bearer 的 OMS/TMS 读写 API 401/403、OMS auth start redirect、EduPlus2 demo start redirect、无 token WebSocket upgrade 403 且非 Origin/CSRF 拒绝。
+- 浏览器黑盒 `output/test-cn-smoke/rc67/browser-check-v2.json`：系统 Chrome 打开 `/oms`、`/tms/demo-school`、`/docs/` 均无 pageerror/5xx/非预期 4xx；OMS/TMS 页面显示正式受控入口的 fail-closed 态，预期 401 仅来自未登录读取 `/api/v1/oms/me`、`/api/v1/oms/auth/refresh` 和 `/api/v1/tms/me/permissions`。截图保存在 `output/playwright/rc67/`。
+
+外部认证联调限制：
+
+- `eduplus2_fronting_app_smoke.py --real --deeptutor-url https://llm-agent-test.f123.pub` 中 discovery/JWKS、M2M token、resolve 均为 `ok`，但本地 `token-test.secrets` 中 user JWT 已过期，exchange 失败；未取得新的 DeepTutor token。
+- 使用 `.secrets/.login-credentials` 中配置的 admin/teacher 测试账号和通用验证码 `8888` 通过真实浏览器尝试 OMS `eduplus-platform-admin` 授权码登录，两次均停留在 EduPlus2 登录动作页并显示上游登录错误，未回跳到 DeepTutor `/oms/auth/callback`，未取得 code/token/cookie，也未调用任何写 API。账号、密码、token 和 Cookie 未输出。
+
+结论：rc.67 已证明发布链路、企业前端构建缓存修复、K8s rollout、文档站点、公网 Origin/WebSocket 层、正式 OMS/TMS 未登录 fail-closed 与未认证管理写 API 失败关闭均正常。真实 EduPlus2 用户登录、真实 `subscription.created.actor.user_id` 与 OIDC `sub` 合同、真实 TMS 首管 assignment、双学校登录负例和 5.1 正式开闸仍未闭合，原因是当前可用测试登录凭据/用户 JWT 无法完成真实授权码或换票。
