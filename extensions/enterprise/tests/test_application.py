@@ -2746,6 +2746,7 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
         "/api/v1/oms/assignments/{assignment_id}/revoke",
         "/api/v1/oms/auth/callback",
         "/api/v1/oms/auth/logout",
+        "/api/v1/oms/auth/refresh",
         "/api/v1/oms/auth/start",
         "/api/v1/oms/auth/status",
         "/api/v1/oms/cost",

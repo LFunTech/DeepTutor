@@ -334,7 +334,7 @@
 
 ### 2026-09-29 OMS `eduplus-platform-admin` local-ssl 授权码登录与 fail-closed 切片
 
-- 通过 `local-ssl` 以 `https://deeptutor.lfun.pub` 打通 OMS 授权码登录：新增 `/api/v1/oms/auth/start`、`/api/v1/oms/auth/callback`、`/api/v1/oms/auth/status`、`/api/v1/oms/auth/logout`，`client_id=eduplus-platform-admin`，回调写入 httpOnly `dt_oms_token` 与 `dt_oms_csrf`，OMS cookie 写请求要求 Origin 与 CSRF 双校验；API 仍逐次调用 DeepTutor Enterprise PEP，不从 EduPlus2 JWT role/权限派生任何 `ops.*`。
+- 通过 `local-ssl` 以 `https://deeptutor.lfun.pub` 打通 OMS 授权码登录：新增 `/api/v1/oms/auth/start`、`/api/v1/oms/auth/callback`、`/api/v1/oms/auth/status`、`/api/v1/oms/auth/logout`，`client_id=eduplus-platform-admin`。2026-09-29 后续修正为 BFF 登录边界：EduPlus2 redirect URI 指向前端 `/oms/auth/callback`，前端仅转交 `code/state`，后端 BFF API 完成 token exchange 并写入 httpOnly `dt_oms_token`、`dt_oms_refresh` 与 CSRF cookie；OMS cookie 写请求要求 Origin 与 CSRF 双校验；API 仍逐次调用 DeepTutor Enterprise PEP，不从 EduPlus2 JWT role/权限派生任何 `ops.*`。
 - 真实 test-cn 回调诊断显示 `access_token` 为 issuer `https://eduplus-auth-test.f123.pub/realms/eduplus`、aud `account`、azp `eduplus-platform-admin`、typ `Bearer`、稳定 subject hash；`id_token` 为 aud `eduplus-platform-admin`、typ `ID`。EduPlus2 `/api/v1/me/profile` 对该 OMS client access token 返回 401，因此按“EduPlus2 仅作认证及身份识别来源”修正为显式 `DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL=off` 的 token-only 身份状态策略。
 - 本地验证：授权码回调返回 `oms_login=ok`；同一浏览器 Cookie 访问 `/api/v1/oms/auth/status` 后端返回 200；访问 `/api/v1/oms/me` 后端返回 403，证明外部认证成功但未登记本地 `ops.oms.access` 时仍失败关闭。
 - 正式 OMS 页面新增初始 fail-closed 与请求超时保护：即使 dev/HMR 或浏览器扩展导致 client effect/API 请求异常，也显示“正式入口未开放”，不无限 loading、不回退开发原型、不展示授权/发布/审批/学校开通写按钮。
@@ -348,6 +348,13 @@
 - 真实浏览器链路：Chrome 打开 OMS auth/start 后通过既有 EduPlus2 SSO 回调到 `https://deeptutor.lfun.pub/oms?...&oms_login=ok`；页面展示“正式入口未开放”，不回退开发原型，不展示写操作入口。
 - Cookie/PEP 复测：同一浏览器会话访问 `/api/v1/oms/auth/status?probe=login-chain-20260929`，后端日志返回 200；访问 `/api/v1/oms/me?probe=login-chain-20260929`，后端日志返回 403。结论：EduPlus2 认证会话有效，DeepTutor 本地 `ops.*` 未授权时按预期失败关闭。
 - 限制：该复测未新增本地平台管理员授权事实，因此不能验证获授权后的 OMS 写 UI；也未触碰 EduPlus2 代码、配置或权限系统。
+
+### 2026-09-29 OMS 登录 BFF 回调修正切片
+
+- 按职责分离修正 OMS OAuth：`DT_EDUPLUS2_OMS_REDIRECT_URI` 默认为/部署为前端 `https://<host>/oms/auth/callback`；前端页面只读取授权码参数并调用同源 `/api/v1/oms/auth/callback`，不接触 EduPlus2 access token 或 refresh token。
+- 后端 BFF API 使用授权码换取 EduPlus2 `access_token`/`refresh_token`，验证平台 access token 后只通过 httpOnly cookie 建立 OMS 会话；响应 JSON 仅返回登录状态和 `return_url`，不回传 provider token。access token 过期时正式 OMS 页面调用 `/api/v1/oms/auth/refresh`，由后端用 httpOnly refresh token 换新 access token，并要求 BFF CSRF header/cookie 匹配。
+- 验证：`.venv/bin/python -m pytest extensions/enterprise/tests/test_oms_oauth_flow.py -q` → **4 passed**；`cd extensions/enterprise/frontends && npm test -- oms-auth-callback.test.tsx` → **1 file / 2 tests passed**。
+- 说明：该切片只修正登录职责边界与 refresh 机制，不新增任何 `ops.*` 授权事实，也不改变 EduPlus2 仓库或配置。
 
 ### 2026-09-29 审批竞态与正式入口可访问性本地验收切片
 

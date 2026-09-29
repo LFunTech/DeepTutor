@@ -82,10 +82,24 @@ async function fetchWithTimeout(path: string, init: RequestInit): Promise<Respon
   }
 }
 
-async function readJson<T>(path: string): Promise<T> {
+async function refreshOmsSession() {
+  const csrf = cookieValue("dt_oms_csrf");
+  const response = await fetchWithTimeout("/api/v1/oms/auth/refresh", {
+    method: "POST",
+    credentials: "include",
+    headers: { accept: "application/json", ...(csrf ? { "x-csrf-token": csrf } : {}) },
+  });
+  if (!response.ok) throw { status: response.status, detail: "oms session refresh failed" } satisfies ApiError;
+}
+
+async function readJson<T>(path: string, retryOnUnauthorized = true): Promise<T> {
   const response = await fetchWithTimeout(path, { credentials: "include", headers: { accept: "application/json" } });
   let body: unknown = {};
   try { body = await response.json(); } catch { body = {}; }
+  if (response.status === 401 && retryOnUnauthorized) {
+    await refreshOmsSession();
+    return readJson<T>(path, false);
+  }
   if (!response.ok) {
     const detail = typeof body === "object" && body && "detail" in body ? String((body as { detail?: unknown }).detail) : response.statusText;
     throw { status: response.status, detail } satisfies ApiError;

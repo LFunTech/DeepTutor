@@ -114,6 +114,7 @@ class AuthenticationMiddleware:
                 "/api/v1/auth/eduplus2/demo/refresh",
                 "/api/v1/oms/auth/start",
                 "/api/v1/oms/auth/callback",
+                "/api/v1/oms/auth/refresh",
                 "/api/v1/oms/auth/status",
                 "/api/v1/oms/auth/logout",
                 "/api/settings/ui",
@@ -812,9 +813,13 @@ def create_application(enterprise):
         except RuntimeError:
             return JSONResponse({"detail": "OMS login is not configured"}, status_code=503)
 
-    @oms.get("/auth/callback", name="oms_auth_callback")
+    @oms.post("/auth/callback", name="oms_auth_callback")
     async def oms_auth_callback(request: Request):
-        return await oms_oauth.handle_callback(request, enterprise)
+        return await oms_oauth.handle_frontend_callback(request, enterprise)
+
+    @oms.post("/auth/refresh")
+    async def oms_auth_refresh(request: Request):
+        return await oms_oauth.refresh_session(request, enterprise)
 
     @oms.get("/auth/status")
     async def oms_auth_status(request: Request):

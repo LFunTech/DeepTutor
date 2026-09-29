@@ -540,6 +540,26 @@ def test_replicated_backend_contract_requires_redis_coordination_and_records_aut
         EnvironmentRegistry.model_validate(unsafe)
 
 
+def test_protected_backend_manifest_sets_public_oms_oauth_urls():
+    """OMS OAuth must never fall back to the in-pod 127.0.0.1 callback URL."""
+
+    import yaml
+
+    manifest_path = Path("deploy/kubernetes/protected-k8s-release/backend.yaml")
+    docs = list(yaml.safe_load_all(manifest_path.read_text(encoding="utf8")))
+    deployment = next(item for item in docs if item and item.get("kind") == "Deployment")
+    env = {
+        item["name"]: item.get("value")
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+
+    assert (
+        env["DT_EDUPLUS2_OMS_REDIRECT_URI"]
+        == "https://${DEEPTUTOR_INGRESS_HOST}/oms/auth/callback"
+    )
+    assert env["DT_EDUPLUS2_OMS_RETURN_URL"] == "https://${DEEPTUTOR_INGRESS_HOST}/oms"
+
+
 def test_rollback_decision_and_release_evidence_are_partitioned_and_leak_scanned(tmp_path):
     from deeptutor_enterprise.protected_k8s_release import (
         EnvironmentRegistry,
@@ -907,11 +927,13 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     for env_id in ("test-cn", "pre-cn", "prod-cn-east", "prod-overseas-a"):
         suffix = env_id.replace("-", "_").upper()
         assert f"compile-frontend-{env_id}" in pipeline
+        assert f"compile-enterprise-frontends-{env_id}" in pipeline
         assert f"compile-python-deps-{env_id}" in pipeline
         assert f"build-runtime-base-{env_id}" in pipeline
         assert f"build-runtime-image-{env_id}" in pipeline
         assert (
-            f"depends_on: [build-runtime-base-{env_id}, compile-frontend-{env_id}, compile-python-deps-{env_id}]"
+            f"depends_on: [build-runtime-base-{env_id}, compile-frontend-{env_id}, "
+            f"compile-enterprise-frontends-{env_id}, compile-python-deps-{env_id}]"
             in pipeline
         )
         assert f"pre-deploy-check-{env_id}" in pipeline
