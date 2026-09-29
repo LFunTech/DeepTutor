@@ -1654,6 +1654,97 @@ async def test_tms_me_permissions_returns_local_tenant_action_summary(app):
     assert "ops." not in summary.text
 
 
+async def test_tms_me_permissions_accepts_deeptutor_token_with_webhook_actor_subject(app):
+    """正式 TMS 可使用 DeepTutor 会话中的 EduPlus2 身份快照，但不能接受普通本地会话。"""
+
+    from deeptutor_enterprise.eduplus2.client import HmacEduPlus2JwtVerifier
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    enterprise.eduplus2_verifier = HmacEduPlus2JwtVerifier(
+        signing_key="synthetic-oidc-signing-key-0123456789", issuer=enterprise.eduplus2_issuer
+    )
+    event_id = "synthetic-tms-dt-token-" + uuid.uuid4().hex
+    assert (
+        await _deliver(
+            app,
+            event_id=event_id,
+            event_type="subscription.created",
+            status="active",
+            actor={"type": "user", "user_id": "synthetic-dt-admin"},
+        )
+    ).status_code == 204
+    issued_at = int(time.time())
+    external_token = jwt.encode(
+        {
+            "iss": enterprise.eduplus2_issuer,
+            "iat": issued_at,
+            "exp": issued_at + 300,
+            "tid": "10001",
+            "eui": "synthetic-eui",
+            "sub": "synthetic-dt-admin",
+            "eit": "teacher",
+            "azp": "synthetic-school-client",
+        },
+        "synthetic-oidc-signing-key-0123456789",
+        algorithm="HS256",
+    )
+    external_headers = {"Authorization": "Bearer " + external_token}
+    ordinary_token = await enterprise.identity.login(
+        "admin", "long-password-1", client="synthetic-tms-ordinary-dt-token"
+    )
+    owner = enterprise.identity.tenant_id
+    async with enterprise.db.transaction(TenantScope(str(owner), "@synthetic-tms-dt-token")) as c:
+        row = await (
+            await c.execute(
+                "SELECT * FROM enterprise.users WHERE tenant_id=%s AND username=%s",
+                (owner, "admin"),
+            )
+        ).fetchone()
+        assert row is not None
+        deeptutor_token = await enterprise.identity._issue_session(
+            c,
+            row,
+            extra_claims={
+                "eduplus2": {
+                    "client_registration_id": "synthetic-webhook-registration",
+                    "external_tenant_id": "10001",
+                    "external_app_id": "51",
+                    "external_user_id": "synthetic-eui",
+                    "external_subject": "synthetic-dt-admin",
+                    "external_identity_type": "teacher",
+                    "azp": "synthetic-school-client",
+                }
+            },
+            token_seconds=300,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        activated = await client.post(
+            "/api/v1/tms/school-bootstrap/activate",
+            headers={**external_headers, "X-Request-ID": "synthetic-tms-dt-token-activate"},
+        )
+        summary = await client.get(
+            "/api/v1/tms/me/permissions",
+            headers={"Authorization": "Bearer " + deeptutor_token},
+        )
+        ordinary = await client.get(
+            "/api/v1/tms/me/permissions",
+            headers={"Authorization": "Bearer " + ordinary_token},
+        )
+
+    assert activated.status_code == 200, activated.text
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["subject"] == "synthetic-dt-admin"
+    assert "tenant.tms.access" in summary.json()["actions"]
+    assert ordinary.status_code == 401, ordinary.text
+
+
 async def test_tms_me_permissions_fails_closed_when_trusted_school_code_missing(app):
     """后端权限摘要缺少可信学校码时失败关闭，不能让前端独自兜底。"""
 

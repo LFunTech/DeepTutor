@@ -105,6 +105,7 @@ async def test_eduplus2_migration_is_versioned_and_redacts_secret_material(enter
             "0011_webhook_school_controls",
             "0012_remove_legacy_database_function",
             "0013_relocate_database_business_rules",
+            "0014_actor_identity_context",
         ]
         await c.execute(
             """
@@ -251,6 +252,8 @@ async def test_exchange_uses_authorization_bearer_azp_and_issues_short_dt_token(
     claims = jwt.get_unverified_claims(exchanged["dt_token"])
     assert claims["eduplus2"]["client_registration_id"]
     assert claims["eduplus2"]["external_tenant_id"] == "tenant-a"
+    assert claims["eduplus2"]["external_subject"] == "sub-u-001"
+    assert claims["eduplus2"]["external_identity_type"] == "teacher"
     authenticated = await identity.authenticate(exchanged["dt_token"])
     assert authenticated.username == "u-001"
     assert authenticated.tenant_id == identity.tenant_id

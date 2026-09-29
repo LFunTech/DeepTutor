@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Activity, AppWindow, BookOpenCheck, ClipboardList, LayoutDashboard, ScrollText, ShieldCheck, Sparkles, UsersRound } from "lucide-react";
 import { AdminShell, DataTable, DetailGrid, Drawer, MetricStrip, Notice, PageHead, Section, StatePanel, StatusBadge } from "@deeptutor/admin-ui";
 
 type LoadState = "loading" | "ready" | "blocked";
 type ApiError = { status: number; detail: string };
+type DemoSessionResult = { ok?: boolean; dt_token?: string; expires_at?: number; detail?: string };
 type TmsPermissions = { school_id?: string; school_code?: string; actions?: string[]; scopes?: { kind?: string; school_id?: string }[] };
 type TmsBootstrap = { status?: string; actor_candidate?: { subject?: string; event_id?: string } | null };
 type DirectoryState = { status?: string; reason_code?: string; message?: string; users?: { id: string; display_name?: string }[] };
@@ -59,8 +60,16 @@ type TmsModel = {
   serviceAccess: TmsServiceAccessGrant[];
 };
 
-async function readJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { credentials: "include", headers: { accept: "application/json" } });
+function jsonHeaders(token?: string, extra?: Record<string, string>) {
+  return {
+    accept: "application/json",
+    ...(extra ?? {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function readJson<T>(path: string, token?: string): Promise<T> {
+  const response = await fetch(path, { credentials: "include", headers: jsonHeaders(token) });
   let body: unknown = {};
   try { body = await response.json(); } catch { body = {}; }
   if (!response.ok) {
@@ -71,11 +80,11 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 
-async function writeJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
+async function writeJson<T>(path: string, body: Record<string, unknown>, token?: string): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     credentials: "include",
-    headers: { accept: "application/json", "content-type": "application/json" },
+    headers: jsonHeaders(token, { "content-type": "application/json" }),
     body: JSON.stringify(body),
   });
   let payload: unknown = {};
@@ -140,6 +149,28 @@ function encodeRoutePart(value: string) {
   return encodeURIComponent(value);
 }
 
+function demoSessionFromUrl() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("demo_session")?.trim() ?? "";
+}
+
+async function readLoginTokenFromDemoSession(): Promise<string | undefined> {
+  const demoSession = demoSessionFromUrl();
+  if (!demoSession) return undefined;
+  const result = await readJson<DemoSessionResult>(`/api/v1/auth/eduplus2/demo/result?demo_session=${encodeURIComponent(demoSession)}`);
+  if (!result.ok || !result.dt_token) {
+    throw { status: 401, detail: result.detail ?? "EduPlus2 登录结果未返回可用会话" } satisfies ApiError;
+  }
+  return result.dt_token;
+}
+
+function tmsLoginHref(schoolCode: string) {
+  const returnTo = typeof window === "undefined"
+    ? tmsBase(schoolCode)
+    : `${window.location.origin}${tmsBase(schoolCode)}`;
+  return `/api/v1/auth/eduplus2/demo/start?return_to=${encodeURIComponent(returnTo)}`;
+}
+
 export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
   const base = tmsBase(schoolCode);
   const [route, setRoute] = useState(() => currentTmsPath(base));
@@ -147,6 +178,8 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
   const [error, setError] = useState<ApiError | undefined>();
   const [model, setModel] = useState<TmsModel | undefined>();
   const [message, setMessage] = useState("");
+  const [authToken, setAuthToken] = useState<string | undefined>();
+  const authTokenRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const onPopState = () => setRoute(currentTmsPath(base));
@@ -179,26 +212,31 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
     async function load() {
       setState("loading");
       try {
-        const permissions = await readJson<TmsPermissions>("/api/v1/tms/me/permissions");
+        const token = authTokenRef.current ?? await readLoginTokenFromDemoSession();
+        if (token && !cancelled) {
+          authTokenRef.current = token;
+          setAuthToken(token);
+        }
+        const permissions = await readJson<TmsPermissions>("/api/v1/tms/me/permissions", token);
         if (!permissions.school_code) {
           throw { status: 403, detail: "后端权限摘要未返回可信学校码" } satisfies ApiError;
         }
         if (permissions.school_code !== schoolCode) {
           throw { status: 403, detail: "学校码与当前登录学校不一致" } satisfies ApiError;
         }
-        const bootstrap = await readJson<TmsBootstrap>("/api/v1/tms/school-bootstrap/status");
-        const directory = await readJson<DirectoryState>("/api/v1/tms/directory/users");
+        const bootstrap = await readJson<TmsBootstrap>("/api/v1/tms/school-bootstrap/status", token);
+        const directory = await readJson<DirectoryState>("/api/v1/tms/directory/users", token);
         const permissionActions = permissions.actions ?? [];
         const quotaResult = permissionActions.includes("tenant.quotas.read") || permissionActions.includes("tenant.usage.read")
-          ? await readJson<{ grants?: TmsQuotaGrant[]; usage?: TmsUsage[]; usage_details?: TmsUsage[] }>("/api/v1/tms/quotas")
+          ? await readJson<{ grants?: TmsQuotaGrant[]; usage?: TmsUsage[]; usage_details?: TmsUsage[] }>("/api/v1/tms/quotas", token)
           : { grants: [], usage: [], usage_details: [] };
         const serviceAccessResult = permissionActions.includes("tenant.access.manage")
-          ? await readJson<{ service_access_grants?: TmsServiceAccessGrant[] }>("/api/v1/tms/service-access")
+          ? await readJson<{ service_access_grants?: TmsServiceAccessGrant[] }>("/api/v1/tms/service-access", token)
           : { service_access_grants: [] };
-        const membersResult = await readJson<{ members?: TmsMember[] }>("/api/v1/tms/members");
-        const approvalsResult = await readJson<{ approvals?: TmsApproval[] }>("/api/v1/tms/approvals");
-        const auditsResult = await readJson<{ events?: TmsAudit[] }>("/api/v1/tms/authz-audit");
-        const skillsResult = await readJson<{ skills?: TmsSkill[] }>("/api/v1/tms/skills");
+        const membersResult = await readJson<{ members?: TmsMember[] }>("/api/v1/tms/members", token);
+        const approvalsResult = await readJson<{ approvals?: TmsApproval[] }>("/api/v1/tms/approvals", token);
+        const auditsResult = await readJson<{ events?: TmsAudit[] }>("/api/v1/tms/authz-audit", token);
+        const skillsResult = await readJson<{ skills?: TmsSkill[] }>("/api/v1/tms/skills", token);
         if (!cancelled) {
           setModel({
             permissions,
@@ -242,7 +280,7 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
         expires_at: oneYearLater(),
         command_id: newCommandId(),
         reason: "正式 TMS UI 低风险只读角色授予",
-      });
+      }, authToken);
       patchMember(principalId, current => ({ ...current, roles: [...memberRoles(current), { assignment_id: result.assignment_id, role_key: "school_auditor", role_version: 1, status: "active", version: 1 }] }));
       setMessage("已提交低风险学校只读角色授予。");
     } catch (caught) {
@@ -259,7 +297,7 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
         expected_target_policy_version: member.policy_version ?? 1,
         command_id: newCommandId(),
         reason: "正式 TMS UI 撤销当前学校角色",
-      });
+      }, authToken);
       patchMember(principalId, current => ({ ...current, roles: memberRoles(current).map(role => role.assignment_id === assignment.assignment_id ? { ...role, status: "revoked" } : role) }));
       setMessage(`已提交撤销 ${assignment.role_key ?? "角色"}。`);
     } catch (caught) {
@@ -275,7 +313,7 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
         expected_target_policy_version: approval.expected_target_policy_version ?? 1,
         command_id: newCommandId(),
         reason: "正式 TMS UI 应用已批准审批",
-      });
+      }, authToken);
       patchApproval(id, current => ({ ...current, status: "applied" }));
       setMessage("已提交审批 apply。");
     } catch (caught) {
@@ -288,6 +326,7 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
   if (state === "blocked") return shell(<>
     <PageHead title="学校入口未开放" description={blockedMessage(error)}/>
     <Notice tone="warn">该页面不会使用开发原型或合成目录兜底，也不会渲染授予、撤销、审批、新增等写按钮。</Notice>
+    <a className="button-like" href={tmsLoginHref(schoolCode)}>使用 EduPlus2 账号进入学校后台</a>
     <Section title="当前学校"><DetailGrid rows={[
       { label: "学校 code", value: schoolCode },
       { label: "身份来源", value: "已验签 TMS bearer + 本地学校绑定" },

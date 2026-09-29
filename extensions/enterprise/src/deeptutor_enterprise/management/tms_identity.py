@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from jose import JWTError, jwt
+
 from ..scope import TenantScope
 from .authorization import ManagementIdentity
 
@@ -14,6 +16,54 @@ class TmsAuthenticationDenied(PermissionError):
 
 class TmsSchoolDenied(PermissionError):
     """JWT 身份未绑定当前已订阅学校/应用。"""
+
+
+def _eduplus2_token_guard(enterprise, verifier):
+    from ..eduplus2.service import EduPlus2AccessService
+
+    return EduPlus2AccessService(
+        enterprise.db,
+        identity=enterprise.identity,
+        resolver=getattr(enterprise, "eduplus2_resolver", None),
+        jwt_verifier=verifier,
+        dt_token_seconds=getattr(enterprise, "eduplus2_dt_token_seconds", 900),
+        allowed_clients=getattr(enterprise, "eduplus2_allowed_clients", ()),
+        profile_client=getattr(enterprise, "eduplus2_profile_client", None),
+        permission_client=getattr(enterprise, "eduplus2_permission_client", None),
+        audit_export_storage_ref=getattr(
+            enterprise,
+            "eduplus2_audit_export_storage_ref",
+            "db://eduplus2/audit-export",
+        ),
+        revocation_cache_seconds=getattr(enterprise, "eduplus2_revocation_cache_ttl_seconds", 30),
+    )
+
+
+async def _claims_from_tms_bearer(enterprise, token: str, *, verifier, issuer: str) -> dict:
+    try:
+        verified = await verifier.verify(token)
+        return dict(verified.claims)
+    except PermissionError:
+        pass
+    try:
+        await enterprise.identity.authenticate(token)
+        claims = jwt.get_unverified_claims(token)
+    except (PermissionError, JWTError, ValueError, KeyError, TypeError):
+        raise TmsAuthenticationDenied("TMS bearer token is invalid") from None
+    eduplus2 = claims.get("eduplus2")
+    if not isinstance(eduplus2, dict):
+        raise TmsAuthenticationDenied("TMS bearer token is invalid")
+    try:
+        await _eduplus2_token_guard(enterprise, verifier).ensure_token_allowed(token)
+    except (PermissionError, JWTError, ValueError, KeyError, TypeError):
+        raise TmsAuthenticationDenied("TMS bearer token is invalid") from None
+    return {
+        "iss": issuer,
+        "sub": str(eduplus2.get("external_subject") or "").strip(),
+        "azp": str(eduplus2.get("azp") or "").strip(),
+        "tid": str(eduplus2.get("external_tenant_id") or "").strip(),
+        "exp": claims.get("exp"),
+    }
 
 
 async def trusted_tms_identity_from_token(enterprise, token: str) -> ManagementIdentity:
@@ -31,11 +81,7 @@ async def trusted_tms_identity_from_token(enterprise, token: str) -> ManagementI
         raise RuntimeError("TMS school application is unavailable")
     if not isinstance(token, str) or not token or len(token) > 16_384:
         raise TmsAuthenticationDenied("TMS bearer token is missing")
-    try:
-        verified = await verifier.verify(token)
-    except PermissionError:
-        raise TmsAuthenticationDenied("TMS bearer token is invalid") from None
-    claims = verified.claims
+    claims = await _claims_from_tms_bearer(enterprise, token, verifier=verifier, issuer=issuer)
     claim_issuer = str(claims.get("iss") or "").strip()
     subject = str(claims.get("sub") or "").strip()
     client_id = str(claims.get("azp") or "").strip()

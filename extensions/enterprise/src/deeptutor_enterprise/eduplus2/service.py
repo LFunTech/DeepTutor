@@ -1832,6 +1832,8 @@ class EduPlus2AccessService:
                     "external_tenant_id": external_tenant_id,
                     "external_app_id": registration["external_app_id"],
                     "external_user_id": external_user_id,
+                    "external_subject": external_subject,
+                    "external_identity_type": external_identity_type,
                     "azp": client_id,
                 }
             }

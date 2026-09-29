@@ -121,6 +121,37 @@ describe("正式 OMS/TMS 管理入口", () => {
     expect(within(screen.getByLabelText("TMS 审批与审计")).getByText("approved")).toBeInTheDocument();
   });
 
+  it("TMS 正式入口使用 EduPlus2 登录结果 bearer 读取当前学校安全 DTO", async () => {
+    window.history.replaceState(null, "", "/tms/demo-school?demo_session=session-1");
+    const requests: { url: string; authorization: string | null }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const authorization = new Headers(init?.headers).get("authorization");
+      requests.push({ url, authorization });
+      if (url.endsWith("/api/v1/auth/eduplus2/demo/result?demo_session=session-1")) {
+        return ok({ ok: true, dt_token: "dt-token", expires_at: Math.floor(Date.now() / 1000) + 600 });
+      }
+      if (url.includes("/api/v1/tms/") && authorization !== "Bearer dt-token") {
+        return Promise.resolve(new Response(JSON.stringify({ detail: "missing bearer" }), { status: 401, headers: { "content-type": "application/json" } }));
+      }
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active", actor_candidate: null });
+      if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "not_enabled", reason_code: "external_directory_contract_missing", message: "外部目录合同缺失", users: [] });
+      if (url.endsWith("/api/v1/tms/members")) return ok({ members: [{ id: "m-1", display_name: "林老师", status: "active", assignments: [{ role_key: "school_admin", status: "active" }] }] });
+      if (url.endsWith("/api/v1/tms/approvals")) return ok({ approvals: [] });
+      if (url.endsWith("/api/v1/tms/authz-audit")) return ok({ events: [] });
+      if (url.endsWith("/api/v1/tms/skills")) return ok({ skills: [] });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    render(<TmsFormalApp schoolCode="demo-school"/>);
+
+    expect(await screen.findByRole("heading", { name: "学校智能体管理后台" })).toBeInTheDocument();
+    expect(screen.getByText("林老师")).toBeInTheDocument();
+    expect(requests.some(request => request.url.endsWith("/api/v1/auth/eduplus2/demo/result?demo_session=session-1"))).toBe(true);
+    expect(requests.filter(request => request.url.includes("/api/v1/tms/")).every(request => request.authorization === "Bearer dt-token")).toBe(true);
+  });
+
   it("TMS 正式入口按原型导航切换到配额清单页", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

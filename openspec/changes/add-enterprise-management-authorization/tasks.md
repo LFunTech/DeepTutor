@@ -114,6 +114,7 @@
         - [x] 4.3.2.8.2.2.5 已用正式 TMS 前端红绿测试覆盖 `/api/v1/tms/me/permissions` 缺失规范 `school_code` 时失败关闭：页面不继续读取当前学校数据，不显示授予、撤销、审批或新增按钮。
         - [x] 4.3.2.8.2.2.6 已用后端红绿测试覆盖可信 Webhook 学校投影缺失 `school_code` 时 `/api/v1/tms/me/permissions` 直接 403，API 不返回空学校码让前端独自兜底。
         - [x] 4.3.2.8.2.2.7 已用后端合成 PG 覆盖 OMS 只有 `school` 范围的 `platform_operator` 不能读取或修改全局 Provider 设置：`GET /api/v1/oms/provider-settings` 与 `POST /api/v1/oms/provider-settings/draft` 均返回 403，不把学校 grant 冒充 `platform` grant。
+        - [x] 4.3.2.8.2.2.8 已用后端/前端红绿测试覆盖正式 TMS 可消费 EduPlus2 登录换取的 DeepTutor `dt_token` 中的 documented `external_subject` 并以 bearer 调用当前学校 `/api/v1/tms/*`；普通 DeepTutor 本地会话不含 EduPlus2 身份快照时仍 401，不能冒充 TMS。
 
 ## G/H 验收与受控切换
 
