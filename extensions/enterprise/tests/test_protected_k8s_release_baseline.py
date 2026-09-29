@@ -1113,11 +1113,25 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
         "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS enterprise-frontends-builder",
         1,
     )[1].split("FROM ${NODE_IMAGE} AS node-runtime", 1)[0]
+    workspace_manifest_copies = [
+        "COPY extensions/enterprise/frontends/apps/oms/package.json apps/oms/package.json",
+        "COPY extensions/enterprise/frontends/apps/tms/package.json apps/tms/package.json",
+        "COPY extensions/enterprise/frontends/packages/admin-ui/package.json packages/admin-ui/package.json",
+        "COPY extensions/enterprise/frontends/packages/api-contracts/package.json packages/api-contracts/package.json",
+        "COPY extensions/enterprise/frontends/packages/branding/package.json packages/branding/package.json",
+        "COPY extensions/enterprise/frontends/packages/service-components/package.json packages/service-components/package.json",
+    ]
+    npm_ci_position = enterprise_frontends_stage.find(
+        "npm ci --legacy-peer-deps --no-audit --no-fund"
+    )
+    assert npm_ci_position > 0
+    for manifest_copy in workspace_manifest_copies:
+        assert 0 < enterprise_frontends_stage.find(manifest_copy) < npm_ci_position
     assert (
         enterprise_frontends_stage.find(
             "COPY extensions/enterprise/frontends/package.json "
         )
-        < enterprise_frontends_stage.find("npm ci --legacy-peer-deps --no-audit --no-fund")
+        < npm_ci_position
         < enterprise_frontends_stage.find("COPY extensions/enterprise/frontends/ ./")
         < enterprise_frontends_stage.find("npm run build:oms")
     )

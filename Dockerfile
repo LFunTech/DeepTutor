@@ -76,11 +76,17 @@ ARG NPM_REGISTRY
 WORKDIR /app/extensions/enterprise/frontends
 
 COPY extensions/enterprise/frontends/package.json extensions/enterprise/frontends/package-lock.json* ./
+COPY extensions/enterprise/frontends/apps/oms/package.json apps/oms/package.json
+COPY extensions/enterprise/frontends/apps/tms/package.json apps/tms/package.json
+COPY extensions/enterprise/frontends/packages/admin-ui/package.json packages/admin-ui/package.json
+COPY extensions/enterprise/frontends/packages/api-contracts/package.json packages/api-contracts/package.json
+COPY extensions/enterprise/frontends/packages/branding/package.json packages/branding/package.json
+COPY extensions/enterprise/frontends/packages/service-components/package.json packages/service-components/package.json
 
 # Keep dependency installation in its own Kaniko-cacheable layer.  OMS/TMS
-# source files change frequently during test-cn iterations, but package locks
-# do not; copying source before npm ci would force a full reinstall on every
-# frontend-only change.
+# source files change frequently during test-cn iterations, but package and
+# workspace manifests usually do not; copying source before npm ci would force a
+# full reinstall on every frontend-only change.
 RUN npm config set registry "${NPM_REGISTRY}" && \
     npm config set fetch-timeout 600000 && \
     npm config set fetch-retries 5 && \

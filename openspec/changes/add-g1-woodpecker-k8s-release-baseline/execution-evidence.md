@@ -2401,3 +2401,62 @@ OpenSpec validate --all --strict -> 28 passed, 0 failed
 发布步骤运行 `sync-test-webhook-secret.py --retire-legacy-app-id` 并报告 `test-cn Webhook runtime keys synchronized`。部署后只读检查 `deeptutor-runtime-secrets` 的**键名**：`DT_EDUPLUS2_WEBHOOK_SECRET` 和 `DT_EDUPLUS2_WEBHOOK_INBOX_DIGEST_KEY` 存在，`DT_EDUPLUS2_WEBHOOK_APP_ID` 不存在；未输出任何 Secret 值。
 
 独立从公网 HTTPS 再次运行 `check-docs-site.py`：`/docs/` 返回 200，引用资源 `/docs/assets/css/styles.e2e1390e.css` 返回 200，`ready=true`，目标环境 `test-cn`。这完成 D6.4 的真实 Ingress 文档验证；**不等于** EduPlus2 真实订阅 Webhook 已重试或 B2 Webhook 端到端任务已完成。
+
+### 2026-09-29 test-cn rc.66 enterprise frontends 缓存分层失败与修复
+
+`deploy/test-cn/v1.4.0-rc.66` 触发 Woodpecker pipeline `#82`，`compile-enterprise-frontends-test-cn` 为 `failure`，其他并行编译步骤在该失败前后已有成功结果，后续 runtime image、pre-deploy 与 deploy 均被跳过。该步骤时间为 `1790675911` 到 `1790676193`，约 282 秒。
+
+根因：上一轮把企业前端 `npm ci` 独立成 Kaniko 可缓存层时，只在 `npm ci` 前复制了 workspace 根 `package.json` / `package-lock.json`，没有复制 `apps/*/package.json` 和 `packages/*/package.json`。因此 CI 中 `npm ci` 只安装了根 workspace 依赖（日志显示 `added 424 packages`），后续完整源码复制后运行 `typecheck:oms` 时缺少 workspace 依赖与链接，出现 `Cannot find module 'next/navigation'`、`Cannot find module '@deeptutor/admin-ui'`、`Cannot find module 'lucide-react'` 等错误。
+
+对比已成功的 pipeline `#79` / `deploy/test-cn/v1.4.0-rc.64`：`compile-enterprise-frontends-test-cn` 从 `1790672102` 到 `1790672455`，约 353 秒；当时 `npm ci` 与 typecheck/test/build 仍在完整源码 COPY 之后的同一层，日志显示 `added 451 packages in 28s`。慢点并不只是 npm 下载，还包括 Kaniko rootfs 解包、snapshot/cache push 和 Next.js 构建；但把 `npm ci` 单独缓存后，如果 workspace manifest 完整，后续前端源码变更无需每次重装依赖。
+
+修复：在企业前端 builder 阶段保留独立 `npm ci` 层，但在运行 `npm ci` 前复制所有 npm workspace manifest：
+
+- `apps/oms/package.json`
+- `apps/tms/package.json`
+- `packages/admin-ui/package.json`
+- `packages/api-contracts/package.json`
+- `packages/branding/package.json`
+- `packages/service-components/package.json`
+
+完整源码仍在 `npm ci` 后复制，再运行 OMS/TMS typecheck、指定 vitest 和 Next build。新增受保护 K8s 发布基线测试，断言这些 workspace manifest COPY 均位于 `npm ci` 前，完整源码 COPY 位于 `npm ci` 后、build 前，避免再次退化为缺失 workspace 依赖或每次源码变更都重装依赖。
+
+Fresh verification：
+
+```text
+WOODPECKER_SERVER=https://woodpecker.f123.pub woodpecker-cli pipeline ls LFunTech/DeepTutor --limit 10
+# #82 failure, tag refs/tags/deploy/test-cn/v1.4.0-rc.66
+
+WOODPECKER_SERVER=https://woodpecker.f123.pub woodpecker-cli pipeline ps LFunTech/DeepTutor 82
+# compile-enterprise-frontends-test-cn (#6): State: failure
+
+WOODPECKER_SERVER=https://woodpecker.f123.pub woodpecker-cli pipeline log show LFunTech/DeepTutor 82 6
+# added 424 packages in 13s
+# typecheck:oms: Cannot find module 'next/navigation'
+# typecheck:oms: Cannot find module '@deeptutor/admin-ui'
+# typecheck:oms: Cannot find module 'lucide-react'
+# error building stage: exit status 2
+
+manifest-only npm ci smoke（只复制 root/workspace package.json 与 package-lock，不复制源码）
+# added 446 packages in 4s
+# node_modules/next: dir
+# node_modules/lucide-react: dir
+# node_modules/@deeptutor/admin-ui: symlink
+# node_modules/@deeptutor/api-contracts: symlink
+# node_modules/@deeptutor/branding: symlink
+# node_modules/@deeptutor/service-components: symlink
+
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q extensions/enterprise/tests/test_protected_k8s_release_baseline.py --tb=short
+# 29 passed in 3.60s
+
+.venv/bin/python -m ruff check extensions/enterprise/tests/test_protected_k8s_release_baseline.py
+# All checks passed!
+
+git diff --check
+# exit 0
+
+openspec validate --all --strict
+# 30 passed, 0 failed
+```
+
+预期：修复后的首个新 tag 可能仍需填充新的 `npm ci` cache layer；之后在 lockfile 和 workspace manifest 未变时，源码级 OMS/TMS 变更应复用依赖安装层。`compile-enterprise-frontends-test-cn` 仍包含 Kaniko snapshot/cache push 与两个 Next.js build，因此不会变成瞬时步骤，但应避免“每次源码变更都重新安装依赖”的主要浪费，并消除 rc.66 的缺失依赖失败。
