@@ -117,6 +117,28 @@ steps:
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
+  - name: compile-enterprise-frontends-test-cn
+    image: docker-hub.f123.pub/base/node:22-bookworm
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/test-cn/**
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
+      - |
+        set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        cd extensions/enterprise/frontends
+        npm config set registry "https://mirror.f123.pub/repository/npm/"
+        npm ci --legacy-peer-deps --no-audit --no-fund
+        npm run typecheck:oms
+        npm run typecheck:tms
+        npm test -- formal-management-gates.test.tsx
+        npm run build:oms
+        npm run build:tms
+
+
 
   - name: compile-docs-test-cn
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
@@ -198,7 +220,7 @@ steps:
 
   - name: build-runtime-image-test-cn
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [build-runtime-base-test-cn, compile-frontend-test-cn, compile-python-deps-test-cn]
+    depends_on: [build-runtime-base-test-cn, compile-frontend-test-cn, compile-enterprise-frontends-test-cn, compile-python-deps-test-cn]
     when:
       - event: tag
         ref: refs/tags/deploy/test-cn/**
@@ -362,6 +384,28 @@ steps:
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
+  - name: compile-enterprise-frontends-pre-cn
+    image: docker-hub.f123.pub/base/node:22-bookworm
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/pre-cn/**
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
+      - |
+        set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        cd extensions/enterprise/frontends
+        npm config set registry "https://mirror.f123.pub/repository/npm/"
+        npm ci --legacy-peer-deps --no-audit --no-fund
+        npm run typecheck:oms
+        npm run typecheck:tms
+        npm test -- formal-management-gates.test.tsx
+        npm run build:oms
+        npm run build:tms
+
+
 
   - name: compile-python-deps-pre-cn
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
@@ -417,7 +461,7 @@ steps:
 
   - name: build-runtime-image-pre-cn
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [build-runtime-base-pre-cn, compile-frontend-pre-cn, compile-python-deps-pre-cn]
+    depends_on: [build-runtime-base-pre-cn, compile-frontend-pre-cn, compile-enterprise-frontends-pre-cn, compile-python-deps-pre-cn]
     when:
       - event: tag
         ref: refs/tags/deploy/pre-cn/**
@@ -565,6 +609,28 @@ steps:
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
+  - name: compile-enterprise-frontends-prod-cn-east
+    image: docker-hub.f123.pub/base/node:22-bookworm
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-cn-east/**
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
+      - |
+        set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        cd extensions/enterprise/frontends
+        npm config set registry "https://mirror.f123.pub/repository/npm/"
+        npm ci --legacy-peer-deps --no-audit --no-fund
+        npm run typecheck:oms
+        npm run typecheck:tms
+        npm test -- formal-management-gates.test.tsx
+        npm run build:oms
+        npm run build:tms
+
+
 
   - name: compile-python-deps-prod-cn-east
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
@@ -620,7 +686,7 @@ steps:
 
   - name: build-runtime-image-prod-cn-east
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [build-runtime-base-prod-cn-east, compile-frontend-prod-cn-east, compile-python-deps-prod-cn-east]
+    depends_on: [build-runtime-base-prod-cn-east, compile-frontend-prod-cn-east, compile-enterprise-frontends-prod-cn-east, compile-python-deps-prod-cn-east]
     when:
       - event: tag
         ref: refs/tags/deploy/prod-cn-east/**
@@ -768,6 +834,28 @@ steps:
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
+  - name: compile-enterprise-frontends-prod-overseas-a
+    image: docker-hub.f123.pub/base/node:22-bookworm
+    depends_on: [prepare-release-metadata]
+    when:
+      - event: tag
+        ref: refs/tags/deploy/prod-overseas-a/**
+    commands:
+      - . ./.deeptutor-release.env
+      - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
+      - |
+        set -euo pipefail
+        unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
+        cd extensions/enterprise/frontends
+        npm config set registry "https://mirror.f123.pub/repository/npm/"
+        npm ci --legacy-peer-deps --no-audit --no-fund
+        npm run typecheck:oms
+        npm run typecheck:tms
+        npm test -- formal-management-gates.test.tsx
+        npm run build:oms
+        npm run build:tms
+
+
 
   - name: compile-python-deps-prod-overseas-a
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
@@ -823,7 +911,7 @@ steps:
 
   - name: build-runtime-image-prod-overseas-a
     image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
-    depends_on: [build-runtime-base-prod-overseas-a, compile-frontend-prod-overseas-a, compile-python-deps-prod-overseas-a]
+    depends_on: [build-runtime-base-prod-overseas-a, compile-frontend-prod-overseas-a, compile-enterprise-frontends-prod-overseas-a, compile-python-deps-prod-overseas-a]
     when:
       - event: tag
         ref: refs/tags/deploy/prod-overseas-a/**
