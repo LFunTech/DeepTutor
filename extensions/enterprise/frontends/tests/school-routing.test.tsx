@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import OmsPrototype from "../apps/oms/src/OmsPrototype";
-import OmsPage from "../apps/oms/app/oms/prototype/[[...slug]]/page";
+import OmsPage from "../apps/oms/app/prototype/[[...slug]]/page";
 import TmsPrototype from "../apps/tms/src/TmsPrototype";
-import TmsRootPage from "../apps/tms/app/tms/prototype/page";
-import TmsSchoolPage from "../apps/tms/app/tms/prototype/[schoolCode]/[[...slug]]/page";
+import TmsRootPage from "../apps/tms/app/prototype/page";
+import TmsSchoolPage from "../apps/tms/app/prototype/[schoolCode]/[[...slug]]/page";
 
 let path = "/tms/prototype/demo-school/services";
 vi.mock("next/navigation", () => ({

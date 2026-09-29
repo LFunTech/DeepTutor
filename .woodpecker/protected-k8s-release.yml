@@ -118,26 +118,29 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: compile-enterprise-frontends-test-cn
-    image: docker-hub.f123.pub/base/node:22-bookworm
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
     depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/test-cn/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: DOCKER_USERNAME
+      REGISTRY_PUSH_TOKEN:
+        from_secret: DOCKER_PASSWORD
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
       - |
-        set -eu
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        cd extensions/enterprise/frontends
-        npm config set registry "https://mirror.f123.pub/repository/npm/"
-        npm ci --legacy-peer-deps --no-audit --no-fund
-        npm run typecheck:oms
-        npm run typecheck:tms
-        npm test -- formal-management-gates.test.tsx
-        npm run build:oms
-        npm run build:tms
-
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=enterprise-frontends-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
   - name: compile-docs-test-cn
@@ -241,7 +244,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg ENTERPRISE_FRONTENDS_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-test-cn
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
@@ -385,26 +388,29 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: compile-enterprise-frontends-pre-cn
-    image: docker-hub.f123.pub/base/node:22-bookworm
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
     depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/pre-cn/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: dt_pre_cn_registry_push_username
+      REGISTRY_PUSH_TOKEN:
+        from_secret: dt_pre_cn_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
       - |
-        set -eu
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        cd extensions/enterprise/frontends
-        npm config set registry "https://mirror.f123.pub/repository/npm/"
-        npm ci --legacy-peer-deps --no-audit --no-fund
-        npm run typecheck:oms
-        npm run typecheck:tms
-        npm test -- formal-management-gates.test.tsx
-        npm run build:oms
-        npm run build:tms
-
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=enterprise-frontends-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
   - name: compile-python-deps-pre-cn
@@ -482,7 +488,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg ENTERPRISE_FRONTENDS_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-pre-cn
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
@@ -610,26 +616,29 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: compile-enterprise-frontends-prod-cn-east
-    image: docker-hub.f123.pub/base/node:22-bookworm
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
     depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/prod-cn-east/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: dt_prod_cn_east_registry_push_username
+      REGISTRY_PUSH_TOKEN:
+        from_secret: dt_prod_cn_east_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
       - |
-        set -eu
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        cd extensions/enterprise/frontends
-        npm config set registry "https://mirror.f123.pub/repository/npm/"
-        npm ci --legacy-peer-deps --no-audit --no-fund
-        npm run typecheck:oms
-        npm run typecheck:tms
-        npm test -- formal-management-gates.test.tsx
-        npm run build:oms
-        npm run build:tms
-
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=enterprise-frontends-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
   - name: compile-python-deps-prod-cn-east
@@ -707,7 +716,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg ENTERPRISE_FRONTENDS_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-prod-cn-east
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4
@@ -835,26 +844,29 @@ steps:
         /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=frontend-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: compile-enterprise-frontends-prod-overseas-a
-    image: docker-hub.f123.pub/base/node:22-bookworm
+    image: docker-hub.f123.pub/devops/kaniko:v1.14.0-debug
     depends_on: [prepare-release-metadata]
     when:
       - event: tag
         ref: refs/tags/deploy/prod-overseas-a/**
+    environment:
+      HOME: /kaniko
+      REGISTRY_PUSH_USERNAME:
+        from_secret: dt_prod_overseas_a_registry_push_username
+      REGISTRY_PUSH_TOKEN:
+        from_secret: dt_prod_overseas_a_registry_push_token
     commands:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
       - |
-        set -eu
+        set -euo pipefail
+        registry_host="$$(printf '%s' "$${DEEPTUTOR_REGISTRY_REPOSITORY}" | cut -d/ -f1)"
+        test -n "$${REGISTRY_PUSH_USERNAME:-}"
+        test -n "$${REGISTRY_PUSH_TOKEN:-}"
+        mkdir -p /kaniko/.docker
+        printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        cd extensions/enterprise/frontends
-        npm config set registry "https://mirror.f123.pub/repository/npm/"
-        npm ci --legacy-peer-deps --no-audit --no-fund
-        npm run typecheck:oms
-        npm run typecheck:tms
-        npm test -- formal-management-gates.test.tsx
-        npm run build:oms
-        npm run build:tms
-
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile --target=enterprise-frontends-builder --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg NODE_IMAGE="$${registry_host}/base/node:22-bookworm" --build-arg NPM_REGISTRY="https://mirror.f123.pub/repository/npm/" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
 
   - name: compile-python-deps-prod-overseas-a
@@ -932,7 +944,7 @@ steps:
         mkdir -p /kaniko/.docker
         printf '{"auths":{"%s":{"username":"%s","password":"%s"}}}\n' "$${registry_host}" "$${REGISTRY_PUSH_USERNAME}" "$${REGISTRY_PUSH_TOKEN}" > /kaniko/.docker/config.json
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
-        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
+        /kaniko/executor --context=dir:///woodpecker/src --dockerfile=Dockerfile.protected-runtime --destination "$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime:$${DEEPTUTOR_IMAGE_TAG}" --build-arg RUNTIME_BASE_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" --build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg ENTERPRISE_FRONTENDS_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" --build-arg PYTHON_DEPS_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/python-deps:$${DEEPTUTOR_IMAGE_TAG}" --cache=true --cache-copy-layers --cache-repo "$${registry_host}/lfun/cache-deeptutor"
 
   - name: pre-deploy-check-prod-overseas-a
     image: docker-hub.f123.pub/base/ci-tools:alpine-3.22.4

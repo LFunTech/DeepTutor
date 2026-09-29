@@ -64,6 +64,32 @@ RUN npm config set registry "${NPM_REGISTRY}" && \
     rm -rf node_modules "${HOME}/.npm"
 
 # ============================================
+# Stage 1a: Enterprise Frontends Builder
+# ============================================
+# Builds the independent OMS/TMS Next.js apps. Protected K8s releases package
+# these artifacts beside the core Web app and route /oms and /tms through the
+# frontend gateway instead of folding enterprise UI routes into upstream core.
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS enterprise-frontends-builder
+
+ARG NPM_REGISTRY
+
+WORKDIR /app/extensions/enterprise/frontends
+
+COPY extensions/enterprise/frontends/package.json extensions/enterprise/frontends/package-lock.json* ./
+COPY extensions/enterprise/frontends/ ./
+
+RUN npm config set registry "${NPM_REGISTRY}" && \
+    npm config set fetch-timeout 600000 && \
+    npm config set fetch-retries 5 && \
+    npm ci --legacy-peer-deps --no-audit --no-fund && \
+    npm run typecheck:oms && \
+    npm run typecheck:tms && \
+    npm test -- formal-management-gates.test.tsx oms-auth-callback.test.tsx school-routing.test.tsx && \
+    npm run build:oms && \
+    npm run build:tms && \
+    rm -rf node_modules "${HOME}/.npm"
+
+# ============================================
 # Stage 1b: Node Runtime for Target Platform
 # ============================================
 # Provides the correctly-architected node binary for the final image.

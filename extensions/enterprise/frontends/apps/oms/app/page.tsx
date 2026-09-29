@@ -1,2 +1,5 @@
-import { notFound } from "next/navigation";
-export default function Page() { notFound(); }
+import OmsFormalApp from "../src/OmsFormalApp";
+
+export default function Page() {
+  return <OmsFormalApp/>;
+}

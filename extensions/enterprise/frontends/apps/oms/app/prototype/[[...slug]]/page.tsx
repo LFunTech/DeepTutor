@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import OmsPrototype from "../../../../src/OmsPrototype";
+import OmsPrototype from "../../../src/OmsPrototype";
 
 export default async function Page({ params }: { params: Promise<{ slug?: string[] }> }) {
   if (process.env.NODE_ENV !== "development") notFound();

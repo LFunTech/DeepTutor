@@ -861,10 +861,12 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert '--build-arg PYTHON_IMAGE="$${registry_host}/base/python:3.11-slim"' in pipeline
     assert "--context=dir:///woodpecker/src" in pipeline
     assert "--dockerfile=Dockerfile --target=frontend-builder" in pipeline
+    assert "--dockerfile=Dockerfile --target=enterprise-frontends-builder" in pipeline
     assert "--dockerfile=Dockerfile --target=python-base --skip-unused-stages" in pipeline
     assert "--dockerfile=Dockerfile.protected-runtime-base" in pipeline
     assert "--dockerfile=Dockerfile.protected-runtime" in pipeline
     assert "/frontend-build:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
+    assert "/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
     assert "/python-deps:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
     assert "/runtime-base:$${DEEPTUTOR_IMAGE_TAG}" in pipeline
     assert (
@@ -873,6 +875,10 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     )
     assert (
         '--build-arg FRONTEND_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/frontend-build:$${DEEPTUTOR_IMAGE_TAG}"'
+        in pipeline
+    )
+    assert (
+        '--build-arg ENTERPRISE_FRONTENDS_ARTIFACT_IMAGE="$${DEEPTUTOR_REGISTRY_REPOSITORY}/enterprise-frontends-build:$${DEEPTUTOR_IMAGE_TAG}"'
         in pipeline
     )
     assert (
@@ -957,6 +963,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     supervisor_programs = (root / "deploy" / "docker-runtime" / "programs.conf").read_text(
         encoding="utf8"
     )
+    protected_runtime_dockerfile = protected_runtime_dockerfile_path.read_text(encoding="utf8")
     readme = k8s_readme.read_text(encoding="utf8")
     assert 'image: "${DEEPTUTOR_RUNTIME_IMAGE_DIGEST}"' in backend
     assert "replicas: ${DEEPTUTOR_BACKEND_EXECUTOR_REPLICAS}" in backend
@@ -974,9 +981,21 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "deeptutor.f123.pub/deployment-config-hash" in backend
     assert ":latest" not in backend
     assert 'PYTHONPATH="/app:/app/extensions/enterprise/src' in supervisor_programs
+    assert "[program:frontend-core]" in supervisor_programs
+    assert "[program:frontend-oms]" in supervisor_programs
+    assert "[program:frontend-tms]" in supervisor_programs
+    assert "[program:frontend-gateway]" in supervisor_programs
+    assert 'ENTERPRISE_FRONTEND_APP="oms"' in supervisor_programs
+    assert 'ENTERPRISE_FRONTEND_APP="tms"' in supervisor_programs
     assert "DEEPTUTOR_POSTGRES_CONFIG" in backend_start_script
     assert "deeptutor_enterprise.runtime_app:app" in backend_start_script
     assert "DEEPTUTOR_BACKEND_APP_MODULE" in backend_start_script
+    assert "ARG ENTERPRISE_FRONTENDS_ARTIFACT_IMAGE" in protected_runtime_dockerfile
+    assert "FROM ${ENTERPRISE_FRONTENDS_ARTIFACT_IMAGE} AS enterprise-frontends-artifact" in protected_runtime_dockerfile
+    assert "/app/extensions/enterprise/frontends/apps/oms/.next/standalone/" in protected_runtime_dockerfile
+    assert "/app/extensions/enterprise/frontends/apps/tms/.next/standalone/" in protected_runtime_dockerfile
+    assert "start-frontend-gateway.mjs" in protected_runtime_dockerfile
+    assert "start-enterprise-frontend.sh" in protected_runtime_dockerfile
     assert 'PYTHONPATH="/app:/app/extensions/enterprise/src${PYTHONPATH:+:${PYTHONPATH}}"' in migration
     assert "python -m deeptutor_enterprise.cli --config /etc/deeptutor/deployment.json schema plan" in migration
     assert "deeptutor-enterprise --config" not in migration
@@ -1024,9 +1043,7 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
         "status_script": status_script,
         "readme": readme,
         "evidence_template": template,
-        "protected_runtime_dockerfile": protected_runtime_dockerfile_path.read_text(
-            encoding="utf8"
-        ),
+        "protected_runtime_dockerfile": protected_runtime_dockerfile,
         "protected_runtime_base_dockerfile": protected_runtime_base_dockerfile_path.read_text(
             encoding="utf8"
         ),
@@ -1050,6 +1067,9 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "ARG RUSTUP_UPDATE_ROOT=https://static.rust-lang.org/rustup" in dockerfile
     assert "ARG CARGO_REGISTRY_MIRROR=sparse+https://index.crates.io/" in dockerfile
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" in dockerfile
+    assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS enterprise-frontends-builder" in dockerfile
+    assert "npm run typecheck:oms" in dockerfile
+    assert "npm run build:tms" in dockerfile
     assert "FROM ${PYTHON_IMAGE} AS production" in dockerfile
     assert "/etc/apt/sources.list.d/debian.sources" in dockerfile
     assert "${APT_DEBIAN_MIRROR}" in dockerfile

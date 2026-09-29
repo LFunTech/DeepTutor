@@ -382,3 +382,12 @@
 - 当前 `HEAD=df11a3a3fe12ab5232e568b69770849e30b55fae`；本地 `upstream/main=ef2d9e5c3c99fd073742c5aadc2bb9584b1e503b`；`git merge-base HEAD upstream/main` 同为 `ef2d9e5c3c99fd073742c5aadc2bb9584b1e503b`。
 - `git merge-tree <merge-base> HEAD upstream/main` 未发现 `<<<<<<<`、`changed in both`、`added in both`、`removed in` 等文本冲突标记。
 - 说明：这是当前本地 upstream ref 的只读 smoke，不等同于提交前完整 upstream 合并演练；真实环境写 API 联调和 test-cn 账号验收仍未完成。
+
+### 2026-09-29 test-cn OMS/TMS 前端打包与 BFF 回调入口修正切片
+
+- test-cn `deploy/test-cn/v1.4.0-rc.58` 部署后复测发现：`/api/v1/oms/auth/start` 已正确生成 EduPlus2 Keycloak 跳转，`redirect_uri=https://llm-agent-test.f123.pub/oms/auth/callback`；后端 BFF `/api/v1/oms/auth/callback` 与 refresh/status API 按预期失败关闭/鉴权。但运行时镜像 `/app/web/.next/server/app` 只包含核心 Web 前端，未包含独立 enterprise OMS/TMS 前端产物，导致浏览器访问 `/oms/auth/callback` 与 `/tms/{schoolCode}` 返回 404。
+- 根因：Woodpecker 已编译 enterprise OMS/TMS 前端，但 protected runtime 镜像只复制核心 `frontend-build` 产物并直接运行核心 Next `server.js`；OMS/TMS 独立 Next app 没有被打包进运行时，也没有入口网关按路径分流。
+- 修正：OMS/TMS 独立 Next app 改为以 `basePath=/oms`、`basePath=/tms` 构建，把正式入口、BFF 回调和 prototype 路由移动到 basePath 下的应用根路由；新增 `enterprise-frontends-builder` Docker stage，Woodpecker 用 Kaniko 产出 `enterprise-frontends-build` artifact image；protected runtime 复制 OMS/TMS standalone/static/public 产物。
+- 运行时新增前端网关：对外仍只暴露 `FRONTEND_PORT=3782`，网关将 `/oms/*` 分流到 OMS standalone、`/tms/*` 分流到 TMS standalone、`/api/*`/`/ws/*`/`/health*` 分流到后端，其余路径保留核心 Web 前端；同 Pod 内部端口不新增 Kubernetes Service 暴露面。
+- 本地验证：`woodpecker-cli lint .woodpecker/protected-k8s-release.yml` 通过（仅保留既有 clone image allowlist warning）；`pytest extensions/enterprise/tests/test_protected_k8s_release_baseline.py extensions/enterprise/tests/test_webhook_release_secret.py extensions/enterprise/tests/test_preflight.py -q` → **49 passed**；`npm test -- formal-management-gates.test.tsx oms-auth-callback.test.tsx school-routing.test.tsx` → **32 passed**；`npm run typecheck:oms && npm run build:oms && npm run typecheck:tms && npm run build:tms` 通过；本地 gateway smoke 验证 `/oms/auth/callback` → 200、`/tms/test-school` → 200、`/api/v1/oms/auth/status` → 后端 401。
+- 说明：该切片修正的是部署产物与前端职责边界的运行时可达性问题，不新增任何 `ops.*` 或 `tenant.*` 授权事实，不改变 EduPlus2 仓库/配置；test-cn 仍需重新打 tag 部署后复测真实 OMS BFF 回调与正式 TMS URL。
