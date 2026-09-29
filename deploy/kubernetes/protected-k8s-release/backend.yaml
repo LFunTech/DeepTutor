@@ -53,6 +53,18 @@ spec:
               value: "https://${DEEPTUTOR_INGRESS_HOST}/oms/auth/callback"
             - name: DT_EDUPLUS2_OMS_RETURN_URL
               value: "https://${DEEPTUTOR_INGRESS_HOST}/oms"
+            - name: DT_EDUPLUS2_OMS_ENABLED
+              value: "${DEEPTUTOR_EDUPLUS2_OMS_ENABLED}"
+            - name: DT_EDUPLUS2_OMS_DISCOVERY_URL
+              value: "${DEEPTUTOR_EDUPLUS2_OMS_DISCOVERY_URL}"
+            - name: DT_EDUPLUS2_OMS_OIDC_ISSUER
+              value: "${DEEPTUTOR_EDUPLUS2_OMS_OIDC_ISSUER}"
+            - name: DT_EDUPLUS2_OMS_AUDIENCE
+              value: "${DEEPTUTOR_EDUPLUS2_OMS_AUDIENCE}"
+            - name: DT_EDUPLUS2_OMS_CLIENT_ID
+              value: "${DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID}"
+            - name: DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL
+              value: "${DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL}"
             # EduPlus2 profile/permission checks are optional enhanced gates. The
             # current test-cn EduPlus2 endpoints expose the Me Profile API as a
             # user-token GET contract, while this release baseline's optional

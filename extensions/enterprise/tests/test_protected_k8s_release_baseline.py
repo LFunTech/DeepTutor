@@ -157,6 +157,18 @@ def _environment(
             "write_scope": f"release-evidence/{env_id}/*",
             "read_scope": f"release-evidence/{env_id}/*",
         },
+        "oms_identity": (
+            {
+                "enabled": True,
+                "discovery_url": "https://eduplus-auth-test.f123.pub/realms/eduplus/.well-known/openid-configuration",
+                "issuer": "https://eduplus-auth-test.f123.pub/realms/eduplus",
+                "audience": "account",
+                "client_id": "eduplus-platform-admin",
+                "account_status_url": "off",
+            }
+            if env_id == "test-cn"
+            else {"enabled": False}
+        ),
     }
 
 
@@ -558,6 +570,18 @@ def test_protected_backend_manifest_sets_public_oms_oauth_urls():
         == "https://${DEEPTUTOR_INGRESS_HOST}/oms/auth/callback"
     )
     assert env["DT_EDUPLUS2_OMS_RETURN_URL"] == "https://${DEEPTUTOR_INGRESS_HOST}/oms"
+    assert env["DT_EDUPLUS2_OMS_ENABLED"] == "${DEEPTUTOR_EDUPLUS2_OMS_ENABLED}"
+    assert env["DT_EDUPLUS2_OMS_DISCOVERY_URL"] == (
+        "${DEEPTUTOR_EDUPLUS2_OMS_DISCOVERY_URL}"
+    )
+    assert env["DT_EDUPLUS2_OMS_OIDC_ISSUER"] == (
+        "${DEEPTUTOR_EDUPLUS2_OMS_OIDC_ISSUER}"
+    )
+    assert env["DT_EDUPLUS2_OMS_AUDIENCE"] == "${DEEPTUTOR_EDUPLUS2_OMS_AUDIENCE}"
+    assert env["DT_EDUPLUS2_OMS_CLIENT_ID"] == "${DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID}"
+    assert env["DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL"] == (
+        "${DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL}"
+    )
 
 
 def test_rollback_decision_and_release_evidence_are_partitioned_and_leak_scanned(tmp_path):
@@ -739,6 +763,8 @@ def test_protected_k8s_release_cli_prepares_sourceable_release_metadata(tmp_path
     assert env["DEEPTUTOR_EXECUTION_MODE"] == "single"
     assert env["DEEPTUTOR_TURN_COORDINATION_BACKEND"] == "memory"
     assert env["DEEPTUTOR_HPA_ENABLED"] == "false"
+    assert env["DEEPTUTOR_EDUPLUS2_OMS_ENABLED"] == "false"
+    assert env["DEEPTUTOR_EDUPLUS2_OMS_DISCOVERY_URL"] == ""
     assert "TOKEN" not in output_env.read_text(encoding="utf8")
 
 
@@ -808,6 +834,16 @@ builtins.__import__ = _blocked_import
     assert env_values["DEEPTUTOR_TARGET_ENV_ID"] == "test-cn"
     assert env_values["DEEPTUTOR_RELEASE_VERSION"] == "v1.4.0-rc.8"
     assert env_values["DEEPTUTOR_INGRESS_HOST"] == "llm-agent-test.f123.pub"
+    assert env_values["DEEPTUTOR_EDUPLUS2_OMS_ENABLED"] == "true"
+    assert env_values["DEEPTUTOR_EDUPLUS2_OMS_DISCOVERY_URL"] == (
+        "https://eduplus-auth-test.f123.pub/realms/eduplus/.well-known/openid-configuration"
+    )
+    assert env_values["DEEPTUTOR_EDUPLUS2_OMS_OIDC_ISSUER"] == (
+        "https://eduplus-auth-test.f123.pub/realms/eduplus"
+    )
+    assert env_values["DEEPTUTOR_EDUPLUS2_OMS_AUDIENCE"] == "account"
+    assert env_values["DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID"] == "eduplus-platform-admin"
+    assert env_values["DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL"] == "off"
 
 
 def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven():
@@ -1258,6 +1294,12 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
         "DEEPTUTOR_HPA_MIN_REPLICAS": "3",
         "DEEPTUTOR_HPA_MAX_REPLICAS": "12",
         "DEEPTUTOR_HPA_TARGET_CPU_UTILIZATION_PERCENTAGE": "70",
+        "DEEPTUTOR_EDUPLUS2_OMS_ENABLED": "true",
+        "DEEPTUTOR_EDUPLUS2_OMS_DISCOVERY_URL": "https://eduplus-auth-test.f123.pub/realms/eduplus/.well-known/openid-configuration",
+        "DEEPTUTOR_EDUPLUS2_OMS_OIDC_ISSUER": "https://eduplus-auth-test.f123.pub/realms/eduplus",
+        "DEEPTUTOR_EDUPLUS2_OMS_AUDIENCE": "account",
+        "DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID": "eduplus-platform-admin",
+        "DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL": "off",
     }
 
     for manifest_name in (
@@ -1290,6 +1332,16 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
                 )
                 assert env["DT_EDUPLUS2_PROFILE_URL"] == "off"
                 assert env["DT_EDUPLUS2_PERMISSION_URL"] == "off"
+                assert env["DT_EDUPLUS2_OMS_ENABLED"] == "true"
+                assert env["DT_EDUPLUS2_OMS_DISCOVERY_URL"] == (
+                    "https://eduplus-auth-test.f123.pub/realms/eduplus/.well-known/openid-configuration"
+                )
+                assert env["DT_EDUPLUS2_OMS_OIDC_ISSUER"] == (
+                    "https://eduplus-auth-test.f123.pub/realms/eduplus"
+                )
+                assert env["DT_EDUPLUS2_OMS_AUDIENCE"] == "account"
+                assert env["DT_EDUPLUS2_OMS_CLIENT_ID"] == "eduplus-platform-admin"
+                assert env["DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL"] == "off"
                 mounts = {mount["name"]: mount for mount in backend_container["volumeMounts"]}
                 assert mounts["deployment-config"]["mountPath"] == "/etc/deeptutor"
                 assert mounts["deployment-config"]["readOnly"] is True

@@ -385,6 +385,45 @@ _REQUIRED_SECRET_PURPOSES = {
 }
 
 
+class OmsIdentityContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    enabled: bool = False
+    discovery_url: str = ""
+    issuer: str = ""
+    audience: str = ""
+    client_id: str = "eduplus-platform-admin"
+    account_status_url: str = ""
+
+    @model_validator(mode="after")
+    def _validate_enabled_contract(self):
+        if not self.enabled:
+            return self
+        missing = [
+            name
+            for name in ("discovery_url", "issuer", "audience", "client_id", "account_status_url")
+            if not getattr(self, name)
+        ]
+        if missing:
+            raise ValueError("OMS identity contract incomplete: " + ",".join(missing))
+        if not self.discovery_url.startswith("https://"):
+            raise ValueError("OMS discovery_url must use https")
+        if not self.issuer.startswith("https://"):
+            raise ValueError("OMS issuer must use https")
+        if self.account_status_url != "off" and not self.account_status_url.startswith("https://"):
+            raise ValueError("OMS account_status_url must be https or off")
+        return self
+
+    def redacted_summary(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "discovery_hash": _hash_text(self.discovery_url) if self.discovery_url else "",
+            "issuer_hash": _hash_text(self.issuer) if self.issuer else "",
+            "audience": self.audience,
+            "client_id": self.client_id,
+            "account_status_policy": "token-only" if self.account_status_url == "off" else "online",
+        }
+
+
 class DeploymentEnvironment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     env_id: EnvId
@@ -400,6 +439,7 @@ class DeploymentEnvironment(BaseModel):
     release_control: ReleaseControl
     rollback_policy: RollbackPolicy
     evidence: EvidenceContract
+    oms_identity: OmsIdentityContract = Field(default_factory=OmsIdentityContract)
 
     @model_validator(mode="after")
     def _validate_environment_boundaries(self):
@@ -518,6 +558,7 @@ class DeploymentEnvironment(BaseModel):
                 "runtime_coordination": self.kubernetes.runtime_coordination.redacted_summary(),
                 "autoscaling": self.kubernetes.autoscaling.summary(),
             },
+            "oms_identity": self.oms_identity.redacted_summary(),
             "data_plane": {
                 "pg_secret_ref": _ref_summary(self.data_plane.pg_secret_ref),
                 "object_store_ref": _ref_summary(self.data_plane.object_store_ref),

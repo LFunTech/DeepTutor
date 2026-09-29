@@ -528,6 +528,7 @@ def _release_env_values(registry, report: dict) -> dict[str, str]:
     backend_replicas = int(_nested(env, ("kubernetes", "backend_executor_replicas"), 1) or 1)
     autoscaling_enabled = bool(_value(autoscaling, "enabled", False))
     execution_mode = "replicated" if backend_replicas > 1 or autoscaling_enabled else "single"
+    oms_identity = _nested(env, ("oms_identity",), None)
     return {
         "DEEPTUTOR_TARGET_ENV_ID": target_env_id,
         "DEEPTUTOR_RELEASE_VERSION": version,
@@ -556,6 +557,24 @@ def _release_env_values(registry, report: dict) -> dict[str, str]:
         "DEEPTUTOR_HPA_MAX_REPLICAS": str(_value(autoscaling, "max_replicas", 1)),
         "DEEPTUTOR_HPA_TARGET_CPU_UTILIZATION_PERCENTAGE": str(
             _value(autoscaling, "target_cpu_utilization_percentage", None) or 70
+        ),
+        "DEEPTUTOR_EDUPLUS2_OMS_ENABLED": (
+            "true" if bool(_value(oms_identity, "enabled", False)) else "false"
+        ),
+        "DEEPTUTOR_EDUPLUS2_OMS_DISCOVERY_URL": str(
+            _value(oms_identity, "discovery_url", "") or ""
+        ),
+        "DEEPTUTOR_EDUPLUS2_OMS_OIDC_ISSUER": str(
+            _value(oms_identity, "issuer", "") or ""
+        ),
+        "DEEPTUTOR_EDUPLUS2_OMS_AUDIENCE": str(
+            _value(oms_identity, "audience", "") or ""
+        ),
+        "DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID": str(
+            _value(oms_identity, "client_id", "") or ""
+        ),
+        "DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL": str(
+            _value(oms_identity, "account_status_url", "") or ""
         ),
     }
 

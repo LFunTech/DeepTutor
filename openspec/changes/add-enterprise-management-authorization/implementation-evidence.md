@@ -398,3 +398,12 @@
 - 修正：网关先用 `new URL(req.url, ...)` 提取 pathname，再按 pathname 分流；`/oms?*`、`/oms/*?*`、`/tms/*?*`、`/api/*?*` 和 `/health?*` 均保留原始 path+query 转发到正确 upstream。
 - 回归验证：新增 `extensions/enterprise/tests/test_frontend_gateway.py`，用本地 dummy backend/core/oms/tms 验证 `/oms?oms_login=ok`、`/oms/auth/callback?code=x`、`/tms/test-school?tab=members`、`/api/v1/oms/auth/status?probe=1`、`/health?probe=1` 与普通 core 路由的分流；`pytest extensions/enterprise/tests/test_frontend_gateway.py ... test_preflight.py -q` → **50 passed**，`woodpecker-cli lint .woodpecker/protected-k8s-release.yml` 仅保留既有 clone allowlist warning。
 - 说明：该切片只修复网关查询串分流，不改变 BFF token 交换、EduPlus2 配置或本地授权事实；仍需重新发布后在 test-cn 复测真实浏览器回调落地。
+
+### 2026-09-29 test-cn OMS identity contract 流水线注入修正切片
+
+- rc.60 真实 OMS 授权码登录复测：EduPlus2/Keycloak redirect URI 已放行，浏览器成功带 `code/state` 回到 `https://llm-agent-test.f123.pub/oms/auth/callback`；前端 BFF 调用后返回 `identity_verification_failed`。
+- 后端日志显示 access token/id token 均已换取并脱敏解码：issuer=`https://eduplus-auth-test.f123.pub/realms/eduplus`、`azp=eduplus-platform-admin`、access token `aud=account`、id token `aud=eduplus-platform-admin`；失败原因为 `OMS identity contract is unavailable`。
+- 根因：protected K8s deployment 只注入了 OMS redirect/return URL，未注入 `DT_EDUPLUS2_OMS_ENABLED`、OMS discovery/issuer/audience/client/account-status 策略，导致 `enterprise.oms_platform_verifier` 与 `enterprise.oms_account_status` 未装配。
+- 修正：新增受保护发布 `oms_identity` registry contract，由 `prepare-metadata` 导出 `DEEPTUTOR_EDUPLUS2_OMS_*`；K8s `backend.yaml` 使用这些 release env 渲染 OMS identity 配置。test-cn registry 固定为 EduPlus2 test Keycloak，`audience=account`，`client_id=eduplus-platform-admin`，`account_status_url=off`，继续执行 token-only 身份状态策略且不向 EduPlus2 请求本产品权限。
+- 验证：`woodpecker-cli lint .woodpecker/protected-k8s-release.yml` 仅保留既有 clone allowlist warning；`.venv/bin/python -m pytest extensions/enterprise/tests/test_frontend_gateway.py extensions/enterprise/tests/test_protected_k8s_release_baseline.py extensions/enterprise/tests/test_webhook_release_secret.py extensions/enterprise/tests/test_preflight.py -q` → **50 passed**；`git diff --check` 通过。
+- 说明：该切片只补齐 DeepTutor 自有发布配置和 OMS identity verifier 装配，不修改 EduPlus2；重新发布后需再次走真实 OMS 登录，预期 token 验签通过后进入本地 `ops.*` 授权失败关闭态（未登记平台权限时 `/oms/me` 仍应 403）。
