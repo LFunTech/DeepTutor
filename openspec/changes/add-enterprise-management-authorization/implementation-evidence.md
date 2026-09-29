@@ -422,3 +422,12 @@
   - Python 语法/静态：`PYTHONPATH=.:extensions/enterprise/src .venv/bin/python -m compileall -q extensions/enterprise/src/deeptutor_enterprise/management/first_admin.py extensions/enterprise/src/deeptutor_enterprise/api/application.py` 通过；`.venv/bin/ruff check extensions/enterprise/src/deeptutor_enterprise/management/first_admin.py extensions/enterprise/src/deeptutor_enterprise/api/application.py extensions/enterprise/tests/test_application.py extensions/enterprise/tests/test_protected_k8s_release_baseline.py` → **All checks passed!**；
   - 前端：`npm run typecheck:oms --prefix extensions/enterprise/frontends` 与 `npm run build:oms --prefix extensions/enterprise/frontends` 均通过。
 - 限制：该切片只解决零本地 OMS 管理员的 DeepTutor 自有初始化，仍需发布到 test-cn 后用真实 OMS 登录点击初始化并复测正式写 API；真实跨学校负例、TMS 本人激活、学校目录合同和 5.1 开闸证据仍未完成。
+
+### 2026-09-29 OMS BFF CSRF local-ssl 调试与修复切片
+
+- 真实 test-cn rc.62 部署后复测：`https://llm-agent-test.f123.pub/oms` 经 `eduplus-platform-admin` 登录成功进入 `/oms?oms_login=ok`，但点击“激活首位 OMS 管理员”返回 `403 Origin or CSRF rejected`。
+- 按用户要求改为本地优先调试：使用 `local-ssl` 已有 `https://deeptutor.lfun.pub` 路由，启动当前代码的企业后端、OMS production frontend 与 runtime gateway，配置同 test-cn 的 OMS issuer/audience/client/token-only 状态策略，在本机空白 PostgreSQL 库 `deeptutor_oms_debug_20260929` 上应用迁移并 bootstrap 固定租户。
+- 根因：BFF 登录成功时后端把 `dt_oms_csrf` 设置为 `Path=/api/v1/oms`；浏览器会把该 cookie 发给 API，但 `/oms` 前端页面无法通过 `document.cookie` 读取它，因此写请求未携带 `x-csrf-token`，被中间件拒绝。token/refresh cookie 的 `Path=/api/v1/oms` 与 `HttpOnly` 是正确的，只有 CSRF cookie 需要前端可读。
+- 修复：新增前端可读的 OMS CSRF cookie path `/`，继续保持 token/refresh 为 `HttpOnly Path=/api/v1/oms`；登录/refresh 时同时清理旧 `Path=/api/v1/oms` 的同名 CSRF cookie，logout/失败清理两个路径，避免旧 cookie 干扰。
+- 本地 local-ssl 验证：`/api/v1/oms/auth/callback` 返回 200，`/api/v1/oms/me` 在未授权时 403；点击“激活首位 OMS 管理员”后 `/api/v1/oms/bootstrap/first-admin` 返回 200，随后 `/api/v1/oms/me`、`/api/v1/oms/me/permissions`、`/api/v1/oms/skills`、`/api/v1/oms/provider-settings` 等正式 DTO 返回 200，页面进入正式 OMS 管理入口。
+- 自动验证：新增 `test_frontend_callback_sets_frontend_readable_oms_csrf_cookie`，先 RED 失败于 CSRF cookie 未设置 `Path=/`，修复后 GREEN；`PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest extensions/enterprise/tests/test_oms_oauth_flow.py -q` → **5 passed**，并联动首管相关后端测试通过。

@@ -43,6 +43,14 @@ def _set_cookie_text(response) -> str:
     )
 
 
+def _set_cookie_headers(response) -> list[str]:
+    return [
+        value.decode("latin1")
+        for key, value in response.raw_headers
+        if key.lower() == b"set-cookie"
+    ]
+
+
 def _base_oauth_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "DT_EDUPLUS2_OMS_AUTHORIZATION_ENDPOINT",
@@ -113,6 +121,42 @@ async def test_frontend_callback_post_exchanges_code_and_sets_httponly_session(
     assert "dt_oms_token=verified.platform.jwt" in set_cookie
     assert "dt_oms_refresh=provider.refresh.token" in set_cookie
     assert "HttpOnly" in set_cookie
+
+
+async def test_frontend_callback_sets_frontend_readable_oms_csrf_cookie(monkeypatch):
+    """OMS BFF 写接口的 CSRF cookie 必须能被 `/oms` 前端读取。"""
+
+    from deeptutor_enterprise.oms import oauth
+
+    _base_oauth_env(monkeypatch)
+    oauth._STATE_STORE.clear()
+    start_response = oauth.create_authorization_redirect(_StartRequest())
+    state = _location_query(start_response)["state"][0]
+
+    async def exchange_code(_config, _login_state, _code):
+        return {"access_token": "provider.jwt.token", "refresh_token": "provider.refresh.token"}
+
+    async def select_verified_token(_enterprise, _payload):
+        return "verified.platform.jwt"
+
+    monkeypatch.setattr(oauth, "_exchange_code", exchange_code)
+    monkeypatch.setattr(oauth, "_select_verified_token", select_verified_token)
+    monkeypatch.setattr(oauth, "_max_age_from_token", lambda _token: 600)
+
+    response = await oauth.handle_frontend_callback(
+        _CallbackRequest({"state": state, "code": "auth-code"}), object()
+    )
+
+    headers = _set_cookie_headers(response)
+    csrf_headers = [header for header in headers if header.startswith("dt_oms_csrf=")]
+    assert any("Path=/;" in header for header in csrf_headers)
+    assert all("HttpOnly" not in header for header in csrf_headers)
+    assert any(
+        header.startswith("dt_oms_csrf=")
+        and "Max-Age=0" in header
+        and "Path=/api/v1/oms;" in header
+        for header in headers
+    )
 
 
 async def test_refresh_endpoint_uses_httponly_refresh_token_without_exposing_tokens(

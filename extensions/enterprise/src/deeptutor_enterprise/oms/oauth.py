@@ -32,6 +32,7 @@ OMS_TOKEN_COOKIE = "dt_oms_token"
 OMS_REFRESH_COOKIE = "dt_oms_refresh"
 OMS_CSRF_COOKIE = "dt_oms_csrf"
 OMS_COOKIE_PATH = "/api/v1/oms"
+OMS_CSRF_COOKIE_PATH = "/"
 _STATE_TTL_SECONDS = 5 * 60
 _DEFAULT_REFRESH_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 _DEFAULT_SCOPE = "openid profile"
@@ -423,8 +424,9 @@ def _set_oms_session_cookies(
         max_age=refresh_max_age,
         secure=True,
         samesite="lax",
-        path=OMS_COOKIE_PATH,
+        path=OMS_CSRF_COOKIE_PATH,
     )
+    response.delete_cookie(OMS_CSRF_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
 
 
 def _oms_csrf_valid(request: Request) -> bool:
@@ -486,6 +488,12 @@ async def refresh_session(request: Request, enterprise) -> JSONResponse:
         response = _json_error(_classify_error(exc), 401)
         response.delete_cookie(OMS_TOKEN_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
         response.delete_cookie(OMS_REFRESH_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
+        response.delete_cookie(
+            OMS_CSRF_COOKIE,
+            path=OMS_CSRF_COOKIE_PATH,
+            secure=True,
+            samesite="lax",
+        )
         response.delete_cookie(OMS_CSRF_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
         return response
     response = JSONResponse({"authenticated": True})
@@ -522,5 +530,11 @@ def logout_response() -> JSONResponse:
     response = JSONResponse({"success": True})
     response.delete_cookie(OMS_TOKEN_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
     response.delete_cookie(OMS_REFRESH_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
+    response.delete_cookie(
+        OMS_CSRF_COOKIE,
+        path=OMS_CSRF_COOKIE_PATH,
+        secure=True,
+        samesite="lax",
+    )
     response.delete_cookie(OMS_CSRF_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
     return response
