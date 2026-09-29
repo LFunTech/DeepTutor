@@ -214,13 +214,17 @@ function encodeRoutePart(value: string) {
   return encodeURIComponent(value);
 }
 
+function omsLoginHref() {
+  if (typeof window === "undefined") return "/api/v1/oms/auth/start";
+  return `/api/v1/oms/auth/start?return_to=${encodeURIComponent(window.location.href)}`;
+}
+
 export default function OmsFormalApp() {
   const [state, setState] = useState<LoadState>("blocked");
   const [error, setError] = useState<ApiError | undefined>();
   const [model, setModel] = useState<OmsModel | undefined>();
   const [commandMessage, setCommandMessage] = useState("");
   const [bootstrapMessage, setBootstrapMessage] = useState("");
-  const [loginHref, setLoginHref] = useState("/api/v1/oms/auth/start");
   const [route, setRoute] = useState(currentOmsPath);
 
   useEffect(() => {
@@ -250,9 +254,6 @@ export default function OmsFormalApp() {
   </AdminShell>;
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setLoginHref(`/api/v1/oms/auth/start?return_to=${encodeURIComponent(window.location.href)}`);
-    }
     let cancelled = false;
     async function load() {
       setState("loading");
@@ -357,7 +358,7 @@ export default function OmsFormalApp() {
     <Notice tone="warn">该页面不会回退到开发原型，不暴露授权、发布、审批或学校开通写按钮。</Notice>
     {bootstrapMessage && <Notice tone={bootstrapMessage.includes("被拒绝") ? "bad" : "info"}>{bootstrapMessage}</Notice>}
     <div className="inline-list">
-      <Button onClick={() => { window.location.href = loginHref; }}>使用 eduplus-platform-admin 登录</Button>
+      <Button onClick={() => { window.location.href = omsLoginHref(); }}>使用 eduplus-platform-admin 登录</Button>
       {error?.status === 403 && <Button variant="primary" onClick={() => { void bootstrapFirstAdmin(); }}>激活首位 OMS 管理员</Button>}
     </div>
     <Section title="等待的验收证据"><DetailGrid rows={[

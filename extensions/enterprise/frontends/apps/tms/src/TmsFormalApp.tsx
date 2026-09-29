@@ -177,6 +177,7 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      setState("loading");
       try {
         const permissions = await readJson<TmsPermissions>("/api/v1/tms/me/permissions");
         if (!permissions.school_code) {
@@ -222,7 +223,7 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
     }
     void load();
     return () => { cancelled = true; };
-  }, []);
+  }, [schoolCode]);
 
   const patchMember = (principalId: string, updater: (member: TmsMember) => TmsMember) => {
     setModel(current => current ? { ...current, members: current.members.map(member => memberId(member) === principalId ? updater(member) : member) } : current);

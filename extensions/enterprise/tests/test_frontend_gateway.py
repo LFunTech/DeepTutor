@@ -3,13 +3,12 @@ from __future__ import annotations
 import contextlib
 import http.server
 import os
+from pathlib import Path
 import socket
 import subprocess
 import threading
 import time
 import urllib.request
-from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -87,7 +86,9 @@ def test_frontend_gateway_routes_base_path_queries_to_enterprise_apps() -> None:
             raise AssertionError("frontend gateway did not become reachable")
 
         assert _fetch(gateway_port, "/oms?oms_login=ok").startswith("oms:/oms?oms_login=ok")
-        assert _fetch(gateway_port, "/oms/auth/callback?code=x").startswith("oms:/oms/auth/callback?code=x")
+        assert _fetch(gateway_port, "/oms/auth/callback?code=x").startswith(
+            "oms:/oms/auth/callback?code=x"
+        )
         assert _fetch(gateway_port, "/tms/test-school?tab=members").startswith(
             "tms:/tms/test-school?tab=members"
         )
