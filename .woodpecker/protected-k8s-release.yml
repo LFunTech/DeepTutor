@@ -127,7 +127,7 @@ steps:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "test-cn"
       - |
-        set -euo pipefail
+        set -eu
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         cd extensions/enterprise/frontends
         npm config set registry "https://mirror.f123.pub/repository/npm/"
@@ -394,7 +394,7 @@ steps:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "pre-cn"
       - |
-        set -euo pipefail
+        set -eu
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         cd extensions/enterprise/frontends
         npm config set registry "https://mirror.f123.pub/repository/npm/"
@@ -619,7 +619,7 @@ steps:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-cn-east"
       - |
-        set -euo pipefail
+        set -eu
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         cd extensions/enterprise/frontends
         npm config set registry "https://mirror.f123.pub/repository/npm/"
@@ -844,7 +844,7 @@ steps:
       - . ./.deeptutor-release.env
       - test "$${DEEPTUTOR_TARGET_ENV_ID}" = "prod-overseas-a"
       - |
-        set -euo pipefail
+        set -eu
         unset SOCKS_PROXY socks_proxy ALL_PROXY all_proxy HTTPS_PROXY https_proxy HTTP_PROXY http_proxy
         cd extensions/enterprise/frontends
         npm config set registry "https://mirror.f123.pub/repository/npm/"
