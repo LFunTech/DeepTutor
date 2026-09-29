@@ -19,6 +19,7 @@
 | issuer/audience/client/azp 合同 | `test_platform_verifier_rejects_wrong_identity_contract` 覆盖错 `aud`、错 `azp`、错 `iss`、空 `sub`、非 Bearer、未来 `iat` | `code-verified` | 错合同失败关闭 |
 | 账号在线状态 / token-only 策略 | `BearerAccountStatusClient` 合成测试覆盖本人 active、subject mismatch、缺 status 失败关闭；`TokenOnlyAccountStatusClient` 覆盖 EduPlus2 仅提供 OIDC 认证/身份、未开放 OMS profile 状态端点时的显式策略 | `code-verified` | 在线状态检查器和 token-only 备选策略均已具备；二者都不授予 `ops.*` |
 | `eduplus-platform-admin` 真实授权码登录 | 2026-09-29 通过 `https://deeptutor.lfun.pub` local-ssl 与 test-cn Keycloak 完成真实授权码登录；脱敏 claim：issuer=`https://eduplus-auth-test.f123.pub/realms/eduplus`、access token `aud=account`、`azp=eduplus-platform-admin`、`typ=Bearer`、subject hash=`6ec5e9eff16714a0`；同批 `id_token aud=eduplus-platform-admin` 但 `typ=ID`。EduPlus2 `/api/v1/me/profile` 对该 OMS client access token 返回 401，因此本产品显式使用 token-only 身份有效性策略。 | `test-cn-real` | OMS 认证与稳定身份来源已验证；本地 `ops.*` 仍由 DeepTutor Enterprise 判定，未登记授权时 `/api/v1/oms/me` 返回 403 |
+| `eduplus-platform-admin` 非浏览器直连限制 | 2026-09-29 只读探测确认该 client 不允许 Resource Owner Password Grant（Keycloak 返回 `unauthorized_client`），HTTP 表单自动化也未取得授权码；未取得 token、未调用写 API、未输出敏感数据。 | `test-cn-real` 限制说明 | 后续真实验收必须通过授权码浏览器会话/BFF 或人工配合完成，不能以密码直连、合成 JWT 或脚本登录失败替代。 |
 | 普通租户 token 冒充 OMS | `test_oms_me_rejects_tenant_token_and_unconfigured_platform_identity` 等 API 测试覆盖无 OMS verifier/租户 token 被拒 | `code-verified` | 不能复用普通租户换票为 OMS |
 
 ## TMS 学校身份
@@ -37,6 +38,7 @@
 | --- | --- | --- | --- |
 | Webhook 签名与事件结构 | 已实现 HMAC 验签、事件 ID 幂等、mock 过滤、inbox digest；test-cn mock 8/8 只作通道证据 | `test-cn-demo` + `code-verified` | mock 不可作为首位管理员证据 |
 | 真实 `subscription.created.actor` 登记 | 本地合成测试覆盖 `actor.type=user` 与 `actor.user_id` 登记 candidate | `code-verified` | 逻辑可用，但需真实事件脱敏证据 |
+| test-cn PostgreSQL 快照中的 actor candidate | 2026-09-29 按用户授权只读复制 test-cn PG 到本地隔离库；脱敏计数显示 `eduplus2.webhook_school_state` 有 3 个真实学校投影且 `school_code` 均非空，但 `eduplus2.lifecycle_actor_candidates` 为 0 行 | `test-cn-real` 限制说明 | 可证明当前 DB 有真实学校绑定/学校码投影；不能证明真实 actor 与后续 OIDC `sub` 匹配，也不能据此开放首位 TMS 管理员 |
 | 本人 TMS 登录激活 | `school-bootstrap/activate` 合成测试覆盖本人匹配后激活唯一 `school_admin`，错人/重放失败关闭 | `code-verified` | 真实 test-cn actor 与 OIDC `sub` 匹配仍待补 |
 | 订阅 ID 门禁 | 按用户决策，事件 `subscription.id` 当前用于审计/冲突，不作为登录/首位激活在线复核门禁 | `approved-design` | 不再调用 EduPlus2 online resolve 复核订阅 |
 

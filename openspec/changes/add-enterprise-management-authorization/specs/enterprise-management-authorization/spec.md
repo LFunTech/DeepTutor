@@ -1,6 +1,6 @@
 ## Purpose
 
-规定智能体基座 OMS/TMS 双应用域的本产品权限、TMS 学校侧首位管理员受控开通、正式管理 UI 与全入口撤权。本文是完整实施目标；局部 PG 底座已有合成验证，不表示正式 API、外部身份/学校合同或正式 UI 已交付。
+规定智能体基座 OMS/TMS 双应用域的本产品权限、TMS 学校侧首位管理员 Webhook 受控即时开启、正式管理 UI 与全入口撤权。本文是完整实施目标；局部 PG 底座已有合成验证，不表示正式 API、外部身份/学校合同或正式 UI 已交付。
 
 ## ADDED Requirements
 
@@ -42,7 +42,7 @@ OMS SHALL 只从可信 OMS 登录登记的待授权平台主体或单独核实�
 
 ### Requirement: 角色与默认授权不得产生隐式扩权
 
-默认角色模板 SHALL 通过本仓库版本化迁移登记；角色名称、外部身份类型或旧 `admin/tenant_admin` MUST NOT 自动授予角色。自定义角色仅能包含同一应用域已登记动作，授予人不得超出自身显式、版本化的可委托动作与范围上界，委托能力不得自动成为业务执行权限。扩展角色模板动作须对受影响 assignment 显式确认新版本，收缩/撤权须立即生效；禁止自授、自批和无恢复路径地撤销最后一名可用平台/学校管理员。敏感成本、Secret、导出与 TMS 学校侧首位管理员开通各用独立动作；OMS MUST NOT 拥有开通学校管理员的动作。零活跃 OMS 平台安全管理员环境 MAY 通过单独配置门禁执行一次性首位 OMS 管理员初始化；该初始化 MUST 只接受已验签 OMS 平台会话本人，Cookie 写请求 MUST 校验 Origin/CSRF，程序 MUST 在事务内串行确认仍无其他活跃 `platform_security_admin` 后创建/激活当前主体并授予版本化 `platform_security_admin`/`platform_config_admin`，同主体重复请求 MUST 幂等，第二主体或非零管理员 MUST 失败。高风险平台授权及委托上界扩展 SHALL 由两名不同且当前有相应治理/委托资格的平台主体审批，被授权主体不得参与自身审批；批准时重验外部状态与当前版本。
+默认角色模板 SHALL 通过本仓库版本化迁移登记；角色名称、外部身份类型或旧 `admin/tenant_admin` MUST NOT 自动授予角色。自定义角色仅能包含同一应用域已登记动作，授予人不得超出自身显式、版本化的可委托动作与范围上界，委托能力不得自动成为业务执行权限。扩展角色模板动作须对受影响 assignment 显式确认新版本，收缩/撤权须立即生效；禁止自授、自批和无恢复路径地撤销最后一名可用平台/学校管理员。敏感成本、Secret、导出与 TMS 学校侧首位管理员 bootstrap 各用独立动作；OMS MUST NOT 拥有开通学校管理员的动作。零活跃 OMS 平台安全管理员环境 MAY 通过单独配置门禁执行一次性首位 OMS 管理员初始化；该初始化 MUST 只接受已验签 OMS 平台会话本人，Cookie 写请求 MUST 校验 Origin/CSRF，程序 MUST 在事务内串行确认仍无其他活跃 `platform_security_admin` 后创建/激活当前主体并授予版本化 `platform_security_admin`/`platform_config_admin`，同主体重复请求 MUST 幂等，第二主体或非零管理员 MUST 失败。高风险平台授权及委托上界扩展 SHALL 由两名不同且当前有相应治理/委托资格的平台主体审批，被授权主体不得参与自身审批；批准时重验外部状态与当前版本。
 
 #### Scenario: 新模板版本增加高风险动作
 - **WHEN** 平台模板新增 `ops.credentials.manage`，既有 operator 未被重新批准
@@ -56,16 +56,16 @@ OMS SHALL 只从可信 OMS 登录登记的待授权平台主体或单独核实�
 - **WHEN** TMS 学校管理员在自定义角色中填写 `ops.quotas.manage` 或另一学校 ID
 - **THEN** 服务端拒绝该角色/授权，不能靠前端字段过滤实现隔离
 
-### Requirement: 首位 TMS 管理员仅可由真实订阅事件 actor 一次性引导并本人激活
+### Requirement: 首位 TMS 管理员仅可由真实订阅事件 actor 一次性即时开启
 
-TMS SHALL 仅在身份绑定有效、学校业务状态可用且该校尚无历史首位引导记录时执行一次性管理员开通；OMS MUST NOT 列出、选择、创建或审批任何学校账号。系统 MUST 只从目标应用、学校绑定、订阅 ID 结构、签名、时效和事件 ID 均核验通过的**真实非 mock** `subscription.created` 提取 `actor.type=user` 的非空 `actor.user_id`，以配置的 issuer 与 Keycloak User ID 登记待激活本校管理员身份。事件 `subscription.id` MUST 用于审计、幂等和冲突检查；本阶段不要求 DeepTutor 另查当前订阅 ID 作为登录或首位激活条件，事件当前性及迟到旧事件处理按用户决策由 EduPlus2 负责。此身份指定是 **DeepTutor Enterprise 的产品授权规则**，不是 EduPlus2 外部权限判定；EduPlus2 的管理员角色、`eit=adm`、学校码、Webhook mock 或前端选择 MUST NOT 授权。候选本人完成 TMS 登录并精确匹配 `(issuer,sub,school)` 后，Enterprise 程序在同一事务重验当前学校—应用有效、事件栅栏、学校绑定/状态和版本，幂等激活唯一 `school_admin` assignment 与脱敏审计。`actor` 缺失/system/null、身份不匹配、重复事件或恢复/重订 MUST NOT 绕过一次性栅栏产生新可用管理员；不允许通过无管理员现状重播已消费或已撤销的历史引导复活权限。真实事件与本人激活尚未验收时开通写入口 MUST 保持关闭；后续学校角色只由本校 TMS 管理。
+TMS SHALL 仅在学校业务状态可用且该校尚无可用学校管理员时执行一次性管理员开启；OMS MUST NOT 列出、选择、创建或审批任何学校账号。系统 MUST 只从目标应用、学校绑定、订阅 ID 结构、签名、时效和事件 ID 均核验通过的**真实非 mock** `subscription.created` 提取 `actor.type=user` 的非空 `actor.user_id`，以配置的 issuer 与 Keycloak User ID 在 Webhook 接收事务内直接创建/激活本校唯一 `school_admin` assignment。事件 `subscription.id` MUST 用于审计、幂等和冲突检查；本阶段不要求 DeepTutor 另查当前订阅 ID 作为首位开启条件，事件当前性及迟到旧事件处理按用户决策由 EduPlus2 负责。此身份指定是 **DeepTutor Enterprise 的产品授权规则**，不是 EduPlus2 外部权限判定；EduPlus2 的管理员角色、`eit=adm`、学校码、Webhook mock 或前端选择 MUST NOT 授权。Enterprise 程序 MUST 在同一事务重验当前学校—应用有效、事件栅栏、学校绑定/状态和版本，幂等写入唯一 `school_admin` assignment、推进策略版本并追加脱敏审计；可保留 consumed 的 actor 记录用于后续 OIDC `sub` 合同核验和历史兼容回放。`actor` 缺失/system/null、重复事件或恢复/重订 MUST NOT 绕过一次性栅栏产生新可用管理员；不允许通过无管理员现状重播已消费或已撤销的历史引导复活权限。真实事件 actor 与后续 OIDC `sub` 合同尚未验收时不得宣称正式开闸；后续学校角色只由本校 TMS 管理。
 
-#### Scenario: 重放或非 actor 本人尝试激活
-- **WHEN** 重复/恢复订阅事件到达，或与事件 `actor.user_id` 不同的主体登录 TMS
-- **THEN** 服务端拒绝新授权；既有审计和已撤销的管理员权限不复活
+#### Scenario: 重放、恢复或错主体不得产生新首管
+- **WHEN** 重复/恢复订阅事件到达，或后续登录主体与事件 `actor.user_id` 的 OIDC 合同不匹配
+- **THEN** 服务端拒绝新授权或只做幂等回放；既有审计和已撤销的管理员权限不复活
 
-#### Scenario: 事件缺少可用 actor 或学校在激活前失效
-- **WHEN** 事件 `actor` 缺失/system/null，或学校绑定撤销/lifecycle 暂停后候选人尝试激活
+#### Scenario: 事件缺少可用 actor 或学校已失效
+- **WHEN** 事件 `actor` 缺失/system/null，或学校绑定撤销/lifecycle 暂停后到达
 - **THEN** 不创建可用管理员授权，进入待核对或失败状态并保留脱敏审计
 
 ### Requirement: TMS 日常授权只管理可信当前学校
@@ -90,15 +90,15 @@ TMS SHALL 仅允许学校管理员凭本校 `tenant.permissions.manage` 管理�
 
 ### Requirement: TMS 权限 UI 必须呈现学校内关系而非平台能力
 
-独立 TMS SHALL 在“成员与权限”提供成员、学校角色、访问关系和授权记录，并在首位管理员建立前提供真实订阅 actor 引导与本人登录匹配状态；固定展示可信当前学校，无跨校选择器。成员详情 SHALL 区分学校角色、应用访问、服务访问、共享资源；应用↔成员、应用↔服务两端回读同一授权事实，不把全校服务列表冒充个人已授权关系。首次开通前仅显示待事件/待本人匹配/待核对进度，不泄露学校业务数据；页面不得提供人工自批。角色授予/撤销显示有效权限、影响和原因，提交后回读审计。TMS 服务端 DTO 与前端 MUST NOT 包含 OMS `ops.*`、Secret、成本、供给采购或跨校数据；配额/用量只读。
+独立 TMS SHALL 在“成员与权限”提供成员、学校角色、访问关系和授权记录，并在首位管理员建立前提供真实订阅 Webhook 等待/待核对状态；固定展示可信当前学校，无跨校选择器。成员详情 SHALL 区分学校角色、应用访问、服务访问、共享资源；应用↔成员、应用↔服务两端回读同一授权事实，不把全校服务列表冒充个人已授权关系。首次开通前仅显示待事件/待核对进度，不泄露学校业务数据；页面不得提供人工自批。角色授予/撤销显示有效权限、影响和原因，提交后回读审计。TMS 服务端 DTO 与前端 MUST NOT 包含 OMS `ops.*`、Secret、成本、供给采购或跨校数据；配额/用量只读。
 
-#### Scenario: 首位管理员仍待本人匹配
-- **WHEN** 待授权候选人进入该校 TMS
-- **THEN** 页面只展示开通状态与必要联系渠道，不能进入成员列表或自行批准
+#### Scenario: 首位管理员等待真实订阅 Webhook
+- **WHEN** 尚未接收到合规 `subscription.created.actor` 时，任何主体进入该校 TMS
+- **THEN** 页面只展示等待 Webhook/待核对状态与必要联系渠道，不能进入成员列表或自行批准
 
 ### Requirement: 管理授权必须可审计、可迁移和可验证
 
-DeepTutor SHALL 以本仓库后续版本 PG 迁移建立权限事实、范围、一次性 Webhook actor 引导/本人激活、高风险审批、撤权及审计表，不修改已应用 `oms/0011_school_binding.sql`，不从旧 `admin/tenant_admin` 或历史 `registered_by_surface='oms'` 自动回填平台权限。迁移须支持隔离合成数据 dry-run/apply/verify、幂等、drift、RLS 兜底与回退。写入需 expected_version、幂等键和原因，审计记录 actor、应用、动作、目标、前后版本、审批、request ID、结果而不记录 token/Secret/私有正文。正式开放前 SHALL 验证无权 403、默认管理员和自定义角色正例、双学校/伪造 header、身份失效、真实事件 actor 引导/本人激活、最后管理员及撤权竞态，并检查 CLI、HTTP/WS、SDK、后台、session owner、audit correlation 与当前 upstream 兼容性；缺真实事件/身份合同的入口保持关闭。
+DeepTutor SHALL 以本仓库后续版本 PG 迁移建立权限事实、范围、一次性 Webhook actor 即时开启及历史引导兼容、高风险审批、撤权及审计表，不修改已应用 `oms/0011_school_binding.sql`，不从旧 `admin/tenant_admin` 或历史 `registered_by_surface='oms'` 自动回填平台权限。迁移须支持隔离合成数据 dry-run/apply/verify、幂等、drift、RLS 兜底与回退。写入需 expected_version、幂等键和原因，审计记录 actor、应用、动作、目标、前后版本、审批、request ID、结果而不记录 token/Secret/私有正文。正式开放前 SHALL 验证无权 403、默认管理员和自定义角色正例、双学校/伪造 header、身份失效、真实事件 actor 即时开启、最后管理员及撤权竞态，并检查 CLI、HTTP/WS、SDK、后台、session owner、audit correlation 与当前 upstream 兼容性；缺真实事件/身份合同的正式开闸保持关闭。
 
 #### Scenario: 旧管理员数据迁移
 - **WHEN** 迁移扫描到旧本地 `admin` 或 EduPlus2 `eit=adm` 用户

@@ -753,9 +753,9 @@ async def _apply_approved_platform_grant(
     row,
 ) -> ApprovalApplyResult:
     from .assignment_rules import validate_assignment_relation
+    from .authorization import require_management_delegation
     from .grants import validate_role_action_owner_for_grant, validate_role_owner_for_grant
     from .policy_version import advance_principal_policy_version
-    from .authorization import require_management_delegation
 
     application, operation, school_id, target_principal_id, expected = _assert_approved_for_apply(
         row, actor, command

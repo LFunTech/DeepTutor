@@ -1499,6 +1499,7 @@ exit 0
     env.update(
         {
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "HOME": str(tmp_path),
             "KUBECTL_LOG": str(kubectl_log),
             "DEEPTUTOR_DEPLOY_APPROVED": "yes",
             "DEEPTUTOR_TARGET_ENV_ID": "test-cn",
@@ -1670,6 +1671,7 @@ exit 0
     env.update(
         {
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "HOME": str(tmp_path),
             "KUBECTL_LOG": str(kubectl_log),
             "DEEPTUTOR_DEPLOY_APPROVED": "yes",
             "DEEPTUTOR_TARGET_ENV_ID": "test-cn",

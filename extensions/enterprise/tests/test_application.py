@@ -2049,6 +2049,90 @@ async def test_oms_provider_settings_are_versioned_redacted_confirmed_and_permis
     assert "DT_PROVIDER_API_KEY" not in json.dumps(audit[2])
 
 
+async def test_oms_school_scoped_operator_cannot_read_platform_provider_settings(
+    app, pg_dsn
+):
+    """只有 school 范围的 OMS grant 不能冒充 platform grant 读取全局 Provider。"""
+
+    from deeptutor_enterprise.oms.identity import PlatformIdentity
+
+    class Verifier:
+        async def verify(self, token):
+            if token != "school-operator-token":
+                raise PermissionError("invalid")
+            now = int(time.time())
+            return PlatformIdentity(
+                issuer="https://issuer.example",
+                subject="school-operator",
+                client_id="eduplus-platform-admin",
+                token_hash="digest",
+                issued_at=now,
+                expires_at=now + 60,
+            )
+
+    class AccountStatus:
+        async def check(self, token, *, issuer, subject):
+            return token == "school-operator-token" and subject == "school-operator"
+
+    enterprise = app.state.enterprise
+    enterprise.oms_platform_verifier = Verifier()
+    enterprise.oms_account_status = AccountStatus()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        school_id = uuid.uuid4()
+        principal_id = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO enterprise.tenants"
+            "(id,external_eligibility,local_enabled,provisioning_status,"
+            "recovery_state,auth_epoch,bootstrap_completed) "
+            "VALUES(%s,'allowed',true,'ready','normal','epoch',true)",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,73003,'verified',now(),'synthetic','synthetic://school-scope')",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal_id, "https://issuer.example", "school-operator"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,school_id,"
+            "school_binding_version,valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_operator',1,'school',%s,1,"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal_id, school_id, uuid.uuid4()),
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        provider_settings = await client.get(
+            "/api/v1/oms/provider-settings",
+            headers={"Authorization": "Bearer school-operator-token"},
+        )
+        provider_draft = await client.post(
+            "/api/v1/oms/provider-settings/draft",
+            json={
+                "expected_version": 0,
+                "reason": "school grant cannot manage platform",
+                "settings": {},
+            },
+            headers={
+                "Authorization": "Bearer school-operator-token",
+                "Origin": "https://school.example",
+            },
+        )
+
+    assert provider_settings.status_code == 403, provider_settings.text
+    assert provider_settings.json() == {"detail": "Permission denied"}
+    assert provider_draft.status_code == 403, provider_draft.text
+    assert provider_draft.json() == {"detail": "Permission denied"}
+
+
 async def test_oms_school_entitlement_and_quota_commands_are_authorized_and_audited(app, pg_dsn):
     """OMS 学校额度写入必须经本产品 school-scope 授权并落到真实总账。"""
 
@@ -2823,6 +2907,7 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
         "/api/v1/oms/auth/refresh",
         "/api/v1/oms/auth/start",
         "/api/v1/oms/auth/status",
+        "/api/v1/oms/bootstrap/first-admin",
         "/api/v1/oms/cost",
         "/api/v1/oms/me",
         "/api/v1/oms/me/permissions",

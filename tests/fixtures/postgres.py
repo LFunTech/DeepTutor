@@ -1,4 +1,10 @@
-"""仅启动临时集群，不连接或迁移开发者现有数据库。"""
+"""PostgreSQL 测试夹具。
+
+默认启动临时集群，不连接开发者现有数据库。若本机沙箱禁止 `initdb`，
+可显式设置 `DT_TEST_PG_DSN` 使用 localhost 的本地 debug PostgreSQL；
+该入口只接受 loopback 上的 `postgres` 管理库，并且测试数据库仍按
+`test_<uuid>` 创建/删除。
+"""
 
 import os
 from pathlib import Path
@@ -9,8 +15,31 @@ import uuid
 import pytest
 
 
+def _validated_external_admin_dsn(raw: str) -> str:
+    """Validate an explicit local admin DSN for sandboxed test runs."""
+
+    from psycopg.conninfo import conninfo_to_dict
+
+    info = conninfo_to_dict(raw)
+    host = info.get("host") or "localhost"
+    dbname = info.get("dbname") or info.get("database") or ""
+    if host not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("DT_TEST_PG_DSN 只允许连接 localhost/127.0.0.1/::1")
+    if dbname != "postgres":
+        raise ValueError("DT_TEST_PG_DSN 必须指向 postgres 管理库，测试会自行创建 test_<uuid> 数据库")
+    return raw
+
+
 @pytest.fixture(scope="session")
 def pg_cluster(tmp_path_factory):
+    external_dsn = os.environ.get("DT_TEST_PG_DSN")
+    if external_dsn:
+        try:
+            yield _validated_external_admin_dsn(external_dsn)
+        except ValueError as exc:
+            pytest.fail(str(exc))
+        return
+
     bindir = Path(os.environ.get("DT_TEST_PG_BIN", "/opt/pgsql/bin"))
     if not (bindir / "initdb").is_file():
         pytest.fail("真实 PG 测试需要 DT_TEST_PG_BIN 指向 initdb/pg_ctl，不能以 mock 替代")

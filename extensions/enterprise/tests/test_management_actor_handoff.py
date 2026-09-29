@@ -1,4 +1,4 @@
-"""首位管理员候选只作受控身份交接，不能据此直接授予角色。"""
+"""历史待核验首位管理员候选只作受控身份交接。"""
 
 import asyncio
 from dataclasses import replace
@@ -35,7 +35,7 @@ class ActiveResolver:
 
 async def _seed_candidate(enterprise):
     enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
-    enterprise.eduplus2_resolver = None
+    enterprise.eduplus2_resolver = ActiveResolver()
     enterprise.eduplus2_lifecycle_receiver_enabled = True
     scope = TenantScope(str(enterprise.deployment.tenant_id), "@handoff-test")
     async with enterprise.db.transaction(scope) as c:
@@ -62,11 +62,30 @@ async def _seed_candidate(enterprise):
         digest_key="d" * 48,
     )
     assert (
-        await webhook_authority.ingest_authoritative_webhook(
-            enterprise, event, delivery_timestamp=1
+        await lifecycle.ingest_lifecycle_event(enterprise, event, delivery_timestamp=1)
+        == "pending_reconcile"
+    )
+    assert (
+        await lifecycle.reconcile_lifecycle_target(
+            enterprise, external_tenant_id=10001, external_app_id=51
         )
         == "allowed"
     )
+    async with enterprise.db.transaction(scope) as c:
+        await c.execute(
+            "INSERT INTO eduplus2.webhook_school_state(tenant_id,external_tenant_id,"
+            "external_app_id,school_id,school_code,binding_version,eligibility,"
+            "external_subscription_id,last_event_id,onboarding_event_id,onboarding_completed_at) "
+            "VALUES(%s,10001,51,%s,'synthetic-school',1,'allowed',20001,"
+            "'synthetic-handoff-created','synthetic-handoff-created',clock_timestamp()) "
+            "ON CONFLICT (tenant_id,external_tenant_id,external_app_id) DO NOTHING",
+            (enterprise.deployment.tenant_id, enterprise.deployment.tenant_id),
+        )
+        await c.execute(
+            "INSERT INTO eduplus2.webhook_school_controls(tenant_id,school_id,external_app_id) "
+            "VALUES(%s,%s,51) ON CONFLICT (tenant_id,school_id,external_app_id) DO NOTHING",
+            (enterprise.deployment.tenant_id, enterprise.deployment.tenant_id),
+        )
     now = datetime.now(timezone.utc)
     return ManagementIdentity(
         application="tms",

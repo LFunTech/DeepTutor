@@ -105,9 +105,31 @@ async def test_signed_created_directly_creates_school_without_online_resolve(app
         ).fetchone()
         candidate = await (
             await c.execute(
-                "SELECT school_id,actor_subject FROM eduplus2.lifecycle_actor_candidates "
+                "SELECT school_id,actor_subject,status,resolved_at IS NOT NULL AS resolved "
+                "FROM eduplus2.lifecycle_actor_candidates "
                 "WHERE tenant_id=%s AND event_id=%s",
                 (enterprise.deployment.tenant_id, event_id),
+            )
+        ).fetchone()
+        await c.execute("SELECT set_config('app.management_app','tms',true)")
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(binding["tenant_id"]),))
+        principal = await (
+            await c.execute(
+                "SELECT id,status,policy_version,external_evidence_ref "
+                "FROM management.principals "
+                "WHERE application='tms' AND issuer=%s AND subject=%s AND school_id=%s",
+                (
+                    "https://synthetic-issuer.example",
+                    "synthetic-sub",
+                    binding["tenant_id"],
+                ),
+            )
+        ).fetchone()
+        assignment = await (
+            await c.execute(
+                "SELECT role_key,status,school_binding_version FROM management.assignments "
+                "WHERE application='tms' AND principal_id=%s AND school_id=%s",
+                (principal["id"] if principal else uuid.uuid4(), binding["tenant_id"]),
             )
         ).fetchone()
         registration = await (
@@ -123,8 +145,22 @@ async def test_signed_created_directly_creates_school_without_online_resolve(app
     assert binding["external_tid"] == "10001"
     assert binding["external_eligibility"] == "allowed"
     assert binding["provisioning_status"] == "pending"
-    assert binding["bootstrap_completed"] is False
-    assert candidate == {"school_id": binding["tenant_id"], "actor_subject": "synthetic-sub"}
+    assert binding["bootstrap_completed"] is True
+    assert candidate == {
+        "school_id": binding["tenant_id"],
+        "actor_subject": "synthetic-sub",
+        "status": "consumed",
+        "resolved": True,
+    }
+    assert principal is not None
+    assert principal["status"] == "active"
+    assert principal["policy_version"] == 2
+    assert principal["external_evidence_ref"] == event_id
+    assert assignment == {
+        "role_key": "school_admin",
+        "status": "active",
+        "school_binding_version": 1,
+    }
     assert registration == {
         "tenant_id": binding["tenant_id"],
         "client_id": "synthetic-school-client",
@@ -148,8 +184,7 @@ async def test_signed_created_directly_creates_school_without_online_resolve(app
         external_verified_until=now + timedelta(minutes=1),
     )
     candidates = await find_pending_actor_candidates(enterprise, identity)
-    assert len(candidates) == 1
-    assert candidates[0].event_id == event_id
+    assert candidates == ()
 
     duplicate = await _deliver(
         app,
@@ -352,7 +387,7 @@ async def test_tms_bootstrap_http_uses_verified_token_and_signed_school_binding(
             headers={"Authorization": "Bearer " + token},
         )
         assert status.status_code == 200, status.text
-        assert status.json()["status"] == "ready_to_activate"
+        assert status.json()["status"] == "active"
         activated = await client.post(
             "/api/v1/tms/school-bootstrap/activate",
             headers={"Authorization": "Bearer " + token, "X-Request-ID": "synthetic-http"},
@@ -1528,6 +1563,7 @@ async def test_tms_me_permissions_returns_local_tenant_action_summary(app):
     assert body == {
         "application": "tms",
         "school_id": str(school_id),
+        "school_code": "synthetic-school",
         "subject": "synthetic-permissions-admin",
         "policy_version": 2,
         "actions": [
@@ -1543,6 +1579,64 @@ async def test_tms_me_permissions_returns_local_tenant_action_summary(app):
     }
     assert all(action.startswith("tenant.") for action in body["actions"])
     assert "ops." not in summary.text
+
+
+async def test_tms_me_permissions_fails_closed_when_trusted_school_code_missing(app):
+    """后端权限摘要缺少可信学校码时失败关闭，不能让前端独自兜底。"""
+
+    from deeptutor_enterprise.eduplus2.client import HmacEduPlus2JwtVerifier
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    enterprise.eduplus2_verifier = HmacEduPlus2JwtVerifier(
+        signing_key="synthetic-oidc-signing-key-0123456789", issuer=enterprise.eduplus2_issuer
+    )
+    event_id = "synthetic-tms-missing-school-code-" + uuid.uuid4().hex
+    assert (
+        await _deliver(
+            app,
+            event_id=event_id,
+            event_type="subscription.created",
+            status="active",
+            actor={"type": "user", "user_id": "synthetic-missing-code-admin"},
+        )
+    ).status_code == 204
+    owner = enterprise.deployment.tenant_id
+    async with enterprise.db.transaction(TenantScope(str(owner), "@synthetic-tms-missing-code")) as c:
+        await c.execute(
+            "UPDATE eduplus2.webhook_school_state SET school_code='' "
+            "WHERE external_tenant_id=10001 AND external_app_id=51"
+        )
+    issued_at = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": enterprise.eduplus2_issuer,
+            "iat": issued_at,
+            "exp": issued_at + 300,
+            "tid": "10001",
+            "eui": "synthetic-eui",
+            "sub": "synthetic-missing-code-admin",
+            "azp": "synthetic-school-client",
+        },
+        "synthetic-oidc-signing-key-0123456789",
+        algorithm="HS256",
+    )
+    headers = {"Authorization": "Bearer " + token}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        activated = await client.post(
+            "/api/v1/tms/school-bootstrap/activate",
+            headers={**headers, "X-Request-ID": "synthetic-tms-missing-code-activate"},
+        )
+        summary = await client.get("/api/v1/tms/me/permissions", headers=headers)
+
+    assert activated.status_code == 200, activated.text
+    assert summary.status_code == 403, summary.text
+    assert summary.json() == {"detail": "Forbidden"}
 
 
 async def test_tms_quota_summary_is_current_school_read_only_and_redacted(app):
@@ -1925,7 +2019,7 @@ async def test_authorized_oms_freeze_survives_webhook_reactivation(app):
             status="active",
         )
     ).status_code == 204
-    assert len(await find_pending_actor_candidates(enterprise, admin)) == 1
+    assert await find_pending_actor_candidates(enterprise, admin) == ()
 
 
 async def test_webhook_metrics_are_aggregate_and_reflect_onboarding_and_freeze(app):
@@ -1952,7 +2046,7 @@ async def test_webhook_metrics_are_aggregate_and_reflect_onboarding_and_freeze(a
     assert metrics["allowed_schools"] == 1
     assert metrics["onboarded_schools"] == 1
     assert metrics["frozen_schools"] == 0
-    assert metrics["pending_actors"] == 1
+    assert metrics["pending_actors"] == 0
     assert "10001" not in str(metrics) and "synthetic-admin" not in str(metrics)
 
 
@@ -1995,7 +2089,7 @@ async def test_created_actor_can_activate_first_tms_admin_before_ai_runtime_read
     result = await activate_first_school_administrator(
         enterprise, identity, event_id=event_id, request_id="synthetic-activation-request"
     )
-    assert result.replayed is False
+    assert result.replayed is True
     assert result.policy_version == 2
     replay = await activate_first_school_administrator(
         enterprise, identity, event_id=event_id, request_id="synthetic-activation-replay"
@@ -2628,15 +2722,19 @@ async def test_reactivation_never_overwrites_local_school_isolation(app):
         issuer="https://synthetic-issuer.example",
         subject="synthetic-sub",
         school_id=school["tenant_id"],
-        policy_version=1,
+        policy_version=2,
         school_binding_version=1,
         webhook_app_id=51,
         external_active=True,
         external_checked_at=now,
         external_verified_until=now + timedelta(minutes=1),
     )
-    # 本地 AI 资源隔离不阻止学校侧进入 TMS 完成引导；它仍拒绝 AI 新业务。
-    assert len(await find_pending_actor_candidates(enterprise, identity)) == 1
+    # 本地 AI 资源隔离不阻止 Webhook 已开启的学校管理员进入 TMS；它仍拒绝 AI 新业务。
+    assert await find_pending_actor_candidates(enterprise, identity) == ()
+    async with enterprise.db.transaction(TenantScope(str(school["tenant_id"]), "@local-isolation-tms")) as c:
+        await require_management_permission(
+            c, identity, "tenant.tms.access", target_school_id=school["tenant_id"]
+        )
 
 
 async def test_signed_webhook_drives_existing_school_login_and_session_gate(app):

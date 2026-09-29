@@ -10,6 +10,7 @@ function ok(data: unknown) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 describe("正式 OMS/TMS 管理入口", () => {
@@ -27,11 +28,37 @@ describe("正式 OMS/TMS 管理入口", () => {
 
     expect(await screen.findByRole("heading", { name: "平台智能体运营后台" })).toBeInTheDocument();
     expect(screen.getByText("智能体基座")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "平台智能体运营后台导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "学校列表" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "模型与服务" })).toBeInTheDocument();
+    expect(screen.getAllByText("正式受控入口").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("正式入口 · 安全 DTO")).toBeInTheDocument();
     expect(screen.getByText(/正式入口使用已验签 OMS 会话与 DeepTutor 本地 ops\.\* 授权/)).toBeInTheDocument();
     expect(screen.queryByText(/合成演示数据/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /学校后台开通|发起开通/ })).not.toBeInTheDocument();
     expect(screen.getByText("首个 Agent Skill")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/oms/me", expect.objectContaining({ credentials: "include" }));
+  });
+
+  it("OMS 正式入口按原型导航切换到学校范围页", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/oms/me")) return ok({ principal_id: "p-oms", subject: "ops-user" });
+      if (url.endsWith("/api/v1/oms/me/permissions")) return ok({ actions: ["ops.oms.access", "ops.skills.read", "ops.tenants.read"], scopes: [{ kind: "platform" }] });
+      if (url.endsWith("/api/v1/oms/summary")) return ok({ authorized_school_count: 1, resource_count: 0, notices: [] });
+      if (url.endsWith("/api/v1/oms/skills")) return ok({ skills: [] });
+      if (url.endsWith("/api/v1/oms/tenants")) return ok({ tenants: [{ school_id: "school-1", lifecycle: { external_eligibility: "active" } }] });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    render(<OmsFormalApp/>);
+
+    await screen.findByRole("heading", { name: "平台智能体运营后台" });
+    fireEvent.click(screen.getByRole("button", { name: "学校列表" }));
+
+    expect(screen.getByRole("heading", { name: "学校范围" })).toBeInTheDocument();
+    expect(screen.getByText("school-1")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "模型与 Provider" })).not.toBeInTheDocument();
   });
 
   it("OMS 未取得真实平台登录或本地授权时失败关闭", async () => {
@@ -68,7 +95,7 @@ describe("正式 OMS/TMS 管理入口", () => {
   it("TMS 正式入口接入当前学校 DTO，区分目录未启用且不显示合成目录", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", actions: ["tenant.tms.access", "tenant.members.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
       if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active", actor_candidate: null });
       if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "not_enabled", reason_code: "external_directory_contract_missing", message: "外部目录合同缺失", users: [] });
       if (url.endsWith("/api/v1/tms/members")) return ok({ members: [{ id: "m-1", display_name: "林老师", status: "active", assignments: [{ role_key: "school_admin", status: "active" }] }] });
@@ -81,12 +108,41 @@ describe("正式 OMS/TMS 管理入口", () => {
     render(<TmsFormalApp schoolCode="demo-school"/>);
 
     expect(await screen.findByRole("heading", { name: "学校智能体管理后台" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "学校智能体管理后台导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "成员列表" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "可用服务" })).toBeInTheDocument();
+    expect(screen.getAllByText("正式受控入口").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("正式入口 · 安全 DTO")).toBeInTheDocument();
     expect(screen.getByText("demo-school")).toBeInTheDocument();
     expect(screen.getByText("林老师")).toBeInTheDocument();
     expect(screen.getByText("外部目录合同缺失")).toBeInTheDocument();
     expect(screen.queryByText("赵老师")).not.toBeInTheDocument();
     expect(screen.getByText("解题 Agent")).toBeInTheDocument();
     expect(within(screen.getByLabelText("TMS 审批与审计")).getByText("approved")).toBeInTheDocument();
+  });
+
+  it("TMS 正式入口按原型导航切换到配额清单页", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read", "tenant.quotas.read", "tenant.usage.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
+      if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "not_enabled", reason_code: "external_directory_contract_missing", message: "外部目录合同缺失", users: [] });
+      if (url.endsWith("/api/v1/tms/members")) return ok({ members: [] });
+      if (url.endsWith("/api/v1/tms/approvals")) return ok({ approvals: [] });
+      if (url.endsWith("/api/v1/tms/authz-audit")) return ok({ events: [] });
+      if (url.endsWith("/api/v1/tms/skills")) return ok({ skills: [] });
+      if (url.endsWith("/api/v1/tms/quotas")) return ok({ grants: [{ grant_id: "q-1", service_id: "llm", unit_code: "token", quantity: "100", status: "active" }], usage_details: [] });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    render(<TmsFormalApp schoolCode="demo-school"/>);
+
+    await screen.findByRole("heading", { name: "学校智能体管理后台" });
+    fireEvent.click(screen.getByRole("button", { name: "配额清单" }));
+
+    expect(screen.getByRole("heading", { name: "额度与用量" })).toBeInTheDocument();
+    expect(screen.getByText("100 token")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "学校目录" })).not.toBeInTheDocument();
   });
 
   it("TMS 当前学校身份或本地 tenant 授权失败时不展示管理按钮", async () => {
@@ -98,13 +154,53 @@ describe("正式 OMS/TMS 管理入口", () => {
     expect(screen.getByText(/当前学校登录、Webhook 学校绑定或 tenant\.\* 本地授权未通过/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /授予|撤销|审批|新增/ })).not.toBeInTheDocument();
   });
+
+  it("TMS 正式入口拒绝 URL 学校码与安全 DTO 学校不一致", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({
+        school_id: "school-1",
+        school_code: "trusted-school",
+        actions: ["tenant.tms.access", "tenant.members.read"],
+        scopes: [{ kind: "school", school_id: "school-1" }],
+      });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    render(<TmsFormalApp schoolCode="tampered-school"/>);
+
+    expect(await screen.findByText("学校入口未开放")).toBeInTheDocument();
+    expect(screen.getByText(/学校码与当前登录学校不一致/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /授予|撤销|审批|新增/ })).not.toBeInTheDocument();
+  });
+
+  it("TMS 正式入口拒绝缺失可信学校码的权限摘要", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({
+        school_id: "school-1",
+        actions: ["tenant.tms.access", "tenant.members.read"],
+        scopes: [{ kind: "school", school_id: "school-1" }],
+      });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    render(<TmsFormalApp schoolCode="demo-school"/>);
+
+    expect(await screen.findByText("学校入口未开放")).toBeInTheDocument();
+    expect(screen.getByText(/未返回可信学校码/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /授予|撤销|审批|新增/ })).not.toBeInTheDocument();
+  });
+
   it("TMS 正式入口把低风险授予、撤权和审批 apply 接到安全写 API", async () => {
     const requests: { url: string; init?: RequestInit }[] = [];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       requests.push({ url, init });
       if (init?.method === "POST") return ok({ status: "ok" });
-      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", actions: ["tenant.tms.access", "tenant.members.read", "tenant.permissions.manage"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read", "tenant.permissions.manage"], scopes: [{ kind: "school", school_id: "school-1" }] });
       if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
       if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "not_enabled", reason_code: "external_directory_contract_missing", message: "外部目录合同缺失", users: [] });
       if (url.endsWith("/api/v1/tms/members")) return ok({ members: [
@@ -137,7 +233,7 @@ describe("正式 OMS/TMS 管理入口", () => {
   it("TMS 正式入口只读展示学校额度、用量和服务访问 DTO", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", actions: ["tenant.tms.access", "tenant.members.read", "tenant.quotas.read", "tenant.usage.read", "tenant.access.manage"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read", "tenant.quotas.read", "tenant.usage.read", "tenant.access.manage"], scopes: [{ kind: "school", school_id: "school-1" }] });
       if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
       if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "not_enabled", reason_code: "external_directory_contract_missing", message: "外部目录合同缺失", users: [] });
       if (url.endsWith("/api/v1/tms/members")) return ok({ members: [] });
@@ -165,7 +261,7 @@ describe("正式 OMS/TMS 管理入口", () => {
   ])("TMS 正式入口区分目录状态：%s", async (status, message, label) => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", actions: ["tenant.tms.access", "tenant.members.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
       if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
       if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status, reason_code: status, message, users: [] });
       if (url.endsWith("/api/v1/tms/members")) return ok({ members: [] });
@@ -234,7 +330,7 @@ describe("正式 OMS/TMS 管理入口", () => {
     expect(screen.getByText("学校订阅有效")).toBeInTheDocument();
     expect(screen.getByText("dashscope")).toBeInTheDocument();
     expect(screen.getByText("当前没有已核实供应商成本源")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /补充|授权|调整|导出成本|查看密钥/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /补充|调整|导出成本|查看密钥|授予额度|授权学校服务/ })).not.toBeInTheDocument();
   });
 
   it("OMS 正式入口按首个已授权学校展示用量 attempt 与待核对任务只读 DTO", async () => {
@@ -460,7 +556,7 @@ describe("正式 OMS/TMS 管理入口", () => {
       const url = String(input);
       requests.push({ url, init });
       if (init?.method === "POST") return ok({ status: "queued" });
-      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", actions: ["tenant.tms.access", "tenant.members.read", "tenant.permissions.manage", "tenant.quotas.read", "tenant.usage.read", "tenant.access.manage"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read", "tenant.permissions.manage", "tenant.quotas.read", "tenant.usage.read", "tenant.access.manage"], scopes: [{ kind: "school", school_id: "school-1" }] });
       if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
       if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "empty", reason_code: "empty", message: "学校目录暂无匹配用户", users: [] });
       if (url.endsWith("/api/v1/tms/quotas")) return ok({ grants: [], usage_details: [] });
@@ -489,6 +585,172 @@ describe("正式 OMS/TMS 管理入口", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(requests.some(item => item.url.includes("/api/v1/tms/members/11111111-1111-4111-8111-111111111111/roles") && item.init?.method === "POST")).toBe(true));
+  });
+
+
+  it("OMS 正式入口沿用原型的列表到详情抽屉交互", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/oms/me")) return ok({ principal_id: "p-oms", subject: "ops-user" });
+      if (url.endsWith("/api/v1/oms/me/permissions")) return ok({ actions: ["ops.oms.access", "ops.skills.read", "ops.tenants.read"], scopes: [{ kind: "platform" }] });
+      if (url.endsWith("/api/v1/oms/summary")) return ok({ authorized_school_count: 1, resource_count: 0, notices: [] });
+      if (url.endsWith("/api/v1/oms/skills")) return ok({ skills: [] });
+      if (url.endsWith("/api/v1/oms/tenants")) return ok({ tenants: [{ school_id: "school-1", external_binding: { status: { label: "已绑定" } }, lifecycle: { external_eligibility: { label: "订阅有效" }, provisioning_status: { label: "资源就绪" } } }] });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    render(<OmsFormalApp/>);
+
+    await screen.findByRole("heading", { name: "平台智能体运营后台" });
+    fireEvent.click(screen.getByRole("button", { name: "学校列表" }));
+    fireEvent.click(screen.getByRole("button", { name: /查看 school-1 详情/ }));
+
+    expect(screen.getByRole("dialog", { name: "详情 · school-1" })).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog", { name: "详情 · school-1" })).getByRole("heading", { name: "学校详情" })).toBeInTheDocument();
+    expect(screen.getByText("OMS 不管理学校账号或 TMS tenant.* 角色；这里只展示平台人员 school-scope 可见的学校投影。")).toBeInTheDocument();
+  });
+
+  it("TMS 正式入口沿用原型的成员详情抽屉和未启用页面状态", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
+      if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "not_enabled", reason_code: "external_directory_contract_missing", message: "外部目录合同缺失", users: [] });
+      if (url.endsWith("/api/v1/tms/members")) return ok({ members: [{ principal_id: "11111111-1111-4111-8111-111111111111", subject: "teacher-a", status: "active", policy_version: 7, roles: [{ assignment_id: "as-1", role_key: "school_auditor", role_version: 1, status: "active", version: 1 }] }] });
+      if (url.endsWith("/api/v1/tms/approvals")) return ok({ approvals: [] });
+      if (url.endsWith("/api/v1/tms/authz-audit")) return ok({ events: [] });
+      if (url.endsWith("/api/v1/tms/skills")) return ok({ skills: [] });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    render(<TmsFormalApp schoolCode="demo-school"/>);
+
+    await screen.findByRole("heading", { name: "学校智能体管理后台" });
+    fireEvent.click(screen.getByRole("button", { name: "成员列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "成员资料" }));
+
+    expect(screen.getByRole("dialog", { name: "详情 · teacher-a" })).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog", { name: "详情 · teacher-a" })).getByRole("heading", { name: "成员详情" })).toBeInTheDocument();
+    expect(screen.getByText("school_auditor")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭抽屉" }));
+    fireEvent.click(screen.getByRole("button", { name: "知识库列表" }));
+    expect(screen.getByRole("heading", { name: "知识与内容" })).toBeInTheDocument();
+    expect(screen.getByText("知识库正式 DTO 尚未启用；当前不会回退到原型合成数据，也不会读取私有正文。")) .toBeInTheDocument();
+  });
+
+
+  it("OMS/TMS 正式入口原型导航下的审计深链不出现空白页", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/oms/me")) return ok({ principal_id: "p-oms", subject: "ops-user" });
+      if (url.endsWith("/api/v1/oms/me/permissions")) return ok({ actions: ["ops.oms.access", "ops.audit.read", "ops.cost.read", "ops.skills.read"], scopes: [{ kind: "platform" }] });
+      if (url.endsWith("/api/v1/oms/summary")) return ok({ authorized_school_count: 0, resource_count: 0, notices: [] });
+      if (url.endsWith("/api/v1/oms/skills")) return ok({ skills: [] });
+      if (url.endsWith("/api/v1/oms/audit")) return ok({ management_events: [{ id: "audit-1", action: "ops.audit.read", result: { label: "允许" }, request_id: "req-1" }], oms_events: [] });
+      if (url.endsWith("/api/v1/oms/cost")) return ok({ status: { label: "成本只读" }, costs: [] });
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
+      if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "not_enabled", reason_code: "external_directory_contract_missing", message: "外部目录合同缺失", users: [] });
+      if (url.endsWith("/api/v1/tms/members")) return ok({ members: [] });
+      if (url.endsWith("/api/v1/tms/approvals")) return ok({ approvals: [] });
+      if (url.endsWith("/api/v1/tms/authz-audit")) return ok({ events: [{ id: "ev-1", action: "tenant.permissions.manage", result: "allow" }] });
+      if (url.endsWith("/api/v1/tms/skills")) return ok({ skills: [] });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const { unmount } = render(<OmsFormalApp/>);
+    await screen.findByRole("heading", { name: "平台智能体运营后台" });
+    fireEvent.click(screen.getByRole("button", { name: "授权审计" }));
+    expect(screen.getByRole("heading", { name: "审计与成本" })).toBeInTheDocument();
+    expect(screen.getByText("ops.audit.read")).toBeInTheDocument();
+    unmount();
+    fetchMock.mockClear();
+    window.history.replaceState(null, "", "/");
+
+    render(<TmsFormalApp schoolCode="demo-school"/>);
+    await screen.findByRole("heading", { name: "学校智能体管理后台" });
+    fireEvent.click(screen.getByRole("button", { name: "管理事件" }));
+    expect(screen.getByRole("heading", { name: "管理事件" })).toBeInTheDocument();
+    expect(screen.getByText("tenant.permissions.manage")).toBeInTheDocument();
+  });
+
+
+  it("OMS/TMS 正式入口保留原型完整导航骨架且每个入口都有安全内容区", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/oms/me")) return ok({ principal_id: "p-oms", subject: "ops-user" });
+      if (url.endsWith("/api/v1/oms/me/permissions")) return ok({ actions: ["ops.oms.access", "ops.skills.read", "ops.skills.review", "ops.skills.publish", "ops.skills.grant", "ops.tenants.read", "ops.providers.read", "ops.providers.manage", "ops.supply.read", "ops.usage.read", "ops.jobs.read", "ops.audit.read", "ops.cost.read", "ops.permissions.manage"], scopes: [{ kind: "platform" }] });
+      if (url.endsWith("/api/v1/oms/summary")) return ok({ authorized_school_count: 1, resource_count: 1, notices: [] });
+      if (url.endsWith("/api/v1/oms/skills")) return ok({ skills: [{ id: "skill-1", name: "agent-skill", status: "approved" }] });
+      if (url.endsWith("/api/v1/oms/models/draft")) return ok({ version: 1, models: [{ id: "model-1", model_id: "qwen-plus", provider: "dashscope" }] });
+      if (url.endsWith("/api/v1/oms/provider-settings")) return ok({ version: 1, status: "active", settings: { connections: { dashscope: { provider: "dashscope", api_key: "<redacted>" } } } });
+      if (url.endsWith("/api/v1/oms/resources/status")) return ok({ resources: [{ id: "res-1", display_name: "执行资源", category: "runtime", status: { label: "就绪" } }] });
+      if (url.endsWith("/api/v1/oms/tenants")) return ok({ tenants: [{ school_id: "school-1", lifecycle: { external_eligibility: "active" } }] });
+      if (url.endsWith("/api/v1/oms/schools/school-1/usage")) return ok({ details: [{ attempt_id: "attempt-1", service_id: "llm", unit_code: "token", status: "settled", settled_units: "1", reserved_units: "1" }] });
+      if (url.endsWith("/api/v1/oms/schools/school-1/jobs")) return ok({ jobs: [] });
+      if (url.endsWith("/api/v1/oms/supply")) return ok({ service_definitions: [{ service_id: "llm", unit_code: "token", enabled: true }], supply_lots: [] });
+      if (url.endsWith("/api/v1/oms/audit")) return ok({ management_events: [{ id: "audit-1", action: "ops.permissions.manage", result: "allow" }], oms_events: [] });
+      if (url.endsWith("/api/v1/oms/cost")) return ok({ status: "ready", costs: [] });
+      if (url.endsWith("/api/v1/oms/permissions")) return ok({ roles: [{ role_key: "platform_config_admin", version: 2, scope_kind: "platform", actions: ["ops.providers.manage"] }], principals: [], assignments: [] });
+      if (url.endsWith("/api/v1/oms/approvals")) return ok({ approvals: [] });
+      if (url.endsWith("/api/v1/tms/me/permissions")) return ok({ school_id: "school-1", school_code: "demo-school", actions: ["tenant.tms.access", "tenant.members.read", "tenant.permissions.manage", "tenant.quotas.read", "tenant.usage.read", "tenant.access.manage"], scopes: [{ kind: "school", school_id: "school-1" }] });
+      if (url.endsWith("/api/v1/tms/school-bootstrap/status")) return ok({ status: "active" });
+      if (url.endsWith("/api/v1/tms/directory/users")) return ok({ status: "empty", reason_code: "empty", message: "学校目录暂无匹配用户", users: [] });
+      if (url.endsWith("/api/v1/tms/members")) return ok({ members: [{ principal_id: "member-1", subject: "teacher-a", status: "active", policy_version: 1, roles: [] }] });
+      if (url.endsWith("/api/v1/tms/approvals")) return ok({ approvals: [] });
+      if (url.endsWith("/api/v1/tms/authz-audit")) return ok({ events: [{ id: "event-1", action: "tenant.permissions.manage", result: "allow" }] });
+      if (url.endsWith("/api/v1/tms/skills")) return ok({ skills: [{ id: "skill-1", name: "school-skill", status: "active" }] });
+      if (url.endsWith("/api/v1/tms/quotas")) return ok({ grants: [{ grant_id: "quota-1", service_id: "llm", quantity: "10", unit_code: "token", status: "active" }], usage_details: [{ attempt_id: "usage-1", service_id: "llm", settled_units: "1", unit_code: "token", status: "settled" }] });
+      if (url.endsWith("/api/v1/tms/service-access")) return ok({ service_access_grants: [{ grant_id: "access-1", service_id: "llm", subject_kind: "member", subject_id: "member-1", status: "active" }] });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const { unmount } = render(<OmsFormalApp/>);
+    await screen.findByRole("heading", { name: "平台智能体运营后台" });
+    for (const [label, heading] of [
+      ["运营概览", "当前平台身份"],
+      ["学校列表", "学校范围"],
+      ["模型与服务", "模型与 Provider"],
+      ["供应商连接", "模型与 Provider"],
+      ["Agent 与能力", "平台资源状态"],
+      ["工具与集成", "平台资源状态"],
+      ["Skills", "Skill 清单"],
+      ["知识基础能力", "平台资源状态"],
+      ["运行资源", "平台资源状态"],
+      ["服务供给", "供给与额度底座"],
+      ["用量与运行", "学校用量与任务"],
+      ["审计与治理", "审计与成本"],
+      ["平台人员", "平台授权治理"],
+      ["角色与动作", "平台授权治理"],
+      ["平台人员学校范围", "平台授权治理"],
+      ["授权审计", "平台授权治理"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+    }
+    unmount();
+    window.history.replaceState(null, "", "/");
+
+    render(<TmsFormalApp schoolCode="demo-school"/>);
+    await screen.findByRole("heading", { name: "学校智能体管理后台" });
+    for (const [label, heading] of [
+      ["学校概览", "当前学校权限"],
+      ["成员列表", "成员列表"],
+      ["学校角色", "学校角色"],
+      ["访问关系", "服务访问"],
+      ["授权记录", "审批与审计"],
+      ["应用列表", "服务访问"],
+      ["可用服务", "服务访问"],
+      ["配额清单", "额度与用量"],
+      ["Skills", "Skill 授权"],
+      ["知识库列表", "知识与内容"],
+      ["调用用量", "额度与用量"],
+      ["管理事件", "管理事件"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+    }
   });
 
 });

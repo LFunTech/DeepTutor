@@ -293,32 +293,32 @@ describe("TMS 本学校管理授权原型", () => {
     expect(screen.queryByText(/ops\.permissions/)).not.toBeInTheDocument();
   });
 
-  it("首位管理员只由真实订阅 actor 待本人匹配激活，mock 与缺失 actor 不授权", () => {
+  it("首位管理员由真实订阅 Webhook 即时开启，mock 与缺失 actor 不授权", () => {
     path = "/tms/prototype/demo-school/members";
     window.history.replaceState({}, "", path);
     render(<TmsPrototype/>);
     fireEvent.change(screen.getByRole("combobox", { name: "演示权限状态" }), { target: { value: "bootstrap-pending" } });
-    expect(screen.getByRole("heading", { name: "学校后台待开通" })).toBeInTheDocument();
-    expect(screen.getByText(/订阅事件 actor 待本人登录匹配/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "等待订阅 Webhook" })).toBeInTheDocument();
+    expect(screen.getByText(/学校管理员无需单独开通/)).toBeInTheDocument();
     expect(screen.queryByText("林老师")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "学校侧复核" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "演示订阅 actor 状态" }), { target: { value: "mock" } });
     expect(screen.getByText("控制台 mock（不登记身份）")).toBeInTheDocument();
-    expect(screen.getByText("无可激活身份")).toBeInTheDocument();
+    expect(screen.getByText("无可开启身份")).toBeInTheDocument();
     expect(screen.queryByText(/已验签真实 subscription\.created\.actor\.user_id/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "模拟本人登录匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "模拟接收订阅 Webhook" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "演示订阅 actor 状态" }), { target: { value: "missing" } });
     expect(screen.getByText("真实事件缺失有效 actor（待核对）")).toBeInTheDocument();
-    expect(screen.getByText("无可激活身份")).toBeInTheDocument();
+    expect(screen.getByText("无可开启身份")).toBeInTheDocument();
     expect(screen.queryByText(/已验签真实 subscription\.created\.actor\.user_id/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "模拟本人登录匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "模拟接收订阅 Webhook" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "演示订阅 actor 状态" }), { target: { value: "different" } });
-    expect(screen.queryByRole("button", { name: "模拟本人登录匹配" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "模拟接收订阅 Webhook" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "演示权限状态" }), { target: { value: "active" } });
-    expect(screen.getByRole("heading", { name: "学校后台待开通" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "等待订阅 Webhook" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "演示订阅 actor 状态" }), { target: { value: "matched" } });
-    fireEvent.click(screen.getByRole("button", { name: "模拟本人登录匹配" }));
-    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认本人激活" })).getByRole("button", { name: "确认" }));
+    fireEvent.click(screen.getByRole("button", { name: "模拟接收订阅 Webhook" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认 Webhook 开启" })).getByRole("button", { name: "确认" }));
     expect(screen.getByRole("heading", { name: "成员与权限" })).toBeInTheDocument();
   });
 

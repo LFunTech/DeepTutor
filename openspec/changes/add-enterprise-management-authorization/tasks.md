@@ -1,6 +1,6 @@
-> **实施中；任务 1.1 受影响修订版审批、1.3 入口盘点与 3.1 PG 事实迁移已完成，其余完整任务未完成，证据见 surface-inventory.md 与 implementation-evidence.md。** 2026-09-27 用户进一步明确：DeepTutor Enterprise 程序负责授权决策，PG 只保存事实并提供隔离/一致性兜底，EduPlus2 在权限链路中仅负责认证及身份识别。OMS 仅管平台人员；首位 TMS 管理员来自签名真实 `subscription.created.actor.user_id` 并须本人登录激活，旧 OMS/学校侧双人首位开通与外部负责人权限依赖撤销。只修改 DeepTutor；测试仅用隔离合成数据，真实租户数据、生产发布、提交、归档另行授权。此轮权威再修订需同步受影响提案并复核 1.1，不授权真实数据、外部系统修改或发布。
+> **实施中；任务 1.1 受影响修订版审批、1.3 入口盘点与 3.1 PG 事实迁移已完成，其余完整任务未完成，证据见 surface-inventory.md 与 implementation-evidence.md。** 2026-09-27 用户进一步明确：DeepTutor Enterprise 程序负责授权决策，PG 只保存事实并提供隔离/一致性兜底，EduPlus2 在权限链路中仅负责认证及身份识别。2026-09-29 用户再次明确：OMS 仅管平台人员；学校管理员无需单独开通，首位 TMS 管理员来自签名真实 `subscription.created.actor.user_id`，并在接收到合规订阅 Webhook 时由 DeepTutor Enterprise 事务内即时开启；旧 OMS/学校侧双人首位开通、本人二次激活与外部负责人权限依赖撤销。只修改 DeepTutor；测试仅用隔离合成数据，真实租户数据、生产发布、提交、归档另行授权。此轮权威再修订需同步受影响提案并复核 1.1，不授权真实数据、外部系统修改或发布。
 
-> **当前执行焦点（非勾选项）**：本 change 是 OMS/TMS 的唯一授权底座。后续实现按“外部认证证据 → 独立 OMS/TMS 会话 → 程序 PEP 与权限事实 → Webhook actor 首管本人激活 → 两端 UI/API 负例”的顺序推进；Provider、Skill、额度和用量 proposal 只能消费这里的授权结果，不能另建平行权限表、复用 `tenant_admin` 或通过数据库权限直接放行业务操作。
+> **当前执行焦点（非勾选项）**：本 change 是 OMS/TMS 的唯一授权底座。后续实现按“外部认证证据 → 独立 OMS/TMS 会话 → 程序 PEP 与权限事实 → Webhook actor 首管即时开启 → 两端 UI/API 负例”的顺序推进；Provider、Skill、额度和用量 proposal 只能消费这里的授权结果，不能另建平行权限表、复用 `tenant_admin` 或通过数据库权限直接放行业务操作。
 
 ## P0 契约与证据
 
@@ -8,8 +8,8 @@
 - [ ] 1.2 建立脱敏外部**认证与身份识别**能力证据矩阵：复用 test-cn Webhook 8/8 mock、已验证 discovery/JWKS/M2M/resolve；区分文档可见、用户指定配置与真实 API 可用。以 `eduplus-platform-admin` 为 OMS 指定 Client ID，实测目标环境的授权码登录、issuer、`azp`、audience、稳定平台主体与身份有效性；另核 TMS 当前学校身份及条件性第三方应用授权码用户令牌的学校成员目录/策略范围。核对真实 `subscription.created` 的 HMAC、应用/学校 ID、`actor.type`/`actor.user_id` 与后续 OIDC `sub` 匹配语义；8/8 mock 不能算真实首位管理员证据。`/me/profile` 不是他人查询，Webhook Client/M2M `/api/v1/users` 示例不是已验收的成员目录；**不向 EduPlus2 索取本产品动作授权或负责人角色判定**。身份合同缺失时保留相关写路由未装配，不修改 EduPlus2。
   - [x] 1.2.1 已建立脱敏身份证据矩阵 [identity-evidence-matrix.md](identity-evidence-matrix.md)，明确 `code-verified`、`test-cn-demo`、`test-cn-real` 与 `missing` 的采信边界。
   - [x] 1.2.2 已用合成 OIDC/JWKS 覆盖 OMS 平台 token 验签、错 issuer/audience/client、篡改签名、非 RS256、账号状态 mismatch 等失败关闭。
-  - [x] 1.2.3 已用合成签名 Webhook 与 TMS bearer 覆盖当前学校身份、学校绑定、client 注册、actor candidate 与本人激活逻辑。
-  - [ ] 1.2.4 尚需 test-cn 真实 `eduplus-platform-admin` 授权码登录、真实 `subscription.created.actor` 与后续 OIDC `sub` 匹配、学校目录策略范围证据。
+  - [x] 1.2.3 已用合成签名 Webhook 与 TMS bearer 覆盖当前学校身份、学校绑定、client 注册、actor 记录、首管即时开启与历史激活兼容逻辑。
+  - [ ] 1.2.4 尚需 test-cn 真实 `eduplus-platform-admin` 授权码登录、真实 `subscription.created.actor` 与后续 OIDC `sub` 合同/匹配、学校目录策略范围证据。
     - [x] 1.2.4.1 已在本地 `local-ssl` 经真实 test-cn Keycloak 授权码登录 `eduplus-platform-admin`：`access_token` 脱敏 claim 为 issuer=`https://eduplus-auth-test.f123.pub/realms/eduplus`、aud=`account`、azp=`eduplus-platform-admin`、typ=`Bearer`、稳定 subject hash；EduPlus2 `/api/v1/me/profile` 对该 client token 返回 401，故 OMS 显式改为 token-only 身份状态策略，DeepTutor 本地 `ops.*` 仍失败关闭。
 - [x] 1.3 盘点全部 OMS/TMS 菜单、按钮、API、导出、旧 router、CLI/HTTP/WS/SDK/后台及 owner/grant；固定动作 key、`platform`/`school` 范围、默认角色、自定义角色上限和“旧入口 404”清单，并审阅通用 core seam 的上游合并风险。证据见 [surface-inventory.md](surface-inventory.md)；正式新路由逐条权限验收仍归 3.2、4.3、5.1。
 
@@ -25,6 +25,7 @@
   - [x] 2.2.1 已以前向迁移为 `oms.school_bindings` 增加版本栅栏，验证重绑/改码后旧授权不复活，不改已应用 `0011`。
   - [x] 2.2.2 已实现签名 Webhook 创建/更新学校绑定、外部 client 注册、绑定版本投影与 lifecycle 状态联动；不从 header 或 `schoolCode` 猜测绑定。
   - [ ] 2.2.3 尚需目标环境真实外部 ID 类型、双学校绑定漂移/解绑、真实学校码变更和 test-cn 负例证据。
+    - [x] 2.2.3.1 已按用户授权将 test-cn PostgreSQL 只读复制到本地隔离快照并脱敏核验真实学校绑定/投影形态：`oms.school_bindings` 与 `eduplus2.webhook_school_state` 均有 3 条学校记录，`school_code` 均非空，外部学校/应用/订阅 ID 在 schema 中为 `bigint`；快照不含 `lifecycle_actor_candidates` 行，故不能闭合真实 actor、漂移/解绑、双学校登录或跨校负例父任务。
 
 ## B2 本产品权限与安全开通
 
@@ -41,10 +42,10 @@
       - [x] 3.2.5.2.2 已用可执行旁路审计测试固定：企业 CLI/通用 SDK 不提供 OMS/TMS/Provider/额度管理写入口，WS turn 协议拒绝管理写命令和管理写字段，core/CLI/SDK/后台代码不直接导入企业管理授权模块或写 `management.*` 授权事实表。
       - [x] 3.2.5.2.3 已执行只读 upstream mergeability smoke：当前 `HEAD` 与本地 `upstream/main` 的 merge-base 为 `upstream/main`，`git merge-tree` 未发现文本冲突标记；未执行 merge/rebase/reset。
       - [x] 3.2.5.2.4 已实现 OMS 零本地管理员首位平台管理员受控初始化：仅已验签 `eduplus-platform-admin` OMS 会话可调用，Cookie 写请求受 Origin+CSRF 保护；初始化时在应用事务内串行检查零活跃 `platform_security_admin`，创建/激活当前平台 principal，并授予 v2 `platform_security_admin` 与 `platform_config_admin`，用于 test-cn 首个 Agent 前的模型/Skill 平台维护；第二主体初始化返回 409，重复同主体幂等；不调用 EduPlus2 权限、不使用 DB 函数/触发器/enum-like CHECK。
-- [ ] 3.3 实现 **Webhook 一次性首位管理员登记与本人激活**：仅真实、已验签、非 mock、目标应用/学校及订阅 ID 结构校验通过的 `subscription.created`，且 `actor.type=user`、`actor.user_id` 非空，才写入该校待激活 `(issuer,sub)` 与一次性消费栅栏；事件 ID 幂等、学校绑定版本及已消费/撤销引导不得复活。事件订阅 ID 仅作审计/冲突依据，不作为本产品当前订阅 ID 比对门禁。本人 TMS 登录后须精确匹配已登记身份和当前学校，Enterprise 程序在事务内复核当前学校—应用有效及本地版本，激活唯一 `school_admin` assignment、追加审计。`actor` 缺失/system/null/错校或身份不匹配保持零权；OMS 无学校账号/开通入口。真实事件合同及联调未通过时正式写接口保持关闭。
-  - [x] 3.3.1 已实现并验证签名 Webhook `subscription.created` 直接初始化学校绑定、外部 client 注册、actor candidate 与一次性本人激活路径；mock 不计入正式开通。
-  - [x] 3.3.2 已实现 `/api/v1/tms/school-bootstrap/status` 与 `/api/v1/tms/school-bootstrap/activate`，本人 TMS bearer 精确匹配 candidate 后激活唯一 `school_admin` assignment 并追加审计。
-  - [ ] 3.3.3 尚需补 test-cn 真实 `subscription.created.actor.user_id` 与后续 OIDC `sub` 的脱敏证据、错校/重放/恢复/撤销在真实环境的联调矩阵；正式开闸仍归 5.1。
+- [x] 3.3 实现 **Webhook 一次性首位管理员即时开启**：仅真实、已验签、非 mock、目标应用/学校及订阅 ID 结构校验通过的 `subscription.created`，且 `actor.type=user`、`actor.user_id` 非空，才在同一 Webhook 事务内创建/激活该校唯一 `school_admin` assignment、推进策略版本、写入 consumed actor 记录并追加脱敏审计；事件 ID 幂等、学校绑定版本及已消费/撤销引导不得复活。事件订阅 ID 仅作审计/冲突依据，不作为本产品当前订阅 ID 比对门禁。`actor` 缺失/system/null/错校保持零权；OMS 无学校账号/开通入口。真实事件 actor 与后续 OIDC `sub` 合同及 test-cn 联调未通过时不得宣称正式开闸。
+  - [x] 3.3.1 已实现并验证签名 Webhook `subscription.created` 直接初始化学校绑定、外部 client 注册、actor 记录与一次性首管开启路径；mock 不计入正式开通。
+  - [x] 3.3.2 已实现 `/api/v1/tms/school-bootstrap/status` 与 `/api/v1/tms/school-bootstrap/activate` 历史兼容：Webhook 已即时开启后 status 直接 active，activate 对同一已激活主体只做幂等回放，不作为新增开通门槛。
+  - [ ] 3.3.3 尚需补 test-cn 真实 `subscription.created.actor.user_id` 与后续 OIDC `sub` 的脱敏合同证据、错校/重放/恢复/撤销在真实环境的联调矩阵；正式开闸仍归 5.1。
 - [ ] 3.4 实现 TMS 当前学校 `tenant.permissions.manage` 的角色/成员/应用/服务访问管理，模板扩权须显式确认、高风险授权双人审批、委托能力与业务执行权分离、收缩与撤权立即生效；服务 grant 不带额度数量、不越过 OMS 授权，个人正文仍按 owner/显式 grant。
   - [x] 3.4.1 已实现 TMS 当前学校权限目录只读 DTO `/api/v1/tms/permissions`，仅 `tenant.permissions.manage` 可读，且只返回 `tenant.*`。
   - [x] 3.4.2 已实现本人零权登记 `/api/v1/tms/me/register` 与当前学校成员只读列表 `/api/v1/tms/members`；不创建/同步 EduPlus2 用户。
@@ -75,8 +76,10 @@
       - [ ] 4.1.5.2.2 尚需真实平台目录候选、真实账号按钮级验收和完整键盘/窄屏可访问性矩阵。
         - [x] 4.1.5.2.2.1 已用正式 OMS 前端测试覆盖桌面与窄屏视口下的语义 `main`、关键 section heading、搜索框 label、平台授权治理按钮可命名且可键盘触发。
         - [x] 4.1.5.2.2.2 正式 OMS 403 fail-closed 页面新增“激活首位 OMS 管理员”受控入口，仅在本地授权缺失时显示，调用同源 BFF API 并复用 CSRF；成功后重新读取正式 DTO，不回退原型、不暴露 EduPlus2 token。
-- [ ] 4.2 修订 TMS 开发原型的 Webhook actor 待激活/本人登录匹配、缺 actor 待核对、成员/角色/访问关系/撤权状态，并演示“搜索可见已有账号→本人登录登记→匹配后授权”及目录无权/空范围/空结果/故障的区别；不得把合成目录伪装成真实 EduPlus2 同步，旧双人首位开通按钮不得保留为正式入口。正式 TMS 仅在第三方应用用户令牌及策略范围获证实时接学校目录，且只接当前学校安全 DTO；双向关系回读同一事实，额度/用量保持只读，不共享 OMS 会话、API client 或专有字段。生产原型路径 404。
-  - [x] 4.2.1 已修订开发态 TMS 原型的真实订阅 actor 待匹配/本人匹配/其他人/缺 actor/mock 五态，移除旧双负责人正式开通按钮并通过浏览器审计。
+        - [x] 4.1.5.2.2.3 正式 OMS 前端按原型结构补齐侧边导航、列表→详情抽屉和关键深链空态：学校、资源、模型/Provider、供给、用量、审计、Skill 均从安全 DTO 打开详情；未返回字段显示失败关闭/未启用说明，不回退合成数据或学校账号入口。
+        - [x] 4.1.5.2.2.4 已用红绿测试固定正式 OMS catch-all 拒绝旧学校后台开通深链：`/oms/tms-bootstrap` 与 `/oms/tms-bootstrap-requests` 服务端 `notFound()`，不进入正式壳、不读取 DTO、不恢复旧 OMS 学校开通入口。
+- [ ] 4.2 修订 TMS 开发原型的 Webhook actor 即时开启、缺 actor 待核对、成员/角色/访问关系/撤权状态，并演示“搜索可见已有账号→本人登录登记→低风险授权”及目录无权/空范围/空结果/故障的区别；不得把合成目录伪装成真实 EduPlus2 同步，旧双人首位开通按钮不得保留为正式入口。正式 TMS 仅在第三方应用用户令牌及策略范围获证实时接学校目录，且只接当前学校安全 DTO；双向关系回读同一事实，额度/用量保持只读，不共享 OMS 会话、API client 或专有字段。生产原型路径 404。
+  - [x] 4.2.1 已修订开发态 TMS 原型的真实订阅 Webhook 等待/即时开启/缺 actor/mock 等状态，移除旧双负责人正式开通按钮并通过浏览器审计。
   - [x] 4.2.2 已在原型中收敛学校角色直授：只展示低风险角色，敏感角色和管理员角色进入复核提示，不把合成数据伪装成真实目录。
   - [ ] 4.2.3 尚需将正式 TMS UI 接入当前 `/api/v1/tms/*` 安全 DTO，并补齐目录无权/空范围/空结果/故障、审批 apply、撤权即时生效和可访问性验收。
     - [x] 4.2.3.1 已提供正式 TMS 目录未启用安全 DTO，可供 UI 区分“外部目录合同缺失”与“学校无用户/空结果”。
@@ -87,6 +90,7 @@
       - [x] 4.2.3.2.4 已在正式 TMS UI 区分目录未启用、无权、空范围、空结果和外部失败状态；目录不可用时不回退合成用户，本地成员列表与外部目录显示分离。
       - [ ] 4.2.3.2.5 尚需真实目录策略合同、桌面/窄屏/键盘可访问性、审批竞态与双学校真实登录验收。
         - [x] 4.2.3.2.5.1 已用正式 TMS 前端测试覆盖桌面与窄屏视口下的语义 `main`、当前学校/目录/成员/审批 section heading、搜索框 label、成员授权按钮可命名且可键盘触发。
+        - [x] 4.2.3.2.5.2 正式 TMS 前端按原型结构补齐成员/应用/服务/额度/知识/用量/事件导航与列表→详情抽屉；知识库和应用正式 DTO 尚未启用时显示安全空态，不回退原型合成成员、应用、知识库或私有正文。
 - [ ] 4.3 验证菜单/深链/按钮/API key 一致：无权 403、默认管理员与自定义角色 200、学校码篡改、自己给自己授权、学校 grant 冒充平台 grant、高风险单人授予/越委托上界、成本/Secret/私有正文泄漏、过期/停用/撤权旧页面和审批竞态；桌面/窄屏、键盘、加载/空/无权/外部失败/冲突可访问性。
   - [x] 4.3.1 已在后端 API 层覆盖 TMS 只读/写入/审批切片的无权 403、默认管理员正例、自定义角色正例、自己给自己授权拒绝、敏感角色单人授予拒绝与 Secret/ops 字段不泄漏。
   - [ ] 4.3.2 尚需完成正式前端菜单/深链/按钮与 API key 的逐项绑定、学校码篡改、跨学校真实负例、审批竞态、桌面/窄屏/键盘/加载/空/外部失败等 UI 验收。
@@ -104,8 +108,13 @@
       - [ ] 4.3.2.8.2.2 尚需真实跨学校负例、审批并发竞态、桌面/窄屏/键盘完整可访问性矩阵和 test-cn 真实账号验收。
         - [x] 4.3.2.8.2.2.1 已用后端合成 PG 验证审批复核并发与审批 apply 并发均只有一个终态/写入胜出，失败方不会绕过 policy version 或重复写入。
         - [x] 4.3.2.8.2.2.2 已用前端合成 DTO 验证 OMS/TMS 正式入口在桌面/窄屏下的关键 heading、搜索框和写按钮可访问名称及键盘触发路径。
+        - [x] 4.3.2.8.2.2.3 已用正式 TMS 前端测试覆盖 URL 学校码与后端安全 DTO 规范 `school_code` 不一致时失败关闭：页面不继续读取目录/成员/审批 DTO，不显示授予、撤销、审批或新增按钮。
+        - [x] 4.3.2.8.2.2.4 已用后端 TDD 固定 `/api/v1/tms/me/permissions` 返回来自可信 Webhook 学校投影的规范 `school_code`；正式前端不再依赖合成 mock 才能执行学校码一致性检查。
+        - [x] 4.3.2.8.2.2.5 已用正式 TMS 前端红绿测试覆盖 `/api/v1/tms/me/permissions` 缺失规范 `school_code` 时失败关闭：页面不继续读取当前学校数据，不显示授予、撤销、审批或新增按钮。
+        - [x] 4.3.2.8.2.2.6 已用后端红绿测试覆盖可信 Webhook 学校投影缺失 `school_code` 时 `/api/v1/tms/me/permissions` 直接 403，API 不返回空学校码让前端独自兜底。
+        - [x] 4.3.2.8.2.2.7 已用后端合成 PG 覆盖 OMS 只有 `school` 范围的 `platform_operator` 不能读取或修改全局 Provider 设置：`GET /api/v1/oms/provider-settings` 与 `POST /api/v1/oms/provider-settings/draft` 均返回 403，不把学校 grant 冒充 `platform` grant。
 
 ## G/H 验收与受控切换
 
 - [ ] 5.1 仅在既存外部接口、权限迁移、双学校正负例和测试环境独立 OMS/TMS 管理登录通过后，按受控门禁开启对应正式路由；保留 test-cn 脱敏证据、回退、审计关联及当前 upstream mergeability 检查，不把 Webhook mock 或合成 JWT 计作管理权限验收。
-- [ ] 5.2 若启用多执行者，先通过 G-H 的跨实例撤权/会话/缓存和审批并发一致性验证；单实例明确非 HA，不为容灾声称静态 UI/单 Pod 通过即可。
+- [x] 5.2 当前 test-cn 明确保持单执行者、非 HA：`deeptutor-backend` replicas=1、`DEEPTUTOR_EXECUTION_MODE=single`、`DEEPTUTOR_TURN_COORDINATION_BACKEND=memory`；未启用多执行者，未把静态 UI/单 Pod 声称为容灾或 HA。若未来启用多执行者，须另走 G-H 跨实例撤权/会话/缓存和审批并发一致性验证后再开放。

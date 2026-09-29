@@ -33,9 +33,10 @@ export function useSessionFilter(key: string, initial: string): [string, (value:
   return [stored.key === key ? stored.value : initial, value => setStored({ key, value, ready: true })];
 }
 
-export function AdminShell({ product, subtitle, scope, groups, path, onNavigate, children }: {
+export function AdminShell({ product, subtitle, scope, groups, path, onNavigate, children, environmentLabel = "演示环境", footerLabel = "仅本地演示 · 不连接生产数据", mainLabel }: {
   product: string; subtitle: string; scope: string; groups: NavGroup[]; path: string;
   onNavigate: (href: string) => void; children: ReactNode;
+  environmentLabel?: string; footerLabel?: string; mainLabel?: string;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarPreference, setSidebarPreference] = useState({ product, collapsed: false, ready: false });
@@ -61,11 +62,11 @@ export function AdminShell({ product, subtitle, scope, groups, path, onNavigate,
           {group.items.map(item => <button key={item.href} type="button" className={`nav-item ${activeHref === item.href ? "active" : ""}`} aria-label={item.label} aria-current={activeHref === item.href ? "page" : undefined} title={collapsed ? item.label : undefined} onClick={() => { onNavigate(item.href); setMenuOpen(false); }}>{item.icon ?? <span className="nav-fallback" aria-hidden="true">{item.label.slice(0, 1)}</span>}<span className="nav-label">{item.label}</span></button>)}
         </div>)}
       </nav>
-      <div className="sidebar-bottom" title={collapsed ? "仅本地演示 · 不连接生产数据" : undefined}><ShieldCheck size={15}/><span>仅本地演示 · 不连接生产数据</span></div>
+      <div className="sidebar-bottom" title={collapsed ? footerLabel : undefined}><ShieldCheck size={15}/><span>{footerLabel}</span></div>
     </aside>
     <div className="main-column">
-      <header className="topbar"><button type="button" className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)} aria-label="切换导航" aria-expanded={menuOpen}>☰</button><span className="topbar-product">{subtitle}</span><span className="topbar-separator"/><span className="topbar-context">{scope}</span><div className="topbar-right"><span className="demo-indicator">演示环境</span><CircleHelp size={17}/><span className="avatar">{product[0]}</span></div></header>
-      <main className="content">{children}</main>
+      <header className="topbar"><button type="button" className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)} aria-label="切换导航" aria-expanded={menuOpen}>☰</button><span className="topbar-product">{subtitle}</span><span className="topbar-separator"/><span className="topbar-context">{scope}</span><div className="topbar-right"><span className="demo-indicator">{environmentLabel}</span><CircleHelp size={17}/><span className="avatar">{product[0]}</span></div></header>
+      <main className="content" aria-label={mainLabel}>{children}</main>
     </div>
   </div>;
 }

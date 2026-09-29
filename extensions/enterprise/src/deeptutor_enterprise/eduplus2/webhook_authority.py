@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import hmac
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
+
+from psycopg.types.json import Jsonb
 
 from deeptutor.persistence.postgres.tenant_state import validate_tenant_business_values
 
+from ..management.assignment_rules import validate_assignment_relation
+from ..management.authorization import ManagementAuthorizationDenied
+from ..management.policy_version import advance_principal_policy_version
 from ..scope import TenantScope
 from .lifecycle import (
     LifecycleConflict,
@@ -105,6 +110,167 @@ def _eligibility(event: LifecycleEvent) -> str:
     if status in _INACTIVE:
         return "denied"
     return "unknown"
+
+
+async def _open_first_school_administrator_from_webhook(
+    c,
+    enterprise,
+    event: LifecycleEvent,
+    *,
+    owner,
+    school_id,
+    binding_version: int,
+) -> bool:
+    """订阅创建事件直接开启学校首位管理员；不再等待 TMS 单独开通。"""
+
+    if (
+        event.event_type != "subscription.created"
+        or event.actor_type != "user"
+        or not event.actor_subject
+        or not getattr(enterprise, "eduplus2_issuer", None)
+    ):
+        return False
+    issuer = enterprise.eduplus2_issuer
+    command_id = uuid5(NAMESPACE_URL, f"deeptutor:tms:first-admin:{owner}:{event.event_id}")
+    try:
+        await c.execute("SELECT set_config('app.management_app','tms',true)")
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+        school = await (
+            await c.execute(
+                "SELECT bootstrap_completed FROM enterprise.tenants WHERE id=%s FOR UPDATE",
+                (school_id,),
+            )
+        ).fetchone()
+        if not school or school["bootstrap_completed"]:
+            return False
+        existing_admin = await (
+            await c.execute(
+                "SELECT 1 FROM management.assignments WHERE application='tms' "
+                "AND school_id=%s AND role_key='school_admin' AND status='active' "
+                "AND valid_from<=now() AND expires_at>now() LIMIT 1",
+                (school_id,),
+            )
+        ).fetchone()
+        if existing_admin:
+            return False
+        principal = await (
+            await c.execute(
+                "SELECT id,status,policy_version FROM management.principals "
+                "WHERE application='tms' AND issuer=%s AND subject=%s AND school_id=%s "
+                "FOR UPDATE",
+                (issuer, event.actor_subject, school_id),
+            )
+        ).fetchone()
+        if principal and principal["status"] not in {"pending", "active"}:
+            raise ManagementAuthorizationDenied("existing management principal is not activatable")
+        principal_id = principal["id"] if principal else uuid4()
+        expected_policy_version = principal["policy_version"] if principal else 1
+        if principal:
+            await c.execute(
+                "UPDATE management.principals SET status='active',external_evidence_ref=%s,"
+                "updated_at=clock_timestamp() WHERE id=%s",
+                (event.event_id, principal_id),
+            )
+        else:
+            await c.execute(
+                "INSERT INTO management.principals(id,application,issuer,subject,school_id,"
+                "status,external_evidence_ref) VALUES(%s,'tms',%s,%s,%s,'active',%s)",
+                (principal_id, issuer, event.actor_subject, school_id, event.event_id),
+            )
+        role = await (
+            await c.execute(
+                "SELECT application,scope_kind FROM management.role_versions "
+                "WHERE application='tms' AND role_key='school_admin' AND version=1 FOR SHARE"
+            )
+        ).fetchone()
+        validate_assignment_relation(
+            application="tms",
+            principal_application="tms",
+            principal_school_id=school_id,
+            role_application=role["application"] if role else None,
+            role_scope_kind=role["scope_kind"] if role else None,
+            assignment_scope_kind="school",
+            assignment_school_id=school_id,
+        )
+        assignment_id = uuid4()
+        await c.execute(
+            "INSERT INTO management.assignments(id,application,principal_id,role_key,"
+            "role_version,scope_kind,school_id,school_binding_version,valid_from,"
+            "expires_at,command_id,created_by) "
+            "VALUES(%s,'tms',%s,'school_admin',1,'school',%s,%s,"
+            "clock_timestamp()-interval '1 second',"
+            "timestamptz '9998-01-01 00:00:00+00',%s,'@signed-webhook')",
+            (assignment_id, principal_id, school_id, binding_version, command_id),
+        )
+        delegation_actions = await (
+            await c.execute(
+                "SELECT ra.action_key FROM management.role_actions ra "
+                "JOIN management.action_catalog ac ON ac.application=ra.application "
+                "AND ac.action_key=ra.action_key "
+                "WHERE ra.application='tms' AND ra.role_key='school_admin' "
+                "AND ra.role_version=1 AND ac.status='active' "
+                "AND ac.allowed_scope='school' AND NOT ac.sensitive "
+                "ORDER BY ra.action_key"
+            )
+        ).fetchall()
+        for row in delegation_actions:
+            await c.execute(
+                "INSERT INTO management.delegation_policies"
+                "(id,application,principal_id,action_key,scope_kind,school_id,valid_from,"
+                "expires_at) VALUES(%s,'tms',%s,%s,'school',%s,"
+                "clock_timestamp()-interval '1 second',"
+                "timestamptz '9998-01-01 00:00:00+00')",
+                (uuid4(), principal_id, row["action_key"], school_id),
+            )
+        next_policy_version = await advance_principal_policy_version(
+            c, principal_id, expected_before=expected_policy_version
+        )
+        await c.execute(
+            "UPDATE enterprise.tenants SET bootstrap_completed=true WHERE id=%s",
+            (school_id,),
+        )
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner),))
+        await c.execute(
+            "INSERT INTO eduplus2.lifecycle_actor_candidates(tenant_id,event_id,"
+            "school_id,external_tenant_id,external_app_id,external_subscription_id,"
+            "binding_version,actor_issuer,actor_subject,status,resolved_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'consumed',clock_timestamp()) "
+            "ON CONFLICT (tenant_id,event_id) DO NOTHING",
+            (
+                owner,
+                event.event_id,
+                school_id,
+                event.external_tenant_id,
+                event.external_app_id,
+                event.external_subscription_id,
+                binding_version,
+                issuer,
+                event.actor_subject,
+            ),
+        )
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+        await c.execute(
+            "INSERT INTO management.audit_events(id,application,school_id,actor_issuer,"
+            "actor_subject,action_key,target_kind,target_id,request_id,result,reason,"
+            "before_version,after_version,safe_summary) "
+            "VALUES(%s,'tms',%s,%s,%s,'tenant.school.bootstrap','school',%s,%s,"
+            "'success','signed webhook subscription opened school administrator',%s,%s,%s)",
+            (
+                uuid4(),
+                school_id,
+                issuer,
+                event.actor_subject,
+                str(school_id),
+                event.event_id,
+                expected_policy_version,
+                next_policy_version,
+                Jsonb({"event_id": event.event_id, "subscription_id": event.external_subscription_id}),
+            ),
+        )
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner),))
+        return True
+    except ManagementAuthorizationDenied as exc:
+        raise RuntimeError("webhook first school administrator activation failed") from exc
 
 
 async def ingest_authoritative_webhook(
@@ -397,32 +563,14 @@ async def ingest_authoritative_webhook(
                 (school_id, str(event.external_tenant_id), str(event.external_app_id)),
             )
         await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner),))
-        if (
-            event.event_type == "subscription.created"
-            and event.actor_type == "user"
-            and event.actor_subject
-            and enterprise.eduplus2_issuer
-        ):
-            await c.execute(
-                "INSERT INTO eduplus2.lifecycle_actor_candidates(tenant_id,event_id,"
-                "school_id,external_tenant_id,external_app_id,external_subscription_id,"
-                "binding_version,actor_issuer,actor_subject) "
-                "SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s "
-                "WHERE EXISTS (SELECT 1 FROM enterprise.tenants t "
-                "WHERE t.id=%s AND NOT t.bootstrap_completed) "
-                "ON CONFLICT (tenant_id,event_id) DO NOTHING",
-                (
-                    owner,
-                    event.event_id,
-                    school_id,
-                    event.external_tenant_id,
-                    event.external_app_id,
-                    event.external_subscription_id,
-                    binding["version"],
-                    enterprise.eduplus2_issuer,
-                    event.actor_subject,
-                    school_id,
-                ),
+        if eligibility == "allowed":
+            await _open_first_school_administrator_from_webhook(
+                c,
+                enterprise,
+                event,
+                owner=owner,
+                school_id=school_id,
+                binding_version=binding["version"],
             )
         await c.execute(
             "UPDATE eduplus2.lifecycle_inbox SET processing_status=%s,processed_at=clock_timestamp() "

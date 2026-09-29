@@ -68,6 +68,7 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "management/0006_remove_role_action_function",
     "management/0007_custom_role_school_owner",
     "management/0008_relocate_database_business_rules",
+    "management/0009_approval_apply_payload",
 ]
 
 
@@ -274,6 +275,10 @@ async def test_final_schema_has_no_database_owned_business_rules(pg_dsn):
 
 
 async def test_migrations_repeat_concurrent_and_runtime_ddl(pg_dsn):
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        preexisting_runtime_role = await (
+            await c.execute("SELECT rolname FROM pg_roles WHERE rolname='dt_enterprise_app'")
+        ).fetchone()
     runner = await migrated(pg_dsn)
     await asyncio.gather(runner.apply(), runner.apply())
     assert await runner.plan() == []
@@ -281,7 +286,7 @@ async def test_migrations_repeat_concurrent_and_runtime_ddl(pg_dsn):
         role = await (
             await c.execute("SELECT rolname FROM pg_roles WHERE rolname='dt_enterprise_app'")
         ).fetchone()
-        assert role is None
+        assert role == preexisting_runtime_role
     pool = module("stores.postgres.connection").Database(
         single_database_user_dsn(pg_dsn), resource="test"
     )

@@ -114,7 +114,6 @@ def _identity_is_current(identity: ManagementIdentity, *, write: bool) -> bool:
     )
 
 
-
 async def tms_permission_summary(enterprise, identity: ManagementIdentity) -> dict[str, object]:
     """返回正式 TMS 前端可用于显隐/路由守卫的本校动作摘要。
 
@@ -174,9 +173,28 @@ async def tms_permission_summary(enterprise, identity: ManagementIdentity) -> di
             except ManagementAuthorizationDenied:
                 continue
             actions.add(action)
+        school_projection = await (
+            await c.execute(
+                "SELECT school_code FROM eduplus2.webhook_school_state "
+                "WHERE school_id=%s AND (%s IS NULL OR external_app_id=%s) "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (
+                    identity.school_id,
+                    identity.webhook_app_id,
+                    identity.webhook_app_id,
+                ),
+            )
+        ).fetchone()
+        if not school_projection:
+            raise ManagementAuthorizationDenied("trusted school code is unavailable")
+        raw_school_code = school_projection["school_code"]
+        if not isinstance(raw_school_code, str) or not raw_school_code:
+            raise ManagementAuthorizationDenied("trusted school code is unavailable")
+        school_code = raw_school_code
     return {
         "application": "tms",
         "school_id": str(identity.school_id),
+        "school_code": school_code,
         "subject": identity.subject,
         "policy_version": identity.policy_version,
         "actions": sorted(actions),

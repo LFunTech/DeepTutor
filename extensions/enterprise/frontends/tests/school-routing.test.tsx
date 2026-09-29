@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import OmsPrototype from "../apps/oms/src/OmsPrototype";
 import OmsPage from "../apps/oms/app/prototype/[[...slug]]/page";
+import OmsFormalSlugPage from "../apps/oms/app/[...slug]/page";
 import TmsPrototype from "../apps/tms/src/TmsPrototype";
 import TmsRootPage from "../apps/tms/app/prototype/page";
 import TmsSchoolPage from "../apps/tms/app/prototype/[schoolCode]/[[...slug]]/page";
@@ -27,6 +28,11 @@ describe("教育业务的学校路由与名称", () => {
     await expect(OmsPage({ params: Promise.resolve({ slug: ["tms-bootstrap", "demo-school"] }) })).rejects.toThrow("NEXT_NOT_FOUND");
     const page = await OmsPage({ params: Promise.resolve({ slug: ["platform-people"] }) });
     expect(page.type).toBe(OmsPrototype);
+  });
+
+  it("OMS 正式入口同样拒绝旧学校后台开通深链", async () => {
+    await expect(Promise.resolve().then(() => OmsFormalSlugPage({ params: Promise.resolve({ slug: ["tms-bootstrap"] }) }))).rejects.toThrow("NEXT_NOT_FOUND");
+    await expect(Promise.resolve().then(() => OmsFormalSlugPage({ params: Promise.resolve({ slug: ["tms-bootstrap-requests"] }) }))).rejects.toThrow("NEXT_NOT_FOUND");
   });
 
   it("TMS 在学校 code 路由显示服务列表，详情深链保留 code", () => {
