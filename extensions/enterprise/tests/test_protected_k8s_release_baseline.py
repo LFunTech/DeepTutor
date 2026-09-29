@@ -1109,6 +1109,18 @@ def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_dr
     assert "ARG CARGO_REGISTRY_MIRROR=sparse+https://index.crates.io/" in dockerfile
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS frontend-builder" in dockerfile
     assert "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS enterprise-frontends-builder" in dockerfile
+    enterprise_frontends_stage = dockerfile.split(
+        "FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS enterprise-frontends-builder",
+        1,
+    )[1].split("FROM ${NODE_IMAGE} AS node-runtime", 1)[0]
+    assert (
+        enterprise_frontends_stage.find(
+            "COPY extensions/enterprise/frontends/package.json "
+        )
+        < enterprise_frontends_stage.find("npm ci --legacy-peer-deps --no-audit --no-fund")
+        < enterprise_frontends_stage.find("COPY extensions/enterprise/frontends/ ./")
+        < enterprise_frontends_stage.find("npm run build:oms")
+    )
     assert "npm run typecheck:oms" in dockerfile
     assert "npm run build:tms" in dockerfile
     assert "FROM ${PYTHON_IMAGE} AS production" in dockerfile

@@ -76,13 +76,20 @@ ARG NPM_REGISTRY
 WORKDIR /app/extensions/enterprise/frontends
 
 COPY extensions/enterprise/frontends/package.json extensions/enterprise/frontends/package-lock.json* ./
-COPY extensions/enterprise/frontends/ ./
 
+# Keep dependency installation in its own Kaniko-cacheable layer.  OMS/TMS
+# source files change frequently during test-cn iterations, but package locks
+# do not; copying source before npm ci would force a full reinstall on every
+# frontend-only change.
 RUN npm config set registry "${NPM_REGISTRY}" && \
     npm config set fetch-timeout 600000 && \
     npm config set fetch-retries 5 && \
     npm ci --legacy-peer-deps --no-audit --no-fund && \
-    npm run typecheck:oms && \
+    rm -rf "${HOME}/.npm"
+
+COPY extensions/enterprise/frontends/ ./
+
+RUN npm run typecheck:oms && \
     npm run typecheck:tms && \
     npm test -- formal-management-gates.test.tsx oms-auth-callback.test.tsx school-routing.test.tsx && \
     npm run build:oms && \
