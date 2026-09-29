@@ -2,7 +2,7 @@
 
 ## 边界与阶段
 
-用户最新决策是 DeepTutor Enterprise 程序负责 OMS `ops.*` 与 TMS `tenant.*` 授权，PG 只保存事实、版本、审计并作隔离/事务兜底；EduPlus2 在权限链路中只提供认证与稳定身份识别，Webhook `subscription.created.actor.user_id` 是本产品一次性首位 TMS 管理员身份来源，而非外部权限判定。其仓库、Keycloak、OpenFGA 均不由本项目修改。OMS 只管理平台人员。任务 3.1 的**数据库迁移与隔离合成验证**已完成，最新事件引导迁移尚未完成；本记录不代表正式管理 API、UI 或迁移已获 test/production 放行。
+用户最新决策是 DeepTutor Enterprise 程序负责 OMS `ops.*` 与 TMS `tenant.*` 授权，PG 只保存事实、版本、审计并作隔离/事务兜底；EduPlus2 在权限链路中只提供认证与稳定身份识别，Webhook `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）是本产品一次性首位 TMS 管理员身份来源，而非外部权限判定。其仓库、Keycloak、OpenFGA 均不由本项目修改。OMS 只管理平台人员。任务 3.1 的**数据库迁移与隔离合成验证**及 3.3 的 Webhook 首管即时开启本地实现已完成；最新 actor context 迁移已补齐 documented actor 身份字段持久化。本记录不代表正式管理 API、UI 或 test/production 开闸已完成。
 
 2026-09-27 用户明确表示本提案已完成审阅并要求按跨提案执行计划继续推进，作为本 change 后续实施授权记录。任务 1.1 同时要求受影响的其他 OMS/TMS 提案**分别**审阅批准，故仍未勾选；本次确认不自动替代那些提案的独立批准，也不授权真实数据、生产发布、提交或归档。
 
@@ -19,7 +19,7 @@
 | OMS 平台管理 Client ID | 2026-09-27 用户明确指定 `eduplus-platform-admin`；本仓库和已读取的公开 EduPlus2 用户数据/M2M/Webhook 文档未给出该 Client 的目标环境配置或授权码换票实测。 | 作为 OMS 预期 Client ID 进入配置与验证清单；尚不等于已核实的 token `azp`/`aud`、平台人员目录、在线账号状态或本产品 `ops.*` 授权。与每校 Webhook OAuth Client 分开。 |
 | OIDC discovery/JWKS、通用 M2M/client resolve | 2026-09-18 test/本地只读与交互验证，详见 `../add-enterprise-oms-business-logic/implementation-evidence.md`；旧 profile/permission M2M POST 为 404/405 | 只能证明机制；尚不能证明指定 `eduplus-platform-admin` Client 的登录能力、实际 token audience、管理者在线状态或平台会话。 |
 | Webhook 签名 demo 与真实接收 | 2026-09-26 test-cn `智能体基座` 控制台 8/8 `subscription.*` mock 204；2026-09-27 `rc.53` 后真实 terminated/created 204，学校 PG 绑定和 actor 待核验候选已落库，见 `../add-b2-eduplus2-tenant-lifecycle-webhook/implementation-evidence.md` | 真实 actor 线索需后续核对 OIDC `sub` 合同；未验证正式 TMS 登录、撤权闭环或 5.1 开闸。无需重做 mock。 |
-| Webhook `subscription.created.actor` | 2026-09-27 按用户指引只读核对 [事件类型](https://eduplus-test.f123.pub/docs/webhook/event-types/) 与 [Webhook 事件格式](https://eduplus-test.f123.pub/docs/webhook/)：`actor` 可选，`actor.user_id` 可为 null（系统/定时任务），表示触发事件的 Keycloak User ID；外部文档未声明其具有管理员角色。用户明确将真实 `subscription.created.actor.user_id` 定义为**本产品首位管理员身份来源**。 | 已验签非 mock、目标应用/学校绑定的真实事件可在 Webhook 事务内一次性即时开启首位学校管理员。mock/system/null/重复/恢复不得赋予新的权限。真实事件 actor 与后续 OIDC `sub` 合同未验收前不得宣称正式开闸。 |
+| Webhook `subscription.created.actor` | 2026-09-27 按用户指引只读核对 [事件类型](https://eduplus-test.f123.pub/docs/webhook/event-types/) 与 [Webhook 事件格式](https://eduplus-test.f123.pub/docs/webhook/)：`actor` 可选，`actor.user_id` 可为 null（系统/定时任务），表示触发事件的 Keycloak User ID；外部文档未声明其具有管理员角色。用户明确将真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）定义为**本产品首位管理员身份来源**。 | 已验签非 mock、目标应用/学校绑定的真实事件可在 Webhook 事务内一次性即时开启首位学校管理员。mock/system/null/重复/恢复不得赋予新的权限。真实事件 actor 与后续 OIDC `sub` 合同未验收前不得宣称正式开闸。 |
 | Webhook OAuth Client 与机器令牌 | 2026-09-27 只读获取 [Webhook 文档](https://eduplus-test.f123.pub/docs/webhook/) 和 [Client Credentials 文档](https://eduplus-test.f123.pub/docs/oauth-oidc/client-credentials/)：事件示例含 `oauth_client.client_id/client_secret`，M2M 示例能换 `client_credentials` token 并展示 `GET /api/v1/users` 的泛用代码片段。未使用真实凭据或调用用户接口。 | 凭据下发不等于人员目录授权。`/api/v1/users` 的适用 client、权限、学校范围、返回格式与在线状态未核实，不能作为 OMS/TMS 候选来源。Secret 仅可服务端保存，不得进入前端或证据。 |
 | 本人 Profile 与学校成员目录 | 2026-09-27 只读获取 [Me Profile 文档](https://eduplus-test.f123.pub/docs/user-data/me-profile-api/) 和 [User Data API 文档](https://eduplus-test.f123.pub/docs/user-data/user-data-api/)：`/api/v1/me/profile` 仅当前用户；`/api/v1/open/userdata/users` 需已审批第三方应用授权码用户 token、`azp=app_credentials.client_id`、有效学校订阅，返回受 Data/User Access Policy 约束的分页已有账号。未携令牌实测。 | TMS 可列为**待核验的条件性**成员发现能力；须实测 app/client、用户令牌、学校范围、策略、故障与失效，不得直接用 M2M 或学校后台 token。`dept_id` 当前不实际过滤，不能作隔离；目录 `user_id` 是 EduPlus2 ID，`k_user_id` 是 Keycloak `sub`，授予前仍须候选本人登录并核验 `(issuer,sub,school)`。OMS 不接学校目录。 |
 | 在线账号状态、TMS 当前学校身份、权威学校 ID/绑定 | 本仓库文档只有设计；`oms.school_bindings` 目前空表迁移和合成数据测试 | 未获既存接口的适用性、调用身份、失败模式与 test 证据；不能启用管理写。 |
@@ -144,7 +144,7 @@
 ### 2026-09-27 用户再次明确授权控制点及首位管理员来源
 
 - 用户明确：权限由 **DeepTutor Enterprise 程序**逐入口判定；PG 是版本化事实/事务/审计库，数据库 role、GRANT 与 RLS 不能代替业务操作者授权；EduPlus2 在权限链路中只提供认证和稳定身份识别。`management.authorization` 原语本就在 Python 应用层执行，并已补文档澄清其 `policy_version` 为本地版本；新增同一 PG runtime 用户可见动作目录但无 assignment 的身份仍被拒绝的定向负例，**1 passed**。这不等于所有正式入口已装配。
-- 按用户指定，真实 `subscription.created.actor.user_id` 成为**本产品的一次性首位 TMS 管理员身份来源**；不是 EduPlus2 权限 API 判定。公开 [事件类型](https://eduplus-test.f123.pub/docs/webhook/event-types/) 与 [事件格式](https://eduplus-test.f123.pub/docs/webhook/)仍明确 `actor` 可选、system 可为 null；故正式规则限定已验签、非 mock、应用/学校/订阅绑定、`actor.type=user` 且 ID 非空，在 Webhook 事务内直接创建/激活唯一 `school_admin` assignment，并保留 consumed actor 记录用于审计/幂等/后续合同核验。mock、错校、重放、恢复/重订不产生新授权；真实 actor 与后续 OIDC `sub` 合同仍需 test-cn 证据。
+- 按用户指定，真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）成为**本产品的一次性首位 TMS 管理员身份来源**；不是 EduPlus2 权限 API 判定。公开 [事件类型](https://eduplus-test.f123.pub/docs/webhook/event-types/) 与 [事件格式](https://eduplus-test.f123.pub/docs/webhook/)仍明确 `actor` 可选、system 可为 null；故正式规则限定已验签、非 mock、应用/学校/订阅绑定、`actor.type=user` 且 ID 非空，在 Webhook 事务内直接创建/激活唯一 `school_admin` assignment，并保留 consumed actor 记录用于审计/幂等/后续合同核验。mock、错校、重放、恢复/重订不产生新授权；真实 actor 与后续 OIDC `sub` 合同仍需 test-cn 证据。
 - 管理授权、TMS 业务、生命周期 Webhook 与 TMS 原型的 OpenSpec 合同已向此边界修订；旧学校侧双负责人首位开通不再实施。开发态 TMS 原型已撤下双负责人模拟，改为订阅 Webhook 等待、即时开启、缺 actor、mock 等场景；前端定向测试先红后绿 **23 passed**，仍无真实身份/事件/API。当前 1.1 须对最新受影响提案再复核，故进度 **2/14**，正式管理路由保持未装配。
 
 ### 2026-09-27 TMS actor 原型浏览器复核与文案修正
@@ -459,7 +459,7 @@
 
 - 按用户授权从 test-cn Kubernetes Secret 只读取 `DEEPTUTOR_POSTGRES_MIGRATION_DATABASE_URL`，未打印数据库密码、token、真实用户、学校名称或完整上游响应；远端 `pg_dump` 因 RLS 对 `eduplus2.lifecycle_actor_candidates` 失败关闭后，改为 `pre-data/post-data schema dump + 按 RLS 上下文只读复制可见行`，不修改 test-cn 数据库。
 - 本地导入到隔离库 `deeptutor_testcn_snapshot_20260929073821`，schema dump 保存在 `.secrets/test-cn-db-snapshots/`。导入摘要：`remote_school_binding_rows=3`，复制 16 张表、238 行；关键脱敏只读核验显示 `eduplus2.webhook_school_state` 3 行、3 个 distinct `school_id`、3 个非空 `school_code`、3 条 onboarding event 记录，`oms.school_bindings` 3 行，`eduplus2.lifecycle_actor_candidates` 0 行，`enterprise.users` 1 行。仅记录 hash/计数，不输出 PII。
-- 快照结论：可采信 test-cn 当前真实学校绑定/学校码投影/外部 ID 类型形态；不能采信为真实 `subscription.created.actor.user_id` 与 OIDC `sub` 匹配、TMS Webhook 首管即时开启、漂移/解绑、双学校浏览器登录或跨学校 403 证据，因为 actor candidate 表为空且未取得真实 TMS 用户 token。
+- 快照结论：可采信 test-cn 当前真实学校绑定/学校码投影/外部 ID 类型形态；不能采信为真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）与 OIDC `sub` 匹配、TMS Webhook 首管即时开启、漂移/解绑、双学校浏览器登录或跨学校 403 证据，因为 actor candidate 表为空且未取得真实 TMS 用户 token。
 - 后端 TDD：先修改 `test_tms_me_permissions_returns_local_tenant_action_summary`，要求 `/api/v1/tms/me/permissions` 返回可信 `school_code=synthetic-school`；RED 失败于响应缺少该字段。
 - 修复：`tms_permission_summary()` 在当前学校事务内读取 `eduplus2.webhook_school_state.school_code`，优先匹配 `ManagementIdentity.webhook_app_id`，并随 TMS 权限摘要返回 `school_code`。该字段来自已验签 Webhook 学校投影，不来自 URL、header 或 request body，供正式 `/tms/{schoolCode}` 前端做一致性失败关闭。
 - 验证：`PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest extensions/enterprise/tests/test_webhook_authority.py::test_tms_me_permissions_returns_local_tenant_action_summary -q` → RED 后 GREEN，最终 **1 passed**；后续回归 `PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest extensions/enterprise/tests/test_webhook_authority.py -q` → **41 passed**，`PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest extensions/enterprise/tests/test_management_approvals.py extensions/enterprise/tests/test_oms_management_entrypoints.py extensions/enterprise/tests/test_oms_oauth_flow.py extensions/enterprise/tests/test_webhook_authority.py -q` → **59 passed**；`npm test --prefix extensions/enterprise/frontends` → **27 files / 279 tests passed**；`npm run typecheck:oms --prefix extensions/enterprise/frontends`、`npm run typecheck:tms --prefix extensions/enterprise/frontends`、`npm run build:oms --prefix extensions/enterprise/frontends`、`npm run build:tms --prefix extensions/enterprise/frontends` 均通过；`.venv/bin/ruff check extensions/enterprise/src/deeptutor_enterprise/management/authorization.py extensions/enterprise/src/deeptutor_enterprise/management/approvals.py extensions/enterprise/src/deeptutor_enterprise/api/application.py extensions/enterprise/src/deeptutor_enterprise/management/first_admin.py extensions/enterprise/tests/test_webhook_authority.py` → **All checks passed**；`openspec validate add-enterprise-management-authorization --strict` 与 `openspec validate --all --strict` 均通过，`git diff --check` 通过。
@@ -503,25 +503,82 @@
 
 ### 2026-09-29 首位 TMS 学校管理员改为订阅 Webhook 即时开启
 
-- 需求裁决：用户再次明确“学校管理员无需单独开通，接收到 webhook 订阅立即开启”。因此本 change 的首位 TMS 管理员规则从“真实 `subscription.created.actor.user_id` 登记后本人二次激活”修订为“真实、已验签、非 mock 的 `subscription.created.actor.user_id` 在 Webhook 接收事务内直接创建/激活唯一 `school_admin` assignment”。OMS 仍不得列出、创建、审批或维护学校账号。
+- 需求裁决：用户再次明确“学校管理员无需单独开通，接收到 webhook 订阅立即开启”。因此本 change 的首位 TMS 管理员规则从“真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）登记后本人二次激活”修订为“真实、已验签、非 mock 的 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）在 Webhook 接收事务内直接创建/激活唯一 `school_admin` assignment”。OMS 仍不得列出、创建、审批或维护学校账号。
 - 后端实现：`webhook_authority.ingest_authoritative_webhook()` 在同一事务内校验真实 `subscription.created`、学校绑定、actor、issuer 与一次性栅栏；满足条件时写入/激活 TMS principal、授予 `school_admin`、推进目标 policy version、写入 consumed actor 记录和审计。`/api/v1/tms/school-bootstrap/status` 在已即时开启后返回 active；历史 `/activate` 对同一已激活主体仅幂等回放，不再作为开通前置。
 - 失败关闭：mock、缺 actor、system/null、错校、重复/恢复/重订不会产生新的可用管理员；AI 资源 pending 不阻挡学校管理引导，但不开放 AI 新调用。真实 actor 与后续 OIDC `sub` 等值/映射仍需 test-cn 脱敏证据，不能以 mock 或合成 JWT 计作 5.1 正式开闸。
 - 前端/原型：TMS 原型 copy 已从“学校后台待开通/待本人登录匹配”改为“等待订阅 Webhook/学校管理员无需单独开通”；模拟按钮文案为“模拟接收订阅 Webhook”，缺 actor 展示“无可开启身份”。OMS 正式旧学校开通深链继续 404。
 - 迁移判断：本切片不新增 DB schema、OpenFGA 或 Keycloak 迁移；复用既有管理授权事实表和历史 actor 记录表，业务代码只改变未来 Webhook 写入语义。
-- 限制：此证据闭合本地实现语义，不闭合 test-cn 真实 `subscription.created.actor.user_id` 与 OIDC `sub` 合同、真实双学校登录负例、学校目录策略或 5.1 开闸。
+- 限制：此证据闭合本地实现语义，不闭合 test-cn 真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）与 OIDC `sub` 合同、真实双学校登录负例、学校目录策略或 5.1 开闸。
 
 - 验证补充：当前沙箱禁止 `initdb` 使用 SysV shared memory，按 local-debug 规则改用显式 `DT_TEST_PG_DSN=host=localhost port=5432 user=postgres dbname=postgres` 的本地 PostgreSQL；同时为 `tests/fixtures/postgres.py` 增加只接受 loopback/postgres 管理库的安全入口，避免连接远端或业务库。`PYTHONPATH=. .venv/bin/pytest tests/test_postgres_fixture.py -q` → **3 passed**；`DT_TEST_PG_DSN=... PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest extensions/enterprise/tests/test_webhook_authority.py -q` → **42 passed**；`DT_TEST_PG_DSN=... PYTHONPATH=.:extensions/enterprise/src .venv/bin/pytest extensions/enterprise/tests -q` → **800 passed / 3 skipped / 2 warnings**；`.venv/bin/ruff check ...` → **All checks passed**；前端 `npm test --prefix extensions/enterprise/frontends` → **27 files / 281 tests passed**，`typecheck:oms`、`typecheck:tms`、`build:oms`、`build:tms` 均通过；`openspec validate add-enterprise-management-authorization --strict` 与 `openspec validate --all --strict` 均通过，`git diff --check` 通过。
-- 勾选判断：本地实现与合成验证已闭合任务 **3.3**；真实 `subscription.created.actor.user_id` 与 OIDC `sub` 合同、真实错校/重放/恢复/撤销联调和 5.1 开闸仍保留在 **3.3.3 / 5.1**，不得用本地合成测试替代。
+- 勾选判断：本地实现与合成验证已闭合任务 **3.3**；真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）与 OIDC `sub` 合同、真实错校/重放/恢复/撤销联调和 5.1 开闸仍保留在 **3.3.3 / 5.1**，不得用本地合成测试替代。
 
 ### 2026-09-29 test-cn rc.64 完整测试与问题修复记录
 
 - 部署状态：确认 `HEAD=bcc2d4da` 对应 `deploy/test-cn/v1.4.0-rc.64` 已部署到 `deeptutor-test-cn`；`deeptutor-backend` 与 `deeptutor-docs` 均 `Ready 1/1`，rollout 成功。迁移 Job `dt-migrate-test-cn-v1-4-0-rc-64` 完成，日志显示 schema `apply/verify` 成功且 pending 为空。近期 Kubernetes 事件仅有发布启动期 readiness connection refused，稳定后 Pod Ready；后端日志尾部无 error/traceback/500。
 - test-cn HTTP/浏览器黑盒：`/health/live`、`/health/ready` 均 200；`/docs/` 200。未认证 OMS/TMS 管理 API 读接口均返回 401；使用伪造 Bearer 仍返回 401。按完整合法 JSON 请求体重测 TMS 写接口（自定义角色、成员授予、撤权、审批创建/复核/撤回/apply）未认证与伪造 Bearer 均 401；不会因 Pydantic 请求体有效而越过认证。旧 OMS 学校开通深链 `/oms/tms-bootstrap`、`/oms/tms-bootstrap-requests` 均 404。Playwright 截图确认正式 `/oms` 与 `/tms/demo-school` 均显示“正式受控入口/未开放” fail-closed，不回退开发原型或写按钮。
 - OMS 授权码入口：点击 `/oms` 的 `eduplus-platform-admin` 登录按钮可跳转到 `https://eduplus-auth-test.f123.pub/realms/eduplus/.../auth`，`client_id=eduplus-platform-admin`、回调为 `https://llm-agent-test.f123.pub/oms/auth/callback`，Keycloak 登录页 200。使用本地 `.secrets/.login-credentials` 中已记录的 admin/teacher 凭据进行一次自动化尝试均被上游返回“用户名或密码错误”；未取得 code/token，未调用任何写 API，未输出密码/token。故本轮仍不能把真实 OMS 登录、账号状态或平台主体本地授权记为验收通过。
-- test-cn 数据库只读核验：在 Pod 内使用迁移 DSN 只读查询，不打印 DSN/密码/PII。`enterprise.tenants=4`、`oms.school_bindings=3` 且三条绑定为 `verified`；`eduplus2.webhook_school_state=0`、`eduplus2.lifecycle_actor_candidates=0`、`management.principals=0`、`management.assignments=0`、`management.audit_events=0`。按 RLS 上下文设置 `app.management_app=oms/tms` 后可见本地 action/role 模板：OMS active actions 24、role actions 40，TMS active actions 9、role actions 18。结论：rc.64 已具备权限目录/模板和学校绑定底座，但当前 test-cn 未保留可验收的真实 `subscription.created.actor.user_id`、TMS 首管 principal/assignment 或管理审计事实，不能闭合 3.3.3/5.1。
+- test-cn 数据库只读核验：在 Pod 内使用迁移 DSN 只读查询，不打印 DSN/密码/PII。`enterprise.tenants=4`、`oms.school_bindings=3` 且三条绑定为 `verified`；`eduplus2.webhook_school_state=0`、`eduplus2.lifecycle_actor_candidates=0`、`management.principals=0`、`management.assignments=0`、`management.audit_events=0`。按 RLS 上下文设置 `app.management_app=oms/tms` 后可见本地 action/role 模板：OMS active actions 24、role actions 40，TMS active actions 9、role actions 18。结论：rc.64 已具备权限目录/模板和学校绑定底座，但当前 test-cn 未保留可验收的真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）、TMS 首管 principal/assignment 或管理审计事实，不能闭合 3.3.3/5.1。
 - 本轮发现并修复的问题：
   - `ruff check extensions/enterprise/src extensions/enterprise/tests` 发现 `extensions/enterprise/tests/test_frontend_gateway.py` import 顺序不符合 isort，已仅重排 import。
   - `npm run lint --prefix extensions/enterprise/frontends` 发现 `OmsFormalApp` 在 effect 内同步 `setLoginHref` 触发 `react-hooks/set-state-in-effect`，并发现 `TmsFormalApp` 数据加载 effect 缺少 `schoolCode` 依赖；已改为点击时计算 OMS 登录 URL，并让 TMS effect 随 `schoolCode` 变化重新 loading/load。
 - 本地回归：修复后 `npm test --prefix extensions/enterprise/frontends -- --run` → **27 files / 281 tests passed**；`npm run typecheck:oms`、`npm run typecheck:tms`、`npm run lint` 均通过。企业后端全量 `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests --tb=short` → **800 passed / 3 skipped / 2 warnings**；Core/WS 兼容定向 → **41 passed / 4 warnings**。`ruff check extensions/enterprise/src extensions/enterprise/tests` 通过；`openspec validate --all --strict` → **30 passed / 0 failed**；`git diff --check` 通过。
 - 质量风险记录：`ruff format --check extensions/enterprise/src extensions/enterprise/tests` 在当前工具版本下会要求重排约 58 个既有文件，范围远超本轮变更且未见 Woodpecker test-cn 发布流程执行该全量 format check；本轮未盲目格式化历史文件，避免引入大面积无关 diff。若后续决定把全量 Ruff formatter 纳入硬门禁，应单独做一次纯格式化变更并独立验证。
-- 未完成门禁：真实 `eduplus-platform-admin` 授权码登录 + active 账号状态、真实 `subscription.created.actor.user_id` 与后续 OIDC `sub` 合同、真实 TMS 双学校正负例、目录策略合同、审批竞态真实环境与 5.1 开闸仍未闭合；本轮不勾选这些任务。
+- 未完成门禁：真实 `eduplus-platform-admin` 授权码登录 + active 账号状态、真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）与后续 OIDC `sub` 合同、真实 TMS 双学校正负例、目录策略合同、审批竞态真实环境与 5.1 开闸仍未闭合；本轮不勾选这些任务。
+
+### 2026-09-29 test-cn rc.67 管理授权复测
+
+在 `deploy/test-cn/v1.4.0-rc.67` / Woodpecker pipeline `#83` 部署成功后，对正式 OMS/TMS 与管理授权边界做公网黑盒和集群只读复测：
+
+- K8s：`deeptutor-backend`、`deeptutor-docs` 均 `READY 1/1`，migration Job `dt-migrate-test-cn-v1-4-0-rc-67` `Complete 1/1`；backend 当前 digest 为 `runtime@sha256:a4baec7e1e593d653f4760fc0c1134bf13fb5414358ec509025e3933cec1667d`。
+- HTTP/API：`output/test-cn-smoke/rc67/http-blackbox-v2.json` 56 个用例全部通过。未认证和伪造 Bearer 的 OMS/TMS 管理读接口均 401/403；按合法 DTO 形态构造的 TMS 自定义角色、成员授予、撤权、审批创建/复核/撤回/apply，以及 OMS 审批、平台主体授予/撤权/禁用写接口，未认证和伪造 Bearer 均 401/403，没有因请求体合法而越过认证。旧 OMS 学校开通深链 `/oms/tms-bootstrap` 与 `/oms/tms-bootstrap-requests` 均 404。
+- 浏览器：系统 Chrome 打开 `/oms`、`/tms/demo-school`、`/docs/`，无 pageerror、5xx 或非预期 4xx；正式 `/oms` 显示“正式入口未开放 / ops.* 本地授权未通过”，正式 `/tms/demo-school` 显示“学校入口未开放 / 401 Authentication required”，均不回退开发原型、不显示授予/撤销/审批/新增写按钮。截图位于 `output/playwright/rc67/`。
+- Auth redirect：`/api/v1/oms/auth/start` 303 到 `eduplus-auth-test.f123.pub`，`client_id=eduplus-platform-admin`，`redirect_uri=https://llm-agent-test.f123.pub/oms/auth/callback`；EduPlus2 demo start 同样生成公网 callback `/api/v1/auth/eduplus2/demo/callback`。
+- DB 只读计数：`enterprise.tenants=4`，`oms.school_bindings=3` 且 verified=3；当前 test-cn 仍为 `eduplus2.webhook_school_state=0`、`eduplus2.lifecycle_actor_candidates=0`、`management.principals=0`、`management.assignments=0`、`management.audit_events=0`。RLS 上下文下可见 OMS role_actions=40、TMS role_actions=18。
+- 外部登录限制：`eduplus2_fronting_app_smoke.py --real` 的 discovery/JWKS、M2M token、resolve 为 ok，但本地 user JWT 已过期，exchange 失败。使用 `.secrets/.login-credentials` 中 admin/teacher 和验证码 `8888` 的真实浏览器 OMS 授权码登录尝试仍停留在 EduPlus2 登录动作页并显示上游登录错误，未回跳到 DeepTutor，未取得 code/token/cookie，未执行任何管理写入。未输出账号、密码、token、Cookie 或真实用户 PII。
+
+结论：rc.67 可采信为正式 OMS/TMS fail-closed、旧学校开通入口移除、未认证/伪造凭据不可访问管理读写 API、Webhook 首管“无需单独开通”本地实现未被前端反向开口破坏的 test-cn 部署证据；但由于目标环境仍无可登录的真实 OIDC 用户会话、无真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）/`sub` 匹配记录、无 TMS 首管 principal/assignment，任务 1.2.4、2.1.4、2.2.3、3.3.3、4.3.2.8 的真实双学校/错校/目录/登录矩阵以及 5.1 正式开闸仍不能勾选。
+
+### 2026-09-29 test-cn 三学校真实订阅 Webhook 即时首管验证
+
+用户在 test-cn 触发 3 个学校的真实订阅后，使用 `kubectl-env` 只读监控 `deeptutor-test-cn` backend 与 PostgreSQL。未输出 webhook Secret、DSN、token、Cookie、真实学校名、真实用户或外部 ID。
+
+监控过程：初始未设置 `app.tenant_id` 的直接计数显示 `eduplus2.webhook_school_state=0`、`management.assignments=0`，但同时观察到 `enterprise.tenants` 从 4 增至 7、`oms.school_bindings` 从 3 增至 6。随后按每个可见 tenant 设置 `app.tenant_id`、并按 TMS 设置 `app.management_app=tms` 做 RLS-aware 聚合，确认前述 0 为未设置 tenant scope 的可见性误判。
+
+脱敏聚合结果：
+
+```text
+tenant_count=7
+lifecycle_inbox_total=8
+webhook_school_state_total=12
+lifecycle_actor_candidates_total=6
+management_principals_total=3
+management_assignments_total=3
+management_audit_events_total=3
+tms_school_admin_active_total=3
+tenants_with_one_active_school_admin=3
+tenants_with_multiple_active_school_admin=0
+```
+
+按 tenant-scope 分布复核：3 个不同 school tenant 各有 `active_principals=1`、`active_school_admin_assignments=1`、`bootstrap_audit_success=1`；owner/平台 tenant 可见 `lifecycle_inbox=8`、`actor_candidates_consumed=3`。这证明真实 `subscription.created` 已进入 DeepTutor lifecycle inbox，并按“学校管理员无需单独开通，接收到 webhook 订阅立即开启”的规则，为 3 个学校分别创建/激活唯一 TMS `school_admin` assignment，同时记录 bootstrap 审计。
+
+仍未闭合项：本轮证明真实 webhook actor 已被消费并即时开启首位 TMS 管理员，但尚未证明这些 actor 对应用户后续 OIDC 登录时的 `sub`/身份合同、TMS 页面携带真实 bearer 后可进入、错学校码/双学校跨校负例、真实目录策略和撤权/恢复事件矩阵。因此 3.3.3 可新增真实 webhook 证据，但 1.2.4、2.1.4、2.2.3、4.3.2.8 与 5.1 仍需后续真实登录/负例验收。
+
+### 2026-09-29 test-cn OIDC 登录与 Webhook actor 哈希比对
+
+在三学校真实订阅 Webhook 已即时创建 3 个 TMS `school_admin` assignment 后，使用 `.secrets/.login-credentials` 中账号做真实 EduPlus2 fronting 登录比对；未输出用户名、密码、token、Cookie、真实姓名、学校名或原始 user_id，仅记录短哈希与状态。
+
+- `admin` 可完成普通 fronting 登录，`external_user_hash=sha256:8ecb5bcd8cd84cc3`，不匹配本轮 3 个 consumed webhook actor hash。
+- `teacher` 普通 fronting 登录失败，仍停留在 EduPlus2 登录动作页。
+- `.secrets/.login-credentials` 中 17 个去重学生账号全部尝试：16 个可完成普通 fronting 登录并获得 demo `dt_token`，1 个登录失败；16 个成功登录用户的 `external_user_hash` 均不匹配本轮 3 个 consumed webhook actor hash。
+- 第一个成功学生登录的 demo result 包含 `dt_token`，但用该 token 调 `/api/v1/tms/me/permissions` 返回 401；该学生并非本轮 Webhook actor 或当前 TMS 首管。
+
+结论：本轮已证明真实 webhook actor 被消费并即时开启了 3 个学校的 TMS 首位管理员；但 `.secrets/.login-credentials` 中现有可登录账号并不对应这些 actor，或 EduPlus2 的 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）与 OIDC token 的 `eui/sub` 不是同一字段。还需要 EduPlus2 提供 `actor.user_id` ↔ OIDC `sub`/`eui` 的映射合同，或提供本轮 3 个 actor 对应的可登录账号，才能闭合“后续 OIDC 登录即识别为学校管理员”的真实验收。
+
+### 2026-09-29 Webhook documented actor identity 持久化修正
+
+- 发现与根因：用户要求重新核对 EduPlus2 `subscription.created` 文档。文档示例中的 actor 字段为 `user_id`、`eduplus_user_id`、`external_user_id`、`external_source`、`name`、`type`；OIDC 文档中 access token 同时提供 `sub`、`eui`、`ees`、`eei`。此前实现只持久化 `actor.user_id`，丢弃其余 documented actor 字段，导致后续无法把真实 Webhook actor 与 OIDC `sub`/`eui`/`eei`/`ees` 做脱敏合同核验。
+- 修正：继续按文档使用 `actor.user_id` 作为 TMS principal subject / 后续 OIDC `sub` 匹配候选；新增 `actor_context`，在 `eduplus2.lifecycle_inbox` 与 `eduplus2.lifecycle_actor_candidates` 中持久化 `user_id`、`eduplus_user_id`、`external_user_id`、`external_source`，并只保存 `name_sha256`，不落真实姓名明文。Webhook 即时开启仍要求 `actor.type=user`、真实签名、目标应用/学校绑定和一次性栅栏。
+- 红绿验证：先新增 `test_created_actor_persists_documented_identity_fields_without_name_pii`，旧 schema/实现因缺少 `actor_context` 字段失败（`psycopg.errors.UndefinedColumn: column "actor_context" does not exist`）；实现迁移与写入后该测试通过。
+- 已运行（本轮最新）：`PYTHONPATH=. .venv/bin/python -m pytest -q extensions/enterprise/tests/test_webhook_authority.py::test_created_actor_persists_documented_identity_fields_without_name_pii` → `1 passed in 1.56s`；`PYTHONPATH=. .venv/bin/python -m pytest -q extensions/enterprise/tests/test_webhook_authority.py` → `43 passed in 25.70s`；`PYTHONPATH=. .venv/bin/python -m pytest -q extensions/enterprise/tests/test_lifecycle_reconcile.py extensions/enterprise/tests/test_lifecycle_reconcile_tenant_value_validation.py extensions/enterprise/tests/test_webhook_tenant_value_validation.py` → `55 passed in 22.13s`；`.venv/bin/ruff check extensions/enterprise/src/deeptutor_enterprise/eduplus2/lifecycle.py extensions/enterprise/src/deeptutor_enterprise/eduplus2/webhook_authority.py extensions/enterprise/tests/test_webhook_authority.py` → `All checks passed!`；`openspec validate add-enterprise-management-authorization --strict` → valid；`git diff --check` → 通过。
+- 仍需真实证据：需要重新部署后由真实 `subscription.created` 事件写入 actor context，再以真实 TMS OIDC 登录 token 的 `sub`/`eui`/`eei`/`ees` 做脱敏匹配矩阵；旧已消费事件缺少新增 context，不能猜测补齐。

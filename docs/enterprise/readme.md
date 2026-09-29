@@ -11,7 +11,7 @@
 - **唯一主线**：阶段一单租户 Kubernetes 上线 → 阶段二 EduPlus2 多租户及每租户自己的管理界面 → 阶段三统一运营管理后台。
 - **直接替换**：第一阶段就使用 PostgreSQL + S3-compatible；不开发 POC、租户独立部署、文件型多租户或双写过渡版本。
 - **学校域术语与界面边界**：在 EduPlus2 教育业务中，一个技术 `tenant` 即一所学校，`school_code` 即该学校的 tenant code；业务界面统一称“学校”。保留 TMS 技术缩写及 `/tms` 路径，对外名称为**学校智能体管理后台**；OMS（Operations Management System，平台运营管理系统，非订单管理）采用 `/oms`。保留 `tenant_id`、`tenant.*` 等技术契约而不全仓重命名；`school_code` 不是授权凭据，也不能替代学校 ID。正式 TMS 使用 `/tms/{schoolCode}`，核对已验证账号的学校绑定与本产品 `tenant.*` 授权后才展示该学校数据；原型与正式路由的实施状态以相应 OpenSpec 为准。
-- **管理 API**：专属接口分别采用 `/api/v1/tms/*`、`/api/v1/oms/*`；`tenant.*` / `ops.*` 能力 key 不因页面名称改名。M1 固定学校能力须走真实受保护入口；B1/B2 的独立 TMS 只管理当前学校 client/app 与内部资源，并只读 OMS 所配置的服务授权/额度；OMS 可查询已归口 client，但不注册或注销，也不管理学校账号；首位 TMS 管理员由签名真实 `subscription.created.actor.user_id` 登记、本人 TMS 登录匹配后由 Enterprise 程序一次性激活。第三方调用仍按 EduPlus2 JWT `tid` 绑定可信学校。详见 [11](11-api-and-entrypoints.md)。
+- **管理 API**：专属接口分别采用 `/api/v1/tms/*`、`/api/v1/oms/*`；`tenant.*` / `ops.*` 能力 key 不因页面名称改名。M1 固定学校能力须走真实受保护入口；B1/B2 的独立 TMS 只管理当前学校 client/app 与内部资源，并只读 OMS 所配置的服务授权/额度；OMS 可查询已归口 client，但不注册或注销，也不管理学校账号；首位 TMS 管理员由签名真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）在 Webhook 接收事务内由 Enterprise 程序即时开启。第三方调用仍按 EduPlus2 JWT `tid` 绑定可信学校。详见 [11](11-api-and-entrypoints.md)。
 - **多租户从首发设计**：A1 固定内部 tenant/user、KB/index-version 和授权边界，A2/G1 验证双租户及同租户私有 KB 负例；B1/B2/G2 才开放真实多租户。应用 binding、内部 ID 与 LightRAG 内部存储映射不因外部身份绑定而搬迁。
 - **执行粒度**：M1=A1/A2/A3，M2=B1/B2，M3=C1/C2；工作包不等于单独生产版本。
 - **并行准备**：K8s 集成环境、Woodpecker 流水线开发与 EduPlus2 注册/契约准备从 A1 起并行，不阻塞为单独过渡阶段。
@@ -90,7 +90,7 @@ OpenSpec 正式 specs、活跃 changes 的 tasks/证据与 [02 执行总纲](02-
 | [09-authorization-and-grants.md](09-authorization-and-grants.md) | M2 / B1–B2：业务权限 | 外部身份/学校核验、OMS/TMS 本产品权限、grants、client/app 注册唯一性与审计 |
 | [10-user-data-sync-and-webhooks.md](10-user-data-sync-and-webhooks.md) | M2 / B1–B2：数据与事件 | 首租户可先不依赖 Webhook；随后多租户同步、Webhook 与周期对账 |
 | [11-api-and-entrypoints.md](11-api-and-entrypoints.md) | M2 / B1–B2：入口联调 | HTTP/WS/SDK、token exchange、TMS/OMS client API 与外部能力入口契约 |
-| [12-platform-operations-admin.md](12-platform-operations-admin.md) | M2 / B2 → M3 / C1–C2：管理界面 | TMS 当前学校自管及真实订阅 actor 一次性首位管理员本人激活、双域权限矩阵及 UI、迁移与验收 |
+| [12-platform-operations-admin.md](12-platform-operations-admin.md) | M2 / B2 → M3 / C1–C2：管理界面 | TMS 当前学校自管及真实订阅 actor 一次性首位管理员即时开启、双域权限矩阵及 UI、迁移与验收 |
 | [13-deployment-and-upstream-sync.md](13-deployment-and-upstream-sync.md) | 贯穿全程：扩展与持续维护 | 配置/插件/外壳可行性、企业包与通用补丁边界、组合制品及 upstream 回归 |
 | [eduplus2-fronting-app-integration-contract.md](eduplus2-fronting-app-integration-contract.md) | P1：前置应用接入联调 | exchange、HTTP/SDK、WS refresh、错误矩阵、配置矩阵、审计排障与 smoke 命令；不代表 TMS/OMS 或生产上线完成 |
 | [eduplus2-oauth-client-resolve-api-proposal.md](eduplus2-oauth-client-resolve-api-proposal.md) | 可转发给 EduPlus2 团队的接口需求 | 通用 `POST /api/v1/open/oauth-clients/resolve` 设计；按 `client_id` 解析 app/tenant/status/policy，不含 DeepTutor 定制语义 |

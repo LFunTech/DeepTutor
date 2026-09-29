@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 import hashlib
 import hmac
 import json
 import re
 from typing import Any
+
+from psycopg.types.json import Jsonb
 
 from deeptutor.persistence.postgres.tenant_state import validate_tenant_business_values
 
@@ -65,6 +67,7 @@ class LifecycleEvent:
     tenant_type: str
     school_code: str
     semantic_digest: str
+    actor_context: dict[str, str] = field(default_factory=dict)
 
 
 def _row_get(row, key: str, default=None):
@@ -142,6 +145,28 @@ def _safe_text(value: Any, *, max_length: int, required: bool = False) -> str:
     return value
 
 
+_ACTOR_CONTEXT_KEYS = ("user_id", "eduplus_user_id", "external_user_id", "external_source")
+
+
+def _actor_identity(actor: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    """提取 subscription.created 文档定义的 actor 身份字段。
+
+    `actor.user_id` 是用于匹配 OIDC `sub` 的主体候选；`eduplus_user_id`、
+    `external_user_id` 与 `external_source` 作为上下文持久化，方便后续和 JWT
+    `eui`/`eei`/`ees` 做脱敏合同核验。`name` 不落原文，只保存 hash。
+    """
+
+    context: dict[str, str] = {}
+    for key in _ACTOR_CONTEXT_KEYS:
+        value = _safe_text(actor.get(key), max_length=255)
+        if value:
+            context[key] = value
+    name = _safe_text(actor.get("name"), max_length=255)
+    if name:
+        context["name_sha256"] = hashlib.sha256(name.encode("utf-8")).hexdigest()
+    return context.get("user_id", ""), context
+
+
 def parse_lifecycle_event(
     payload: dict[str, Any], event_type: str, *, digest_key: str
 ) -> LifecycleEvent:
@@ -180,10 +205,11 @@ def parse_lifecycle_event(
         raise LifecycleInvalid("invalid event actor")
     actor_type = ""
     actor_subject = ""
+    actor_context: dict[str, str] = {}
     if event_type == "subscription.created" and actor:
         actor_type = _safe_text(actor.get("type"), max_length=32)
         if actor_type == "user":
-            actor_subject = _safe_text(actor.get("user_id"), max_length=255)
+            actor_subject, actor_context = _actor_identity(actor)
     projection = {
         "event_type": event_type,
         "tenant_id": tenant_id,
@@ -211,6 +237,7 @@ def parse_lifecycle_event(
         tenant_type=tenant_type,
         school_code=school_code,
         semantic_digest=digest.hexdigest(),
+        actor_context=actor_context,
     )
 
 
@@ -234,8 +261,8 @@ async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_
                 INSERT INTO eduplus2.lifecycle_inbox(
                   tenant_id,event_id,semantic_digest,event_type,external_tenant_id,
                   external_app_id,external_subscription_id,subscription_status,
-                  client_id,actor_subject,actor_type,delivery_timestamp
-                ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                  client_id,actor_subject,actor_type,actor_context,delivery_timestamp
+                ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (tenant_id,event_id) DO NOTHING
                 RETURNING event_id
                 """,
@@ -251,6 +278,7 @@ async def ingest_lifecycle_event(enterprise, event: LifecycleEvent, *, delivery_
                     event.client_id,
                     event.actor_subject,
                     event.actor_type,
+                    Jsonb(event.actor_context or {}),
                     delivery_timestamp,
                 ),
             )
@@ -591,9 +619,9 @@ async def _reconcile_lifecycle_target_locked(
             await c.execute(
                 "INSERT INTO eduplus2.lifecycle_actor_candidates("
                 "tenant_id,event_id,school_id,external_tenant_id,external_app_id,"
-                "external_subscription_id,binding_version,actor_issuer,actor_subject) "
+                "external_subscription_id,binding_version,actor_issuer,actor_subject,actor_context) "
                 "SELECT i.tenant_id,i.event_id,%s,i.external_tenant_id,i.external_app_id,"
-                "i.external_subscription_id,%s,%s,i.actor_subject "
+                "i.external_subscription_id,%s,%s,i.actor_subject,i.actor_context "
                 "FROM eduplus2.lifecycle_inbox i "
                 "WHERE i.tenant_id=%s AND i.external_tenant_id=%s AND i.external_app_id=%s "
                 "AND i.event_type='subscription.created' AND i.actor_type='user' "

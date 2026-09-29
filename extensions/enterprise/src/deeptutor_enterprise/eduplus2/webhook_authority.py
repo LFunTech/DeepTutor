@@ -233,8 +233,8 @@ async def _open_first_school_administrator_from_webhook(
         await c.execute(
             "INSERT INTO eduplus2.lifecycle_actor_candidates(tenant_id,event_id,"
             "school_id,external_tenant_id,external_app_id,external_subscription_id,"
-            "binding_version,actor_issuer,actor_subject,status,resolved_at) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'consumed',clock_timestamp()) "
+            "binding_version,actor_issuer,actor_subject,actor_context,status,resolved_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'consumed',clock_timestamp()) "
             "ON CONFLICT (tenant_id,event_id) DO NOTHING",
             (
                 owner,
@@ -246,6 +246,7 @@ async def _open_first_school_administrator_from_webhook(
                 binding_version,
                 issuer,
                 event.actor_subject,
+                Jsonb(event.actor_context or {}),
             ),
         )
         await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
@@ -314,8 +315,9 @@ async def ingest_authoritative_webhook(
             await c.execute(
                 "INSERT INTO eduplus2.lifecycle_inbox(tenant_id,event_id,semantic_digest,"
                 "event_type,external_tenant_id,external_app_id,external_subscription_id,"
-                "subscription_status,client_id,actor_subject,actor_type,delivery_timestamp) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "subscription_status,client_id,actor_subject,actor_type,actor_context,"
+                "delivery_timestamp) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (tenant_id,event_id) DO NOTHING RETURNING event_id",
                 (
                     owner,
@@ -329,6 +331,7 @@ async def ingest_authoritative_webhook(
                     event.client_id,
                     event.actor_subject,
                     event.actor_type,
+                    Jsonb(event.actor_context or {}),
                     delivery_timestamp,
                 ),
             )

@@ -18,7 +18,7 @@ DeepTutor 不作为用户身份主系统：
 
 - **不提供普通用户注册**：注册、开户、学校绑定、身份分配、停用和撤权均在 EduPlus2 完成。
 - **只有 TMS/OMS 需要 DeepTutor 登录入口**：`/tms` 面向租户管理员，`/oms` 面向平台运营/审计人员；两者登录均对接 EduPlus2。
-- **OMS 权限不等于外部身份**：2026-09-27 用户明确 EduPlus2 在权限链路中仅作为认证和稳定身份识别来源；OMS `ops.*` 与 TMS `tenant.*` 动作、学校操作范围及本应用撤权由 DeepTutor Enterprise 程序按本地 PG 事实判定，不靠 PG 用户/GRANT/RLS 或外部角色作决定。本代理不修改 EduPlus2。两端会话、audience、权限目录分离，首次登录默认零权；OMS 仅管理平台人员及其 OMS 授权；TMS 首位学校管理员由签名真实 `subscription.created.actor.user_id` 一次性登记、本人登录匹配后由 Enterprise 程序激活；mock/system/null 或身份不匹配保持零权。
+- **OMS 权限不等于外部身份**：2026-09-27 用户明确 EduPlus2 在权限链路中仅作为认证和稳定身份识别来源；OMS `ops.*` 与 TMS `tenant.*` 动作、学校操作范围及本应用撤权由 DeepTutor Enterprise 程序按本地 PG 事实判定，不靠 PG 用户/GRANT/RLS 或外部角色作决定。本代理不修改 EduPlus2。两端会话、audience、权限目录分离，首次登录默认零权；OMS 仅管理平台人员及其 OMS 授权；TMS 首位学校管理员由签名真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）在 Webhook 接收事务内由 Enterprise 程序即时开启；mock/system/null 或身份不匹配保持零权。
 - **普通第三方应用调用不再次登录**：用户已经在前置业务系统或 EduPlus2 完成登录时，调用方只传递 EduPlus2 user JWT，DeepTutor 静默验签/换发短期 `dt_token`。
 - **DeepTutor 只负责资源服务职责**：验证外部身份结果、建立内部 tenant/user/app 映射、执行能力与资源授权、记录审计和追踪。
 

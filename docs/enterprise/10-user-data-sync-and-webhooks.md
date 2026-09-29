@@ -1,6 +1,6 @@
 # 10. 用户数据同步与 Webhook 方案
 
-> **2026-09-27 新权威边界（实施中）**：学校接入及订阅生命周期只采信目标应用的已验签真实 Webhook，取消 online resolve 二次核验与周期证明 TTL；EduPlus2 OIDC/JWKS 仍负责用户认证，DeepTutor Enterprise 自行决定权限。`rc.53` 已在 test-cn 收到真实非 mock terminated/created；另对获批准的独立测试学校完成新增订阅→暂停→恢复，Webhook 成功，PG 资格 `allowed→denied→allowed`，而本地 AI 开关仍关闭、资源仍 pending。正式 TMS 尚未交付，actor 本人登录/首管激活归管理授权/TMS 提案，不把当前候选登记写成可用管理员。多学校 **AI 运行时**由 B1/B2、OMS/TMS 另行实施，不是 Webhook 数据库链路的前置。下文旧在线核验切片仅是历史现状，见 `add-b2-eduplus2-tenant-lifecycle-webhook` 最新 proposal/design/spec/tasks。
+> **2026-09-27 新权威边界（实施中）**：学校接入及订阅生命周期只采信目标应用的已验签真实 Webhook，取消 online resolve 二次核验与周期证明 TTL；EduPlus2 OIDC/JWKS 仍负责用户认证，DeepTutor Enterprise 自行决定权限。`rc.53` 已在 test-cn 收到真实非 mock terminated/created；另对获批准的独立测试学校完成新增订阅→暂停→恢复，Webhook 成功，PG 资格 `allowed→denied→allowed`，而本地 AI 开关仍关闭、资源仍 pending。正式 TMS 尚未交付，actor 首管即时开启和后续 OIDC `sub` 匹配验收归管理授权/TMS 提案。多学校 **AI 运行时**由 B1/B2、OMS/TMS 另行实施，不是 Webhook 数据库链路的前置。下文旧在线核验切片仅是历史现状，见 `add-b2-eduplus2-tenant-lifecycle-webhook` 最新 proposal/design/spec/tasks。
 
 ## 阶段边界
 

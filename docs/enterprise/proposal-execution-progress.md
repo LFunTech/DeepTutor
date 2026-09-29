@@ -7,7 +7,7 @@
 ## 当前决策与执行原则
 
 - 生产验收主线仍为 **M1/G1 固定租户运行与发布 → B1/B2/G2 可信多租户及 TMS → C1/C2/G3 完整 OMS**。规划、契约、原型和环境准备可提前并行；前置验收不通过时，不开放下游生产能力。
-- DeepTutor 是本地部署产品；云端 OMS、TMS 分别构建和部署，共享安全的管理业务组件，不共享应用源码、数据权限或生产 fixture。OMS 是平台资源、服务供给、学校服务授权及赠送/充值额度的唯一写入权威；TMS 仅管理当前学校内部事务并只读额度与真实消耗。两端本产品权限统一由 DeepTutor Enterprise 程序按 PG 事实判定（数据库权限/RLS 非操作者授权）、应用域/会话分离、首次登录零权；首位学校管理员由真实订阅事件 actor 一次性登记并本人登录匹配激活，OMS 不管理学校账号。
+- DeepTutor 是本地部署产品；云端 OMS、TMS 分别构建和部署，共享安全的管理业务组件，不共享应用源码、数据权限或生产 fixture。OMS 是平台资源、服务供给、学校服务授权及赠送/充值额度的唯一写入权威；TMS 仅管理当前学校内部事务并只读额度与真实消耗。两端本产品权限统一由 DeepTutor Enterprise 程序按 PG 事实判定（数据库权限/RLS 非操作者授权）、应用域/会话分离、首次登录零权；首位学校管理员由真实订阅事件 actor 在 Webhook 接收事务内即时开启，OMS 不管理学校账号。
 - 取消旧租户 Token 售价、费用、欠费停机和 EduPlus2 独立“欠费模型资格”闭环。额度耗尽只拒绝对应服务的新调用，不能阻断登录、管理、历史或其他服务；EduPlus2 仍独占租户生命周期权威。
 - 保持 `upstream/main` 可合并：企业专有逻辑优先放 `extensions/enterprise/`；核心仅允许经单独审阅的通用 seam，并在受影响 CLI、HTTP/WS、SDK、后台路径及身份、session ownership、审计关联上留回归证据。
 - [02 实施总纲](02-rollout-testing-and-migration.md)、[11 入口](11-api-and-entrypoints.md)、[12 管理](12-platform-operations-admin.md) 已同步独立前端、OMS 可维护全服务配置与权益、TMS 额度只读及无租户费用/欠费的新边界。其他历史文档若仍保留旧叙述，不得作为实施依据。
@@ -19,7 +19,7 @@
 | **P0：契约与进度收敛，现在并行** | OMS 当前权威修订版及直接依赖 change 已分别获批并完成 6.1 文档复核；Enterprise 程序授权/真实订阅 actor 首位引导的实施与外部合同仍待验收；08/09/11/12 与旧入口文案已同步。TMS 业务契约与双端开发态原型浏览器审计已留证；正式身份、权限与执行者合同仍待实施。旧计费/欠费目标已批准退役但未归档/同步旧 spec。未受权威变更影响的内部事务可按原授权继续隔离验证；新平台权限、正式跨校写 API 和受影响前端须完成各自实施与验收门禁，P0 不放行真实租户数据或生产上线。 | 新旧方案无冲突；原型任务与依赖未来生产实现的任务分清，不以 fixture 宣称真实能力；既存外部身份/账号/学校接口仍须针对 OMS/TMS 适用性分别确认；TMS 管理员权限 webhook 不再是本产品授权依赖。 |
 | **P1：M1/G1** | 完成固定租户 runtime 基线的确认门禁；继续 G1 各目标环境的真实 Ingress/TLS、EduPlus2、HTTP/WS、资源、LightRAG、回退、安全和证据验证。P0 的文档/原型工作可与之并行。 | M1 所需运行路径与目标环境 G1 门禁有真实证据；仅通过构建/部署或无 token 的 WS 负向探针不算完整登录与 turn smoke。 |
 | **P2：B1/B2 身份与隔离** | [`add-b1-b2-trusted-school-integration`](../../openspec/changes/add-b1-b2-trusted-school-integration/proposal.md) 已获单独批准实施，覆盖最终 B1 接入和 B2 多学校可信绑定、RLS/资源/任务隔离；先用真实首校验证，再开放多校；不使用 `eit=adm` 或旧 `tenant_admin` 默认授予 TMS 管理权。EduPlus2 lifecycle webhook 负责学校状态与对账；真实 `subscription.created.actor` 另向本系统提供一次性首位管理员身份线索，不作为外部权限判定。内部合成验证可提前，生产开放受本波门禁约束。 | 首校接入及双学校全入口隔离通过；签名事件、乱序/重放、恢复和本地隔离状态不被外部事件覆盖均有证据。 |
-| **P3：平台公共数据面，可按依赖并行** | 先完成可信平台/学校身份、DeepTutor 双域动作权限、TMS 真实订阅 actor 一次性首位管理员本人激活及 OMS/TMS 管理 API 边界；随后全服务 Provider/Secret 生效链与逐调用 Token/非 Token 原生单位用量总账可并行。TMS 的本租户 client、资源授权、KB/文档纵向切片可在 P2 可信身份后并行，但不能预支 OMS 权益或使用假额度。 | 平台资源/权益写入仅由授权 OMS 路径执行，学校首位管理员由 Enterprise 受控事件引导和本人激活，后续角色由 TMS 本校授权服务管理；旧云端管理旁路关闭；配置有执行者 active 确认；可信 usage 缺失时保留待核对，不按零结算。 |
+| **P3：平台公共数据面，可按依赖并行** | 先完成可信平台/学校身份、DeepTutor 双域动作权限、TMS 真实订阅 actor 一次性首位管理员即时开启及 OMS/TMS 管理 API 边界；随后全服务 Provider/Secret 生效链与逐调用 Token/非 Token 原生单位用量总账可并行。TMS 的本租户 client、资源授权、KB/文档纵向切片可在 P2 可信身份后并行，但不能预支 OMS 权益或使用假额度。 | 平台资源/权益写入仅由授权 OMS 路径执行，学校首位管理员由 Enterprise 受控事件即时开启，后续角色由 TMS 本校授权服务管理；旧云端管理旁路关闭；配置有执行者 active 确认；可信 usage 缺失时保留待核对，不按零结算。 |
 | **P4：供给、权益、TMS/G2** | 以新 change 交付服务供给 → OMS 租户授权/统一赠送与充值配额 → 预留/真实调用/核对闭环；OMS 至少要有受控、可审计的授权与配额写入路径。再将 TMS 当前租户配额/用量只读投影、应用/client、成员/资源/Skill 权限和独立前端接入真实 API，完成 G2。 | 未确定 OMS 在 B2 前如何安全配置服务授权和额度时，**不得用手工改库或原型 fixture 放行 TMS/G2**；TMS 无配额写路由、OMS 专有字段或跨租户数据，额度耗尽只影响对应服务。 |
 | **P5：完整 OMS/C1/C2/G3** | 数据面及平台权限稳定后，将独立 OMS 正式界面接入真实平台资源、供给、权益、用量、审计 API；先完成 C1 可用闭环，再完成 C2 治理和 G3。旧运营界面提案须按新 IA 重订。 | 五类资源、全服务配置、供给/权益/实际消耗及异常核对端到端通过；菜单、动作、API 权限一致；不出现旧费用/欠费功能。 |
 
@@ -36,7 +36,7 @@
 | 3. Global Skill 管理 | `add-enterprise-oms-business-logic` 6.5；`add-enterprise-management-authorization` 3.2；TMS 对应 `add-enterprise-tms-business-logic` 5.7 | OMS 管 global/builtin Skill 的登记、审核、发布、学校授权和运行时过滤；TMS 只管本校 tenant ZIP，自用且不二次分配额度。 |
 | 4. 执行前准入与用量 | `add-enterprise-oms-business-logic` 7.4、7.5；`add-enterprise-exact-token-usage-ledger` 2.3、3.1 | CLI/HTTP/WS/SDK/后台/Agent 子调用在发出前完成授权、配置 ready、供给/额度预留；真实 usage/原生单位结算，未知保留待核对，不按零释放。 |
 | 5. 正式 OMS UI | `add-c1-c2-oms-operator-interface` 1.2、2.x、3.x、4.x | 独立 OMS 前端只接真实 `/api/v1/oms/*` 和 `/me/permissions`；未启用/无权安全降级，不使用 fixture 或旧原型；平台人员/角色/学校范围不包含学校账号开通。 |
-| 6. 学校侧闭环 | `add-enterprise-tms-business-logic` 4.x、5.x、6.x、7.x；`add-b1-b2-trusted-school-integration` 3.x | TMS 消费 Webhook 学校有效投影和首位 actor 本人激活，管理本校成员/应用/资源/tenant Skill；只读 OMS 配额/用量，不写额度或 Secret。 |
+| 6. 学校侧闭环 | `add-enterprise-tms-business-logic` 4.x、5.x、6.x、7.x；`add-b1-b2-trusted-school-integration` 3.x | TMS 消费 Webhook 学校有效投影和首位 actor 即时开启，管理本校成员/应用/资源/tenant Skill；只读 OMS 配额/用量，不写额度或 Secret。 |
 
 ## 活跃 change 逐项进度与下一动作
 

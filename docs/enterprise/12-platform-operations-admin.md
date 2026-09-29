@@ -25,7 +25,7 @@ DeepTutor 本地设置字段、provider descriptor、条件字段、执行校验
 
 TMS 管理员在当前可信学校上下文登记 `client_id`；DeepTutor 调 EduPlus2 通用 `POST /api/v1/open/oauth-clients/resolve` 核验权威 app ID、学校 ID、名称和状态。返回学校必须与当前稳定绑定一致，不能凭路径 `school_code`、同名学校、请求 header 或人工输入代管其他学校。同 provider 的 active `client_id` 唯一；同校同 app 只允许一个 active client。冲突返回 409，跨校拒绝；注销保留历史审计，替换 client 先 retire/revoke 旧注册。OMS 仅在 `ops.clients.read` 下受控查询，不提供注册、注销或暂停；跨校修复若确需平台操作须另立授权流程。Token exchange 仍要求 JWT、active registration、学校/app 状态和审计，详见 [11](11-api-and-entrypoints.md)。
 
-学校管理员外部账号和学校归属来自 EduPlus2 已交付身份/在线账号/学校核验链路，各校隔离；本产品 `tenant.*` 由 DeepTutor Enterprise 程序按 PG 事实显式授权，`eit=adm` 或普通租户换票不授予 TMS 管理权。首位管理员身份由签名真实 `subscription.created.actor.user_id` 一次性登记，候选本人完成 TMS 登录并匹配后由 Enterprise 程序激活；OMS 不管理任何学校账号。DeepTutor 不另建 EduPlus2 密码或学校组织主数据。TMS 的用户、KB、应用管理必须只在当前学校 owner/grant 范围内，不能用菜单隐藏代替后端归属校验。本校额度及服务授权由 OMS 配置，TMS 只读；TMS 上传 tenant owner Skill 仅本校自用，与获授权 global 同名时先提醒并取得学校管理员确认，运行时 tenant 版本优先。DeepTutor builtin Skill 在云端作为只读 global，默认未授权，OMS 复核包版本并按校授权；本地 builtin 自动发现不变。
+学校管理员外部账号和学校归属来自 EduPlus2 已交付身份/在线账号/学校核验链路，各校隔离；本产品 `tenant.*` 由 DeepTutor Enterprise 程序按 PG 事实显式授权，`eit=adm` 或普通租户换票不授予 TMS 管理权。首位管理员身份由签名真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）在 Webhook 接收事务内由 Enterprise 程序即时开启；OMS 不管理任何学校账号。DeepTutor 不另建 EduPlus2 密码或学校组织主数据。TMS 的用户、KB、应用管理必须只在当前学校 owner/grant 范围内，不能用菜单隐藏代替后端归属校验。本校额度及服务授权由 OMS 配置，TMS 只读；TMS 上传 tenant owner Skill 仅本校自用，与获授权 global 同名时先提醒并取得学校管理员确认，运行时 tenant 版本优先。DeepTutor builtin Skill 在云端作为只读 global，默认未授权，OMS 复核包版本并按校授权；本地 builtin 自动发现不变。
 
 ## 服务供给、额度与实际消耗
 
@@ -49,7 +49,7 @@ TMS 管理员在当前可信学校上下文登记 `client_id`；DeepTutor 调 Ed
 | OMS 用量、核对、成本、审计/导出 | `ops.usage.read`、`ops.reconciliation.manage`、`ops.cost.read`、`ops.audit.read/export` 分权 | 成本/导出单独授权，待核对不伪作零；不读学校私有正文 |
 | OMS client/app、任务状态 | `ops.clients.read`、`ops.jobs.read` | 查询脱敏元数据，不在 OMS 注册 client 或任意重试/取消任务 |
 | OMS 平台人员角色与学校操作范围 | `ops.permissions.manage` + `platform` 授权治理，目标学校须核验；可授予动作/范围另受委托上界限制，不隐含目标学校业务读权 | 只维护 DeepTutor 产品权限，默认零权、受控初始管理员、版本/原因/审计/撤权；不编辑外部账号或学校 |
-| TMS 首位管理员本人激活 | 签名真实 `subscription.created.actor.user_id`、目标应用/学校绑定与本人 OIDC `sub` 匹配 | 仅 Enterprise 程序一次性激活该校首位 `school_admin`；mock/system/null、重放、错校或身份不匹配均不授权 |
+| TMS 首位管理员 Webhook 即时开启 | 签名真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）、目标应用/学校绑定；后续仍须用真实 OIDC `sub` 验收匹配合同 | 仅 Enterprise 程序一次性激活该校首位 `school_admin`；mock/system/null、重放、错校或身份不匹配均不授权 |
 
 正式 UI 在 OMS “审计与治理”下设平台人员、角色与动作、平台人员学校范围、授权审计；TMS 学校侧开通及“成员与权限”下设成员、学校角色、访问关系、授权记录。两端均为列表→聚焦详情→独立操作模态框，显示范围、角色版本、有效期、原因、权限差异、审批/撤权影响及审计编号。首次 TMS 待开通主体只能看事件 actor 待本人匹配/待核对状态，不看学校业务数据；OMS 不能搜任意外部 `sub` 直接赋权。401 重新登录、403 清理旧敏感缓存、409 回读版本、外部核验失败显示暂不可操作，不把错误伪装为空结果。
 

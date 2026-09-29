@@ -27,7 +27,7 @@
 | OMS 异常核对 | `ops.reconciliation.manage` (目标 `school`) | 无默认模板 | 后续仅经显式角色/委托发放；原型不能充当操作入口 |
 | OMS 平台人员、角色/动作、人员学校范围、授权审计 | `ops.permissions.manage` (`platform`) 启动写；每个待授 `ops.*` 另受委托上界；审计读另 `ops.audit.read` | security admin 只有治理动作，不自动拥有业务动作 | 原型 4 个页面已区分平台人员与学校账号；正式按钮、候选来源、双人审批、版本/审计回读未接 API |
 | TMS 学校概览、成员与权限 | `tenant.tms.access`、`tenant.members.read` (会话唯一 `school`) | school admin/operator/auditor | 学校码只作可信绑定一致性检查；目录查找须独立第三方应用用户令牌合同 |
-| TMS 角色/成员授予、撤权、授权记录 | `tenant.permissions.manage` (当前 `school`)；待授 `tenant.*` 另受委托上界 | school admin；首次登录不自动获得 | 首位管理员另用真实订阅 actor 一次性引导/本人激活流程，不能在直授表单给出；高风险角色待审批 API |
+| TMS 角色/成员授予、撤权、授权记录 | `tenant.permissions.manage` (当前 `school`)；待授 `tenant.*` 另受委托上界 | school admin；首次登录不自动获得 | 首位管理员另用真实订阅 actor 在 Webhook 接收事务内即时开启，不能在直授表单给出；高风险角色待审批 API |
 | TMS 应用/成员与服务访问 | `tenant.clients.manage`、`tenant.access.manage` (当前 `school`) | school admin/operator | 服务 grant 不带额度数量且不得越过 OMS 学校权益；关系两端回读同一持久事实 |
 | TMS 配额/用量 | `tenant.quotas.read`、`tenant.usage.read` (当前 `school`) | school admin/operator/auditor | 只读；原型调用与配额 fixture 不得成为真实账务数据 |
 | TMS 知识与共享资源 | `tenant.kb.manage` (当前 `school`) 加目标对象 owner/显式 grant | school admin | 管理动作不等于个人会话、笔记、记忆、文件或 KB 正文读取 |

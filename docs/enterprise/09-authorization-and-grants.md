@@ -12,7 +12,7 @@
 
 ## 权限实现归属
 
-EduPlus2 在本产品权限链路中只提供认证与稳定身份识别；学校 lifecycle Webhook 另作业务状态输入，不提供 `ops.*`/`tenant.*` 许可。智能体基座两套**本产品应用权限**由 `deeptutor_enterprise` 程序统一判定，各自使用独立会话和 API；企业 PG 仅保存主体、角色/授权、版本与审计事实，PG 用户/GRANT/RLS 不代替逐请求程序鉴权。core 只保留通用 permission/scope/provider seam。首次登录默认零权；OMS 仅管理平台人员；TMS 首位学校管理员由真实订阅事件 actor 一次性登记并本人登录匹配后由 Enterprise 程序激活，此后仍由 TMS 管理本校授权。签名真实 `subscription.created.actor.user_id` 按本产品策略提供待激活身份；不经本人登录匹配与一次性栅栏不产生可用管理员权限，mock/system/null 时写入口关闭，不能以外部 `eit=adm`、旧全局 admin 或前端隐藏入口替代。目标见 [`add-enterprise-management-authorization`](../../openspec/changes/add-enterprise-management-authorization/proposal.md)，包与核心责任见 [13](13-deployment-and-upstream-sync.md)。
+EduPlus2 在本产品权限链路中只提供认证与稳定身份识别；学校 lifecycle Webhook 另作业务状态输入，不提供 `ops.*`/`tenant.*` 许可。智能体基座两套**本产品应用权限**由 `deeptutor_enterprise` 程序统一判定，各自使用独立会话和 API；企业 PG 仅保存主体、角色/授权、版本与审计事实，PG 用户/GRANT/RLS 不代替逐请求程序鉴权。core 只保留通用 permission/scope/provider seam。首次登录默认零权；OMS 仅管理平台人员；TMS 首位学校管理员由真实订阅事件 actor 在 Webhook 接收事务内即时开启，此后仍由 TMS 管理本校授权。签名真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）按本产品策略提供首位管理员主体；不经签名事件与一次性栅栏不产生可用管理员权限，mock/system/null 时写入口关闭，不能以外部 `eit=adm`、旧全局 admin 或前端隐藏入口替代。目标见 [`add-enterprise-management-authorization`](../../openspec/changes/add-enterprise-management-authorization/proposal.md)，包与核心责任见 [13](13-deployment-and-upstream-sync.md)。
 
 ## 权限边界
 
@@ -34,7 +34,7 @@ DeepTutor 不维护用户注册能力，也不把“第三方系统已经登录�
 
 当前 core `Role = Literal["admin", "user"]` 属旧本地模式，不能直接扩展为可信的企业管理权限来源。企业 PG 按 `(issuer,sub,application)` 存版本化主体、角色模板、动作和 assignment：OMS `platform_security_admin`、`platform_config_admin`、`platform_operator`、`platform_auditor`；TMS `school_admin`、`school_operator`、`school_auditor`。模板不自动赋予首次登录者；操作必须同时满足当前应用域、具体动作、有效 assignment、`platform` 或已核验目标 `school`、账号/学校状态和撤权版本。敏感成本、Secret、导出及 TMS 学校侧开通分别分权，角色名只是已授动作集合的展示；授权治理动作与可授予动作/范围的显式委托上界分离，委托能力不等于业务执行权。
 
-`eit=adm`、教师/学生/家长身份和外部 profile 可辅助身份/业务态展示，但不能自动生成 `tenant.permissions.manage`、`ops.*` 或全局 `admin`。OMS 与 TMS 会话不能互换；TMS 只在当前可信学校内授权。OMS 不列出、创建或审批任何学校账号；首位管理员由签名真实 `subscription.created.actor.user_id` 登记为待激活身份，候选本人完成 TMS 登录并精确匹配学校后由 Enterprise 程序一次性激活；mock/system/null 不授予权限。后续 TMS 自主管理角色与成员，不得自授或撤销最后一名可用管理员。
+`eit=adm`、教师/学生/家长身份和外部 profile 可辅助身份/业务态展示，但不能自动生成 `tenant.permissions.manage`、`ops.*` 或全局 `admin`。OMS 与 TMS 会话不能互换；TMS 只在当前可信学校内授权。OMS 不列出、创建或审批任何学校账号；首位管理员由签名真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）在 Webhook 接收事务内由 Enterprise 程序即时开启；mock/system/null 不授予权限。后续 TMS 自主管理角色与成员，不得自授或撤销最后一名可用管理员。
 
 ## require_admin 的拆分
 

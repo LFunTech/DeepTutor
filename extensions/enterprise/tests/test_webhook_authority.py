@@ -241,6 +241,79 @@ async def test_signed_created_directly_creates_school_without_online_resolve(app
     }
 
 
+async def test_created_actor_persists_documented_identity_fields_without_name_pii(app):
+    """subscription.created actor 不只有 user_id；其它身份字段须保留用于脱敏核验。"""
+
+    enterprise = app.state.enterprise
+    enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
+    enterprise.eduplus2_webhook_inbox_digest_key = "d" * 48
+    enterprise.eduplus2_issuer = "https://synthetic-issuer.example"
+    enterprise.eduplus2_resolver = None
+    enterprise.eduplus2_lifecycle_receiver_enabled = True
+    event_id = "synthetic-created-actor-context-" + uuid.uuid4().hex
+
+    response = await _deliver(
+        app,
+        event_id=event_id,
+        event_type="subscription.created",
+        status="active",
+        actor={
+            "type": "user",
+            "user_id": "synthetic-keycloak-sub",
+            "eduplus_user_id": "synthetic-eui",
+            "external_user_id": "EXT-001",
+            "external_source": "school_sis",
+            "name": "学校超级管理员",
+        },
+    )
+
+    assert response.status_code == 204, response.text
+    scope = TenantScope(str(enterprise.deployment.tenant_id), "@webhook-actor-context-test")
+    async with enterprise.db.transaction(scope) as c:
+        binding = await (
+            await c.execute(
+                "SELECT tenant_id FROM oms.school_bindings WHERE eduplus_tenant_id=10001"
+            )
+        ).fetchone()
+        assert binding is not None
+        school_id = binding["tenant_id"]
+        inbox = await (
+            await c.execute(
+                "SELECT actor_subject,actor_context FROM eduplus2.lifecycle_inbox "
+                "WHERE tenant_id=%s AND event_id=%s",
+                (enterprise.deployment.tenant_id, event_id),
+            )
+        ).fetchone()
+        candidate = await (
+            await c.execute(
+                "SELECT actor_subject,actor_context FROM eduplus2.lifecycle_actor_candidates "
+                "WHERE tenant_id=%s AND event_id=%s",
+                (enterprise.deployment.tenant_id, event_id),
+            )
+        ).fetchone()
+        await c.execute("SELECT set_config('app.management_app','tms',true)")
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+        principal = await (
+            await c.execute(
+                "SELECT status FROM management.principals "
+                "WHERE application='tms' AND issuer=%s AND subject=%s AND school_id=%s",
+                (enterprise.eduplus2_issuer, "synthetic-keycloak-sub", school_id),
+            )
+        ).fetchone()
+
+    expected_context = {
+        "user_id": "synthetic-keycloak-sub",
+        "eduplus_user_id": "synthetic-eui",
+        "external_user_id": "EXT-001",
+        "external_source": "school_sis",
+        "name_sha256": hashlib.sha256("学校超级管理员".encode()).hexdigest(),
+    }
+    assert inbox == {"actor_subject": "synthetic-keycloak-sub", "actor_context": expected_context}
+    assert candidate == {"actor_subject": "synthetic-keycloak-sub", "actor_context": expected_context}
+    assert principal == {"status": "active"}
+    assert "学校超级管理员" not in json.dumps(inbox["actor_context"], ensure_ascii=False)
+
+
 async def test_webhook_does_not_accept_unknown_school_binding_version_without_db_check(app):
     enterprise = app.state.enterprise
     enterprise.eduplus2_webhook_secret = "synthetic-webhook-secret"
