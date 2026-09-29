@@ -65,6 +65,8 @@ spec:
               value: "${DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID}"
             - name: DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL
               value: "${DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL}"
+            - name: DT_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED
+              value: "${DEEPTUTOR_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED}"
             # EduPlus2 profile/permission checks are optional enhanced gates. The
             # current test-cn EduPlus2 endpoints expose the Me Profile API as a
             # user-token GET contract, while this release baseline's optional

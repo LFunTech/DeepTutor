@@ -327,6 +327,80 @@ async def test_oms_me_uses_verified_platform_identity_and_local_action(app, pg_d
         assert forged.status_code == 401
 
 
+async def test_oms_first_admin_bootstrap_seeds_local_roles_and_closes_after_first_run(app):
+    """首位 OMS 管理员只能来自已认证平台身份，且只在零本地管理员时初始化。"""
+
+    install_oms_verifier(
+        app,
+        {
+            "first-token": "first-operator",
+            "second-token": "second-operator",
+        },
+    )
+    command_id = str(uuid.uuid4())
+    payload = {"command_id": command_id, "reason": "test-cn 首位 OMS 管理员初始化"}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        client.cookies.set("dt_oms_token", "first-token", path="/api/v1/oms")
+        client.cookies.set("dt_oms_csrf", "csrf-token", path="/api/v1/oms")
+
+        assert (await client.get("/api/v1/oms/me")).status_code == 403
+        missing_csrf = await client.post(
+            "/api/v1/oms/bootstrap/first-admin",
+            json=payload,
+            headers={"Origin": "https://school.example"},
+        )
+        assert missing_csrf.status_code == 403
+
+        bootstrapped = await client.post(
+            "/api/v1/oms/bootstrap/first-admin",
+            json=payload,
+            headers={"Origin": "https://school.example", "x-csrf-token": "csrf-token"},
+        )
+        assert bootstrapped.status_code == 200, bootstrapped.text
+        body = bootstrapped.json()
+        assert body["application"] == "oms"
+        assert body["subject_hash"]
+        assert body["roles"] == ["platform_config_admin", "platform_security_admin"]
+        assert body["replayed"] is False
+        assert body["target_policy_version"] >= 3
+
+        me = await client.get("/api/v1/oms/me")
+        assert me.status_code == 200, me.text
+        assert me.json()["subject"] == "first-operator"
+        permissions = await client.get("/api/v1/oms/me/permissions")
+        assert permissions.status_code == 200, permissions.text
+        actions = set(permissions.json()["platform_actions"])
+        assert {
+            "ops.oms.access",
+            "ops.permissions.manage",
+            "ops.providers.manage",
+            "ops.skills.read",
+            "ops.skills.publish",
+        }.issubset(actions)
+        assert (await client.get("/api/v1/oms/provider-settings")).status_code == 200
+        assert (await client.get("/api/v1/oms/skills")).status_code == 200
+
+        replay = await client.post(
+            "/api/v1/oms/bootstrap/first-admin",
+            json=payload,
+            headers={"Origin": "https://school.example", "x-csrf-token": "csrf-token"},
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["replayed"] is True
+
+        client.cookies.set("dt_oms_token", "second-token", path="/api/v1/oms")
+        client.cookies.set("dt_oms_csrf", "csrf-token-2", path="/api/v1/oms")
+        blocked = await client.post(
+            "/api/v1/oms/bootstrap/first-admin",
+            json={"command_id": str(uuid.uuid4()), "reason": "second attempt"},
+            headers={"Origin": "https://school.example", "x-csrf-token": "csrf-token-2"},
+        )
+        assert blocked.status_code == 409
+
+
 
 
 async def test_oms_skills_list_requires_skill_read_and_redacts_storage(app, pg_dsn):

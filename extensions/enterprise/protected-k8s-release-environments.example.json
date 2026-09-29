@@ -191,7 +191,8 @@
         "issuer": "https://eduplus-auth-test.f123.pub/realms/eduplus",
         "audience": "account",
         "client_id": "eduplus-platform-admin",
-        "account_status_url": "off"
+        "account_status_url": "off",
+        "first_admin_bootstrap_enabled": true
       }
     },
     {

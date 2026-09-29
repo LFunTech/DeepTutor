@@ -582,6 +582,9 @@ def test_protected_backend_manifest_sets_public_oms_oauth_urls():
     assert env["DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL"] == (
         "${DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL}"
     )
+    assert env["DT_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED"] == (
+        "${DEEPTUTOR_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED}"
+    )
 
 
 def test_rollback_decision_and_release_evidence_are_partitioned_and_leak_scanned(tmp_path):
@@ -765,6 +768,7 @@ def test_protected_k8s_release_cli_prepares_sourceable_release_metadata(tmp_path
     assert env["DEEPTUTOR_HPA_ENABLED"] == "false"
     assert env["DEEPTUTOR_EDUPLUS2_OMS_ENABLED"] == "false"
     assert env["DEEPTUTOR_EDUPLUS2_OMS_DISCOVERY_URL"] == ""
+    assert env["DEEPTUTOR_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED"] == "true"
     assert "TOKEN" not in output_env.read_text(encoding="utf8")
 
 
@@ -844,6 +848,7 @@ builtins.__import__ = _blocked_import
     assert env_values["DEEPTUTOR_EDUPLUS2_OMS_AUDIENCE"] == "account"
     assert env_values["DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID"] == "eduplus-platform-admin"
     assert env_values["DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL"] == "off"
+    assert env_values["DEEPTUTOR_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED"] == "true"
 
 
 def test_protected_k8s_example_registry_pipeline_and_k8s_sources_are_contract_driven():
@@ -1300,6 +1305,7 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
         "DEEPTUTOR_EDUPLUS2_OMS_AUDIENCE": "account",
         "DEEPTUTOR_EDUPLUS2_OMS_CLIENT_ID": "eduplus-platform-admin",
         "DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL": "off",
+        "DEEPTUTOR_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED": "true",
     }
 
     for manifest_name in (
@@ -1342,6 +1348,7 @@ def test_protected_k8s_yaml_sources_parse_before_and_after_release_substitution(
                 assert env["DT_EDUPLUS2_OMS_AUDIENCE"] == "account"
                 assert env["DT_EDUPLUS2_OMS_CLIENT_ID"] == "eduplus-platform-admin"
                 assert env["DT_EDUPLUS2_OMS_ACCOUNT_STATUS_URL"] == "off"
+                assert env["DT_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED"] == "true"
                 mounts = {mount["name"]: mount for mount in backend_container["volumeMounts"]}
                 assert mounts["deployment-config"]["mountPath"] == "/etc/deeptutor"
                 assert mounts["deployment-config"]["readOnly"] is True

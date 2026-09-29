@@ -393,6 +393,7 @@ class OmsIdentityContract(BaseModel):
     audience: str = ""
     client_id: str = "eduplus-platform-admin"
     account_status_url: str = ""
+    first_admin_bootstrap_enabled: bool = True
 
     @model_validator(mode="after")
     def _validate_enabled_contract(self):
@@ -421,6 +422,7 @@ class OmsIdentityContract(BaseModel):
             "audience": self.audience,
             "client_id": self.client_id,
             "account_status_policy": "token-only" if self.account_status_url == "off" else "online",
+            "first_admin_bootstrap_enabled": self.first_admin_bootstrap_enabled,
         }
 
 

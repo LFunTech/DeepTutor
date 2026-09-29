@@ -40,6 +40,7 @@
       - [x] 3.2.5.2.1 已新增 OMS 授权码登录会话、CSRF 写入保护、显式 token-only 状态策略和正式页面 fail-closed 初始态；本地验证真实登录后无 `ops.*` 时仍 403，不自动授予任何平台权限。
       - [x] 3.2.5.2.2 已用可执行旁路审计测试固定：企业 CLI/通用 SDK 不提供 OMS/TMS/Provider/额度管理写入口，WS turn 协议拒绝管理写命令和管理写字段，core/CLI/SDK/后台代码不直接导入企业管理授权模块或写 `management.*` 授权事实表。
       - [x] 3.2.5.2.3 已执行只读 upstream mergeability smoke：当前 `HEAD` 与本地 `upstream/main` 的 merge-base 为 `upstream/main`，`git merge-tree` 未发现文本冲突标记；未执行 merge/rebase/reset。
+      - [x] 3.2.5.2.4 已实现 OMS 零本地管理员首位平台管理员受控初始化：仅已验签 `eduplus-platform-admin` OMS 会话可调用，Cookie 写请求受 Origin+CSRF 保护；初始化时在应用事务内串行检查零活跃 `platform_security_admin`，创建/激活当前平台 principal，并授予 v2 `platform_security_admin` 与 `platform_config_admin`，用于 test-cn 首个 Agent 前的模型/Skill 平台维护；第二主体初始化返回 409，重复同主体幂等；不调用 EduPlus2 权限、不使用 DB 函数/触发器/enum-like CHECK。
 - [ ] 3.3 实现 **Webhook 一次性首位管理员登记与本人激活**：仅真实、已验签、非 mock、目标应用/学校及订阅 ID 结构校验通过的 `subscription.created`，且 `actor.type=user`、`actor.user_id` 非空，才写入该校待激活 `(issuer,sub)` 与一次性消费栅栏；事件 ID 幂等、学校绑定版本及已消费/撤销引导不得复活。事件订阅 ID 仅作审计/冲突依据，不作为本产品当前订阅 ID 比对门禁。本人 TMS 登录后须精确匹配已登记身份和当前学校，Enterprise 程序在事务内复核当前学校—应用有效及本地版本，激活唯一 `school_admin` assignment、追加审计。`actor` 缺失/system/null/错校或身份不匹配保持零权；OMS 无学校账号/开通入口。真实事件合同及联调未通过时正式写接口保持关闭。
   - [x] 3.3.1 已实现并验证签名 Webhook `subscription.created` 直接初始化学校绑定、外部 client 注册、actor candidate 与一次性本人激活路径；mock 不计入正式开通。
   - [x] 3.3.2 已实现 `/api/v1/tms/school-bootstrap/status` 与 `/api/v1/tms/school-bootstrap/activate`，本人 TMS bearer 精确匹配 candidate 后激活唯一 `school_admin` assignment 并追加审计。
@@ -73,6 +74,7 @@
       - [x] 4.1.5.2.1 已在正式 `/oms` 平台授权治理区接入平台人员、角色、学校操作范围、assignment 撤权、主体停用、审批创建/复核/apply 与审计回读；按钮仅在 `ops.permissions.manage` 下显示，payload 均来自安全 DTO 的 principal/role/assignment/approval/school/version。
       - [ ] 4.1.5.2.2 尚需真实平台目录候选、真实账号按钮级验收和完整键盘/窄屏可访问性矩阵。
         - [x] 4.1.5.2.2.1 已用正式 OMS 前端测试覆盖桌面与窄屏视口下的语义 `main`、关键 section heading、搜索框 label、平台授权治理按钮可命名且可键盘触发。
+        - [x] 4.1.5.2.2.2 正式 OMS 403 fail-closed 页面新增“激活首位 OMS 管理员”受控入口，仅在本地授权缺失时显示，调用同源 BFF API 并复用 CSRF；成功后重新读取正式 DTO，不回退原型、不暴露 EduPlus2 token。
 - [ ] 4.2 修订 TMS 开发原型的 Webhook actor 待激活/本人登录匹配、缺 actor 待核对、成员/角色/访问关系/撤权状态，并演示“搜索可见已有账号→本人登录登记→匹配后授权”及目录无权/空范围/空结果/故障的区别；不得把合成目录伪装成真实 EduPlus2 同步，旧双人首位开通按钮不得保留为正式入口。正式 TMS 仅在第三方应用用户令牌及策略范围获证实时接学校目录，且只接当前学校安全 DTO；双向关系回读同一事实，额度/用量保持只读，不共享 OMS 会话、API client 或专有字段。生产原型路径 404。
   - [x] 4.2.1 已修订开发态 TMS 原型的真实订阅 actor 待匹配/本人匹配/其他人/缺 actor/mock 五态，移除旧双负责人正式开通按钮并通过浏览器审计。
   - [x] 4.2.2 已在原型中收敛学校角色直授：只展示低风险角色，敏感角色和管理员角色进入复核提示，不把合成数据伪装成真实目录。

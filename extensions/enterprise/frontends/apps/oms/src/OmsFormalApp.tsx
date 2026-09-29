@@ -173,6 +173,7 @@ export default function OmsFormalApp() {
   const [error, setError] = useState<ApiError | undefined>();
   const [model, setModel] = useState<OmsModel | undefined>();
   const [commandMessage, setCommandMessage] = useState("");
+  const [bootstrapMessage, setBootstrapMessage] = useState("");
   const [loginHref, setLoginHref] = useState("/api/v1/oms/auth/start");
 
   useEffect(() => {
@@ -263,15 +264,34 @@ export default function OmsFormalApp() {
   }, []);
 
   if (state === "loading") return <main className="content"><p className="eyebrow">智能体基座</p><StatePanel state="loading" message="正在读取正式 OMS 安全 DTO。"/></main>;
+  const bootstrapFirstAdmin = async () => {
+    setBootstrapMessage("正在提交首位 OMS 管理员初始化请求…");
+    try {
+      await writeJson("/api/v1/oms/bootstrap/first-admin", {
+        command_id: commandId(),
+        reason: "OMS 首位平台管理员初始化",
+      });
+      setBootstrapMessage("首位 OMS 管理员已初始化，正在重新读取正式入口。");
+      window.location.reload();
+    } catch (caught) {
+      const detail = toApiError(caught);
+      setBootstrapMessage(`初始化被拒绝：${detail.status} ${detail.detail}`);
+    }
+  };
+
   if (state === "blocked") return <main className="content">
     <p className="eyebrow">智能体基座</p>
     <PageHead title="正式入口未开放" description={blockedMessage(error)}/>
     <Notice tone="warn">该页面不会回退到开发原型，不暴露授权、发布、审批或学校开通写按钮。</Notice>
-    <div className="inline-list"><Button onClick={() => { window.location.href = loginHref; }}>使用 eduplus-platform-admin 登录</Button></div>
+    {bootstrapMessage && <Notice tone={bootstrapMessage.includes("被拒绝") ? "bad" : "info"}>{bootstrapMessage}</Notice>}
+    <div className="inline-list">
+      <Button onClick={() => { window.location.href = loginHref; }}>使用 eduplus-platform-admin 登录</Button>
+      {error?.status === 403 && <Button variant="primary" onClick={() => { void bootstrapFirstAdmin(); }}>激活首位 OMS 管理员</Button>}
+    </div>
     <Section title="等待的验收证据"><DetailGrid rows={[
       { label: "OMS Client", value: "eduplus-platform-admin 授权码登录" },
       { label: "身份状态", value: "OIDC issuer/aud/azp/sub 与在线账号 active" },
-      { label: "本地授权", value: "DeepTutor Enterprise ops.* 权限事实" },
+      { label: "本地授权", value: "DeepTutor Enterprise ops.* 权限事实；零管理员时可由已认证平台主体初始化" },
     ]}/></Section>
   </main>;
 

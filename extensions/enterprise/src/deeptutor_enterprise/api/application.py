@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -321,6 +322,12 @@ class OmsProviderSettingsDraftRequest(BaseModel):
 class OmsProviderSettingsCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsFirstAdminBootstrapRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    command_id: UUID
     reason: str = Field(min_length=1, max_length=1000)
 
 
@@ -828,6 +835,78 @@ def create_application(enterprise):
     @oms.post("/auth/logout")
     async def oms_auth_logout():
         return oms_oauth.logout_response()
+
+    @oms.post("/bootstrap/first-admin")
+    async def oms_first_admin_bootstrap(
+        request: Request, command: OmsFirstAdminBootstrapRequest
+    ):
+        """零本地管理员时，将当前已认证 OMS 平台主体初始化为首位管理员。"""
+
+        from deeptutor.persistence.postgres.scope import GlobalScope
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..management.first_admin import (
+            BootstrapFirstOmsAdministratorCommand,
+            FirstOmsAdministratorConflict,
+            bootstrap_first_oms_administrator,
+        )
+        from ..oms.identity import PlatformAccountInactive, trusted_oms_identity_from_token
+
+        headers = {"Cache-Control": "no-store"}
+        enabled = os.environ.get(
+            "DT_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED", "true"
+        ).strip().lower()
+        if enabled in {"0", "false", "no", "off", "disabled"}:
+            return JSONResponse({"detail": "First administrator bootstrap disabled"}, status_code=403, headers=headers)
+        bearer = request.headers.get("authorization", "")
+        if bearer.lower().startswith("bearer "):
+            token = bearer[7:]
+        else:
+            token = str(request.cookies.get(oms_oauth.OMS_TOKEN_COOKIE) or "")
+        if not token:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401, headers=headers)
+        try:
+            actor = await trusted_oms_identity_from_token(enterprise, token)
+            async with enterprise.db.transaction(GlobalScope("@oms-first-admin-bootstrap")) as c:
+                result = await bootstrap_first_oms_administrator(
+                    c,
+                    actor,
+                    BootstrapFirstOmsAdministratorCommand(
+                        command_id=command.command_id,
+                        reason=command.reason,
+                        request_id=_request_id(request),
+                    ),
+                )
+        except PlatformAccountInactive:
+            return JSONResponse({"detail": "Account unavailable"}, status_code=403, headers=headers)
+        except PermissionError:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401, headers=headers)
+        except FirstOmsAdministratorConflict:
+            return JSONResponse(
+                {"detail": "First administrator already initialized"},
+                status_code=409,
+                headers=headers,
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Forbidden"}, status_code=403, headers=headers)
+        except (RuntimeError, TimeoutError, psycopg.Error):
+            return JSONResponse(
+                {"detail": "First administrator bootstrap unavailable"},
+                status_code=503,
+                headers=headers,
+            )
+        return JSONResponse(
+            {
+                "application": "oms",
+                "principal_id": str(result.principal_id),
+                "assignment_ids": [str(item) for item in result.assignment_ids],
+                "roles": list(result.role_keys),
+                "target_policy_version": result.target_policy_version,
+                "subject_hash": hashlib.sha256(actor.subject.encode()).hexdigest()[:16],
+                "replayed": result.replayed,
+            },
+            headers=headers,
+        )
 
     @oms.get("/permissions")
     async def oms_permissions_catalog(request: Request):

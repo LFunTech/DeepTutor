@@ -576,6 +576,11 @@ def _release_env_values(registry, report: dict) -> dict[str, str]:
         "DEEPTUTOR_EDUPLUS2_OMS_ACCOUNT_STATUS_URL": str(
             _value(oms_identity, "account_status_url", "") or ""
         ),
+        "DEEPTUTOR_EDUPLUS2_OMS_FIRST_ADMIN_BOOTSTRAP_ENABLED": (
+            "true"
+            if bool(_value(oms_identity, "first_admin_bootstrap_enabled", True))
+            else "false"
+        ),
     }
 
 
