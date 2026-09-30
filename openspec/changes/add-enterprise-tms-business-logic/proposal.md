@@ -1,3 +1,5 @@
+> **暂停状态（2026-09-30）**：本 proposal 暂不作为当前 OMS v1 执行主线；已完成项保留为历史证据，未完成项需在后续 TMS/M1/G1/学校集成或发布专项 proposal 中重订后再推进。不得因暂停而视为完成或直接 archive。
+
 # 云端 TMS 业务逻辑基础契约
 
 > **2026-09-29 执行版**：当前修订版已获批准，并已完成 TMS 存储归属与分层权限测试矩阵。TMS 的 `tenant.*` 本产品权限由 DeepTutor Enterprise 程序按本地 PG 事实判定，与 OMS `ops.*` 共用内核但域隔离；PG 数据库权限/RLS 不代替程序鉴权，EduPlus2 在权限链路中只提供认证和稳定身份识别。用户指定签名真实 `subscription.created.actor.user_id` 为首位学校管理员身份来源，由本系统一次性登记、本人登录匹配后激活；不走旧双负责人开通。随后 TMS 管理本校权限。详细规则由 [`add-enterprise-management-authorization`](../add-enterprise-management-authorization/proposal.md) 唯一规定；mock/外部角色均不自动授权。

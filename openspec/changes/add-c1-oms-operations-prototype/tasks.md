@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 ## 1. 本 change：Agent 平台 OMS 规划重订
 
 - [x] 1.1 对照当前 DeepTutor 设置导航、provider 编辑器、runtime registry、业务 router 和旧六个 proposal，记录旧目标与新决策的冲突；保留静态源码事实，不沿用旧计费/欠费结论。

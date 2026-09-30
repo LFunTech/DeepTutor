@@ -1,3 +1,5 @@
+> **暂停状态（2026-09-30）**：本 proposal 暂不作为当前 OMS v1 执行主线；已完成项保留为历史证据，未完成项需在后续 TMS/M1/G1/学校集成或发布专项 proposal 中重订后再推进。不得因暂停而视为完成或直接 archive。
+
 # 实施任务
 
 范围以 [proposal](proposal.md)、[design](design.md)、`enterprise-m1-fixed-tenant-runtime-baseline` 和 `enterprise-eduplus2-fronting-auth-demo` delta spec 为准。本 proposal 只交付 M1 固定租户 runtime/smoke/evidence 边界；Woodpecker/K8s 发布闭环已拆到 `add-g1-woodpecker-k8s-release-baseline`。历史完成情况从原 `add-m1-g1-single-tenant-production-baseline` 迁入，未真实验证项不得勾选。

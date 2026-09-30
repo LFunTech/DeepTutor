@@ -296,3 +296,133 @@ TDD 红灯为缺少 `deeptutor_enterprise.oms.service_access` 模块；绿灯 `t
 限制：
 
 - 6.3 完成的是后端正式 API 与执行者确认状态机；独立 OMS 正式前端接入、逐服务真实 adapter 探针和可计费学校测试仍归 6.4、Provider 设置 2.3/2.4 与 OMS 7.4/7.5。
+
+## 2026-09-30 正式 OMS 前端/API 接线与本地回归同步
+
+本节同步 2026-09-30 已由 `add-c1-c2-oms-operator-interface` 与 `add-enterprise-management-authorization` 验证的本地成果，不改变 7.4–7.7 真实执行/对账/成本门禁：
+
+- 正式 OMS 独立前端：
+  - `/oms` 使用正式受控入口读取 `/api/v1/oms/me`、`/me/permissions`、`/status/catalog`、`/resources/status`、`/models/draft`、`/provider-settings`、`/tenants`、`/supply`、`/schools/{school_id}/quota|usage|jobs`、`/audit`、`/cost`、`/permissions`、`/approvals` 与 `/skills` 安全 DTO。
+  - 学校、资源、模型/Provider、供给、用量、审计、权限治理、Skill 均保留列表→详情抽屉；后端 display descriptor 优先呈现 raw 状态码；未授权或 DTO 失败时失败关闭，不回退原型或 mock。
+  - `/oms/prototype*` 在非 development 服务端 `notFound()`；旧学校后台开通深链 `/oms/tms-bootstrap*` 返回 404。
+- OMS 写入口：
+  - Provider/模型草稿 test/publish/rollback、Skill review/publish/grant、学校服务 entitlement、quota grant/adjust/revoke/expire、供给批次 register/revoke 均已接正式 API。
+  - 供给批次前端目前只开放基于安全 DTO `lot_id/version` 的撤销；补充供给 UI 未开放，因为缺少真实采购 evidence 输入合同，不能伪造 `evidence_ref`。
+  - 供给 register/revoke 后端均经 `ops.supply.manage` platform 范围授权；school-scope operator 调用全局供给注册返回 403。
+- 本地验证：
+  - `npm test --prefix extensions/enterprise/frontends` → **27 files / 297 tests passed**。
+  - `npm run typecheck:oms --prefix extensions/enterprise/frontends && npm run typecheck:tms --prefix extensions/enterprise/frontends && npm run build:oms --prefix extensions/enterprise/frontends && npm run build:tms --prefix extensions/enterprise/frontends` → **通过**。
+  - `npm run lint --prefix extensions/enterprise/frontends` → **通过**。
+  - `.venv/bin/python -m pytest extensions/enterprise/tests -q` → **803 passed, 3 skipped, 2 warnings**；其中迁移 catalog 期望清单已同步包含 `eduplus2/0014_actor_identity_context.sql`，未修改迁移本身。
+  - `openspec validate add-enterprise-oms-business-logic --strict` → 见本轮验证记录；`git diff --check` → **通过**。
+  - 只读 upstream mergeability smoke：merge-base `ef2d9e5c3c99fd073742c5aadc2bb9584b1e503b`，`git merge-tree "$BASE" HEAD upstream/main` 未发现 `<<<<<<<`/`=======`/`>>>>>>>` 冲突标记，未执行 merge/rebase/reset。
+
+任务影响：新增勾选 **3.2.1、6.4.1、6.5.1**。父任务 **3.2、6.4、6.5、7.4–7.7** 仍不关闭；全服务真实 adapter 探针、真实 CLI/HTTP/WS/SDK/后台执行准入、供应商 usage 对账、OMS-only 成本、真实采购补充 UI、test-cn 跨学校/真实账号综合验收仍待完成。
+
+## 2026-09-30 OMS-only 未核定成本安全投影切片（7.6.1 完成；7.6 父任务未完成）
+
+本轮只推进 OMS 逻辑，不扩展 TMS：`GET /api/v1/oms/cost` 由原先固定空响应改为调用 `oms.governance.cost_projection()`。入口仍先经 OMS Bearer/在线账号状态与 DeepTutor Enterprise 本地 PEP 复核 `ops.oms.access` 和 `ops.cost.read`，且 `ops.cost.read` 仍为 platform 范围敏感读取；未获该权限时沿用 403 失败关闭。由于 `oms.usage_attempts` 对租户账本启用 FORCE RLS，成本投影先以全局只读事务枚举本地学校，再逐学校使用 `TenantScope` 聚合 usage attempt，避免为了平台视图绕过 RLS 或把 PG role 当作应用授权。
+
+DTO 只新增 `uncosted_usage`：按 `school_id/service_id/provider_id/provider_account_id/model_id/unit_code` 聚合 attempt 数、`settled_units` 和 `pending_units`（`reserved_units - settled_units` 的非负和），并复用后端 `not_configured` display descriptor 说明当前成本规则未配置。`costs` 继续为空，`notice` 明确“不会从配额或用量推导经营成本”。响应不包含采购 evidence、`evidence_ref`、`provider_request_id`、诊断原文、Secret、金额、单价、币种、账单、欠费或租户费用字段；供应商合同未核实时只显示用量待核定摘要，不能把缺成本解释为零成本。
+
+TDD 红灯：`test_oms_governance_read_api_filters_by_local_school_grants_and_descriptors` 先写入一条合成 `remote_unknown` usage attempt 和一条带 `contract://safe` 的 supply lot，期望 `/api/v1/oms/cost` 返回 `uncosted_usage` 且不泄露合同引用、provider receipt、诊断、金额/单价；旧实现因缺少 `uncosted_usage` 失败。绿灯实现后，同一测试通过，并继续验证 usage/jobs/supply/audit 的原有脱敏与跨学校 403 行为。
+
+验证：
+
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -k "oms_governance_read_api_filters_by_local_school_grants_and_descriptors" -q` → **1 passed, 54 deselected**。
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -q` → **54 passed, 1 skipped, 2 warnings**（两个既有同步测试继承全局 asyncio mark 的 PytestWarning）。
+- `.venv/bin/python -m ruff check extensions/enterprise/src/deeptutor_enterprise/oms/governance.py extensions/enterprise/src/deeptutor_enterprise/api/application.py extensions/enterprise/tests/test_application.py` → **通过**。
+
+限制：本切片不是完整 7.6。尚未实现真实供应商成本合同/币种/分摊规则、人工核对/更正写命令、成本导出、真实 provider usage 对账、test-cn 真实学校/账号/供应商端到端验收，也未完成 7.4/7.5 的真实执行边界与逐 attempt 结算接线；因此 7.6、7.7 继续保持未完成。
+
+## 2026-09-30 OMS 人工核对结算写入口切片（7.6.2 完成；7.6 父任务未完成）
+
+本轮只推进 OMS 后端逻辑，不扩展 TMS：新增 `POST /api/v1/oms/schools/{school_id}/attempts/{attempt_id}/settle`，用于平台运营在供应商对账或可信人工核对后，对已发出但 `remote_unknown`/`reconcile_required` 的 attempt 做一次幂等结算。入口先经 OMS Bearer、在线账号状态与 DeepTutor Enterprise 本地 PEP 校验 `ops.oms.access` 和目标学校范围 `ops.reconciliation.manage`；随后 `OmsAttemptLedger.settle_as_reconciler()` 在同一个 `TenantScope` 账务事务中再次以 `_lock_school_id` 复核该动作权限并锁定 attempt/供给/分摊行，避免撤权与写入竞态。
+
+结算写入保留原始证据但不回显：请求中的 `evidence_ref`、`provider_request_id` 和 source 写入 `oms.usage_attempts.evidence`、`provider_request_id` 及 `oms.attempt_evidence_events`；HTTP 响应只返回 `attempt_id/status/settled_units`，审计 `safe_summary` 只含 service、settled units 与 source，避免供应商 receipt、工单引用或合同线索进入普通响应/审计摘要。若核对量不超过预留，则按既有分摊逐笔把 reserved 转为 settled，未用且供给/授予仍有效的部分退回 unspent；若核对量超过预留，则保持 `reconcile_required` 并返回 409，后续仍需更完整的 overage/调整流程。该写入口不创建租户费用、不生成成本金额、不改写原始待核对事件，也不授予 TMS 任何写能力。
+
+TDD 红灯：先写 `test_oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission`，构造真实 OMS 双主体权限、学校绑定、供给批次、服务授权、额度承诺和一条 `remote_unknown` attempt；旧实现因 route 未注册返回 404。绿灯实现后，该测试验证：仅有 `ops.usage.read` 的 operator 调用结算 API 返回 403；拥有目标学校 `ops.reconciliation.manage` 的 operator 可结算 7/10 单位；响应不包含 `ticket-secret` 或 provider request secret；DB 中 attempt、commitment、supply、evidence events 和 `usage.settle` 审计均按预期更新且原始 evidence 仅留在数据库。
+
+验证：
+
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -k "oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission" -q` → **1 passed, 55 deselected**。
+- `.venv/bin/python -m ruff check extensions/enterprise/src/deeptutor_enterprise/oms/attempts.py extensions/enterprise/src/deeptutor_enterprise/api/application.py extensions/enterprise/tests/test_application.py` → **通过**。
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -q` → **55 passed, 1 skipped, 2 warnings**（两个既有同步测试继承全局 asyncio mark 的 PytestWarning）。
+
+限制：本切片仍不是完整 7.6。尚未实现成本导出、已核定供应商成本合同/币种/分摊规则、真实 provider usage 自动对账、超预留人工调整闭环、test-cn 真实学校/账号/供应商端到端验收，也未完成 7.4/7.5 的真实 CLI/HTTP/WS/SDK/后台/Agent 执行边界与逐 attempt 结算接线；因此 7.6、7.7 继续保持未完成。
+
+## 2026-09-30 OMS 待核对队列安全上下文投影（7.6.3 完成；7.6 父任务未完成）
+
+为配合人工核对结算写入口，`GET /api/v1/oms/schools/{school_id}/jobs` 仍由目标学校 `ops.jobs.read` 保护，但待核对队列从只返回 attempt/service/status 扩展为 OMS 操作者可判断对象的安全上下文：`provider_id`、`provider_account_id`、`model_id`、`subject_kind`、`subject_id`、`user_id`、`app_id` 以及 `pending_units`。这些字段来自本地 usage attempt 事实，便于运营在不查看原始 evidence 的情况下定位供应商、模型和调用主体。DTO 继续不返回 `provider_request_id`、`evidence`、诊断 JSON、供应商 receipt、Secret 或合同引用；写入仍必须走 7.6.2 的 `ops.reconciliation.manage` 结算 API。
+
+TDD 红灯：扩展 `test_oms_governance_read_api_filters_by_local_school_grants_and_descriptors`，要求 jobs DTO 包含 provider/model/subject/pending units；旧实现只返回基础字段而失败。绿灯实现后，同一测试继续验证 `provider_request_id` 和合成 `diagnostic` 不在响应文本中。
+
+验证：
+
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -k "oms_governance_read_api_filters_by_local_school_grants_and_descriptors" -q` → **1 passed, 55 deselected**。
+- `.venv/bin/python -m ruff check extensions/enterprise/src/deeptutor_enterprise/oms/governance.py extensions/enterprise/tests/test_application.py` → **通过**。
+
+限制：本切片仍不是完整 7.6。待核对队列尚未实现导出、真实 provider 自动对账、超预留调整闭环或 test-cn 真实账号/供应商端到端验收；7.4/7.5 的真实执行边界与逐 attempt 结算接线仍未完成。
+
+## 2026-09-30 OMS 学校用量安全导出切片（7.6.4 完成；7.6 父任务未完成）
+
+新增 `GET /api/v1/oms/schools/{school_id}/usage/export`，用于 OMS 高权限操作者导出目标学校 usage attempt 的安全 JSON 快照。入口仍先经 OMS Bearer、在线账号状态与 DeepTutor Enterprise 本地 PEP 校验 `ops.oms.access`，再校验目标学校范围 `ops.audit.export`；只有被授权的学校可导出，跨学校目标返回 403。导出函数在 `TenantScope` 事务中读取本地 attempt 事实并写入 `oms.audit_events`，审计动作为 `usage.export`，safe summary 仅包含 `item_count` 与 `format`。
+
+导出 DTO 只包含 attempt/operation/service/unit/provider/model/subject/status/reserved/settled/pending/time 等可核对字段；明确不返回 `evidence`、provider request id、provider receipt、diagnostic JSON、Secret、合同引用、金额、单价或成本字段。脱敏说明也使用类别化名称，避免把敏感字段名原样输出到导出文本。该端点不生成租户费用、不推导供应商成本，也不修改结算状态；实际核对写入仍必须走 7.6.2 的结算 API。
+
+TDD 红灯：扩展 `test_oms_governance_read_api_filters_by_local_school_grants_and_descriptors`，给同一 school-scope 角色增加 `ops.audit.export` 后要求 `/usage/export` 返回安全 JSON、隐藏跨学校返回 403，并在 `/audit` 中看到 `usage.export` 审计；旧实现因 route 未注册返回 404。绿灯实现后，测试同时验证导出文本不包含 `provider_request_id`、合成 `diagnostic`、`contract://safe` 或 Secret/成本线索。
+
+验证：
+
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -k "oms_governance_read_api_filters_by_local_school_grants_and_descriptors" -q` → **1 passed, 55 deselected**。
+- `.venv/bin/python -m ruff check extensions/enterprise/src/deeptutor_enterprise/oms/governance.py extensions/enterprise/src/deeptutor_enterprise/api/application.py extensions/enterprise/tests/test_application.py` → **通过**。
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -q` → **55 passed, 1 skipped, 2 warnings**（两个既有同步测试继承全局 asyncio mark 的 PytestWarning）。
+
+限制：本切片仍不是完整 7.6。尚未实现真实 provider 自动对账、已核定供应商成本合同/币种/分摊规则、超预留人工调整闭环或 test-cn 真实账号/供应商端到端验收；7.4/7.5 的真实执行边界与逐 attempt 结算接线仍未完成。
+
+## 2026-09-30 OMS 确认未发出释放入口切片（7.6.5 完成；7.6 父任务未完成）
+
+新增 `POST /api/v1/oms/schools/{school_id}/attempts/{attempt_id}/release`，用于 OMS 操作者在确认供应商未收到请求、attempt 仍处于 `reserved` 且未 dispatch 时释放保守预留。入口先经 OMS Bearer、在线账号状态与 DeepTutor Enterprise 本地 PEP 校验目标学校范围 `ops.reconciliation.manage`；`OmsAttemptLedger.release_as_reconciler()` 在同一个 `TenantScope` 账务事务中以 `_lock_school_id` 再次复核该动作权限并锁定 attempt/供给/分摊行，避免撤权与释放竞态。
+
+释放只适用于 `reserved` 状态；已经 dispatch、remote unknown、settled 或 released-with-conflicting-evidence 的 attempt 均拒绝，避免把可能已发生的远端消耗按失败零耗处理。成功释放时按原分摊逐笔把 reserved 归零，若支撑 grant/lot 仍有效则退回 unspent/committed_unspent；`usage_attempts` 写入 `status=released`、`settled_units=0` 和 `source=confirmed_not_sent` 的 evidence，`attempt_evidence_events` 留存 `confirmed_not_sent` 原始证据引用，HTTP 响应和审计 safe summary 不回显原始 evidence。
+
+TDD 红灯：扩展 `test_oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission`，在已结算一条 `remote_unknown` attempt 后重新预留 3 个单位并要求只读 operator 调 release 返回 403、reconcile operator 可释放且响应不包含 `not-sent-secret`；旧实现因 route 未注册返回 404。绿灯实现后，同一测试验证 release attempt 状态、evidence events、grant commitment 与 supply counters 均保持可核对一致。
+
+验证：
+
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -k "oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission" -q` → **1 passed, 55 deselected**。
+- `.venv/bin/python -m ruff check extensions/enterprise/src/deeptutor_enterprise/oms/attempts.py extensions/enterprise/src/deeptutor_enterprise/oms/governance.py extensions/enterprise/src/deeptutor_enterprise/api/application.py extensions/enterprise/tests/test_application.py` → **通过**。
+- `.venv/bin/python -m pytest extensions/enterprise/tests/test_application.py -q` → **55 passed, 1 skipped, 2 warnings**（两个既有同步测试继承全局 asyncio mark 的 PytestWarning）。
+
+限制：本切片仍不是完整 7.6。尚未实现真实 provider 自动对账、已核定供应商成本合同/币种/分摊规则、超预留人工调整闭环或 test-cn 真实账号/供应商端到端验收；7.4/7.5 的真实执行边界与逐 attempt 结算接线仍未完成。
+
+## 2026-09-30 Provider request ID 对账切片（7.5.1 完成；7.5/7.6 父任务未完成）
+
+本轮继续只推进 OMS 后端逻辑，不扩展 TMS，也不调用真实供应商。`OmsAttemptLedger.mark_dispatched()` 现在可在发出 intent 时记录供应商 request/task ID，并把该 ID 写入 append-only `attempt_evidence_events`；同一 attempt 后续只能幂等复用相同 provider request ID，冲突 ID 直接拒绝，避免一个 provider receipt 被错误挂到另一笔 attempt。`UsageCallContext.safe_request_hash()` 同步加强为递归、大小写无关地拒绝 `prompt/messages/answer/content/attachment(s)` 等私有正文 key，`UsageCallContext.attempt()` 也在生成 `AttemptRequest` 前校验 user/delegated_user/app/service 主体归属，防止真实执行边界把错误 user/app 组合带入总账。
+
+新增 `POST /api/v1/oms/schools/{school_id}/usage/provider-receipts`：入口先经 OMS Bearer、在线账号状态与本产品 `ops.oms.access`/目标学校 `ops.reconciliation.manage` 授权，再按 `provider_id/provider_account_id/provider_request_id` 在该学校账本中找回原 attempt，并调用同一 `settle_as_reconciler()` 事务结算。重复供应商回执返回同一结算结果，不再次扣减；未知 provider request ID 返回冲突，不按零消耗释放预留。HTTP 响应仍只返回 `attempt_id/status/settled_units`，不回显 provider receipt、evidence、Secret 或账单内容；原始 evidence 仅留在 `usage_attempts.evidence` 与 append-only evidence events 中。
+
+TDD 红灯：
+
+- `test_provider_request_receipt_reconciles_original_attempt_once` 先失败于 `mark_dispatched()` 不接受 `provider_request_id`，后验证 provider request ID 回填、按 receipt 幂等结算、未知 receipt 失败关闭、冲突 request ID 拒绝及总账不双扣。
+- `test_oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission` 扩展后先失败于 provider receipt API 404，后验证只读 operator 403、reconcile operator 可按 provider request ID 结算原 attempt，响应不回显 receipt。
+- `test_usage_request_hash_rejects_private_content_and_is_deterministic` 与 `test_usage_call_context_rejects_invalid_subject_attribution` 先分别失败于嵌套私有正文 key 未拒绝、错误主体归属未拒绝，后通过。
+
+验证：
+
+- `.venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests/test_oms_attempt_ledger.py --tb=short` → **16 passed**。
+- `.venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests/test_oms_call_context.py --tb=short` → **3 passed**。
+- `.venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests/test_application.py::test_oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission --tb=short` → **1 passed**。
+- `ruff check` 覆盖 `oms/attempts.py`、`oms/call_context.py`、`api/application.py` 与相关测试 → **通过**。
+
+限制：本切片只是 request/task ID 级别的本地 OMS 对账能力，不等于真实供应商自动对账完成。仍缺真实 provider adapter 调用样本、可核验账单批处理、pending 告警、流式/异步取消/Agent 子调用全入口接线、真实非 Token 原生单位样本、test-cn 真实账号/学校/供应商端到端验收及成本合同/分摊规则；因此 7.5、7.6、7.7 继续保持未完成。
+
+## 2026-09-30 Metered provider attempt runner 切片（7.4.1 完成；7.4 父任务未完成）
+
+新增企业扩展内的可复用 `run_metered_provider_attempt()` 与 `ProviderAttemptReceipt`。该 runner 不让 core 依赖 OMS 余额逻辑：调用方传入不含正文的 `UsageCallContext`、`TenantScope` 与 provider callable；runner 在真实 callable 前生成 attempt、执行 `reserve()` 并记录 dispatch intent，成功返回可信 receipt 时回填 provider request ID 并结算，provider callable 在发出后抛错或返回无 usage 时把 attempt 标为 `remote_unknown`，保留预留等待后续 receipt/人工对账。`call` 只拿到 `attempt_id`，不会接收 prompt、回答或附件正文。
+
+TDD 红灯：`test_metered_provider_attempt_runner_settles_or_marks_unknown` 先失败于缺少 `ProviderAttemptReceipt`/runner，后验证合成 provider 成功样本按 6/10 单位结算并回填 request ID，发出后 timeout 样本进入 `remote_unknown` 且 5 单位预留不释放；账本不变量为 `settled_lifetime=6, committed_unspent=69, reserved_inflight=5`。
+
+验证：`.venv/bin/python -m pytest -c extensions/enterprise/pytest.ini -q extensions/enterprise/tests/test_oms_attempt_ledger.py extensions/enterprise/tests/test_oms_call_context.py --tb=short` → **20 passed**；`ruff check` 覆盖 `oms/call_context.py` 与相关测试 → **通过**。
+
+限制：runner 仍只是企业扩展内可用适配层，尚未接入真实 CLI/HTTP/WS/SDK/后台/Agent 子调用和逐服务 provider adapter；因此 7.4 继续保持未完成。

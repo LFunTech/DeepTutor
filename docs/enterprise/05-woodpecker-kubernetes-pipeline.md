@@ -83,6 +83,20 @@ PR ──→ 无生产凭证的质量/契约检查
 6. 发布清单额外绑定企业包/依赖锁、通用核心补丁、LightRAG 选型及上线验收证据、fork 仓库/含 HugeGraphStorage 的 commit/上游基线/镜像 digest、provider API、HugeGraph 版本/schema/认证权限/存储拓扑及必要队列版本、原文/派生副本责任和 binding 格式；所有组合同一轮验收。一次构建按 `image@sha256:…` 晋级；人类可读 tag 仅作索引，不部署 `latest`，不在生产按同 SHA 重建另一个镜像。清单至少含源码/upstream SHA、构建 ID、各镜像 digest/平台、清单配置版本、schema/对象格式兼容范围、启用能力和运行模式。
 7. 清单采用签名或等效防篡改、只读可信发布记录，并与测试结果和批准绑定；部署校验来源和摘要。制品存储与租户业务 S3 隔离；清单缺失、被篡改或不匹配时失败，不按 tag 猜 digest。跨环境复制镜像后也要核对 digest。
 
+## 2026-09-29 Woodpecker 执行速度优化方案
+
+对当前 test-cn 发布历史（`deploy/test-cn/v1.4.0-rc.55` 至 `rc.69`）排查后，成功流水线总耗时 p50 约 1104s；稳定瓶颈为 `build-runtime-image-test-cn`（p50 512s）、并行编译阶段最长步骤（p50 344s，通常是 enterprise frontends）以及 `deploy-test-cn`（p50 199s）。`compile-enterprise-frontends-test-cn` 的 `npm ci` 层已可缓存，后续主要慢在 Kaniko unpack/snapshot/cache push 与 OMS/TMS 串行 typecheck/test/build；最终 runtime 镜像组装因大量 artifact 提取和小 `COPY` cache layer push 成为最稳定的大头。
+
+优化按以下顺序推进，且不得牺牲发布门禁：
+
+1. **先优化 runtime final image**：合并 `Dockerfile.protected-runtime` 中多个小 `COPY`，并用新的 test-cn rc tag A/B 对比 final image 是否关闭 `--cache-copy-layers` 更快。目标是在不改变 digest 部署、pre-deploy、migration、smoke 的前提下节省 1–3 分钟。
+2. **引入输入 hash 产物复用**：为 core frontend、enterprise frontends、docs、python deps、runtime base 计算输入 hash；registry 中已有相同 hash 的 immutable artifact digest 时复用并写入 evidence，不存在才重建。跨环境 registry/repo 不匹配、hash 缺失或证据缺失时 fail closed。
+3. **拆分 enterprise OMS/TMS 构建**：把 shared deps、OMS、TMS 分成独立 artifact steps；OMS/TMS 并行，TMS-only/OMS-only 变更只重建受影响应用，共享包或 lockfile 变化才同时重建。
+4. **建立 migration 快速路径**：无 migration 文件、bootstrap 逻辑和 schema contract 变化且 schema_history verify 通过时，仅执行轻量 drift/schema verify；不确定或存在 pending migration 时继续跑完整 migration Job。
+5. **补齐观测数据**：每次 release evidence 记录 step durations、artifact input hash、cache hit/miss、复用 digest、Kaniko cache mode、migration Job duration 和 rollout duration，用于识别 python deps/frontend 的偶发 1000s+ outlier。
+
+硬性边界：不移除 typecheck/test、secret preflight、digest 校验、schema verify、rollout/smoke 或 secret leakage scan；不移动既有 deployment tag；不把 test-cn 内部直通规则扩展到预发/生产；不引入 Helm 部署路径；不修改 EduPlus2 或其他外部系统。
+
 ## 触发、批准和凭证边界
 
 | 来源 | 默认行为 | 权限边界 |

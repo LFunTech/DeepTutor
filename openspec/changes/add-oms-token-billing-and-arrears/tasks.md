@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 > **退役目标已获用户批准（2026-09-26）**：以下任务仅作历史保留，全部禁止 apply、勾选、归档或同步冲突旧 spec；现行替代见 `add-enterprise-oms-business-logic`。
 
 ## 1. 契约与权限

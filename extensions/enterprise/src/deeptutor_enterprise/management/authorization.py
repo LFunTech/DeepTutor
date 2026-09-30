@@ -351,11 +351,24 @@ async def require_management_permission(
         external_tid = _column(binding, "external_tid", 6)
         if external_tid is not None:
             external_school_id = _column(binding, "eduplus_tenant_id", 5)
-            if (
-                external_tid != str(external_school_id)
-                or type(identity.webhook_app_id) is not int
-                or identity.webhook_app_id <= 0
-            ):
+            if external_tid != str(external_school_id):
+                raise ManagementAuthorizationDenied("school identity binding is inconsistent")
+            if identity.application == "oms" and identity.webhook_app_id is None:
+                projection_app_clause = ""
+                projection_params: tuple[object, ...] = (
+                    binding_school_id,
+                    external_school_id,
+                    binding_version,
+                )
+            elif type(identity.webhook_app_id) is int and identity.webhook_app_id > 0:
+                projection_app_clause = "AND p.external_app_id=%s "
+                projection_params = (
+                    binding_school_id,
+                    external_school_id,
+                    identity.webhook_app_id,
+                    binding_version,
+                )
+            else:
                 raise ManagementAuthorizationDenied("school identity binding is inconsistent")
             projected = await (
                 await connection.execute(
@@ -364,7 +377,8 @@ async def require_management_permission(
                     "ON (k.tenant_id,k.school_id,k.external_app_id)="
                     "(p.tenant_id,p.school_id,p.external_app_id) "
                     "WHERE p.school_id=%s AND p.external_tenant_id=%s "
-                    "AND p.external_app_id=%s AND p.binding_version=%s "
+                    + projection_app_clause
+                    + "AND p.binding_version=%s "
                     "AND p.onboarding_event_id IS NOT NULL "
                     "AND p.onboarding_completed_at IS NOT NULL "
                     + (
@@ -372,12 +386,7 @@ async def require_management_permission(
                         if lifecycle_governance
                         else "AND p.eligibility='allowed' AND NOT k.frozen "
                     ),
-                    (
-                        binding_school_id,
-                        external_school_id,
-                        identity.webhook_app_id,
-                        binding_version,
-                    ),
+                    projection_params,
                 )
             ).fetchone()
             if (

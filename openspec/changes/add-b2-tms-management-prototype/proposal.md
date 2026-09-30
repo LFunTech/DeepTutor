@@ -1,3 +1,5 @@
+> **暂停状态（2026-09-30）**：本 proposal 暂不作为当前 OMS v1 执行主线；已完成项保留为历史证据，未完成项需在后续 TMS/M1/G1/学校集成或发布专项 proposal 中重订后再推进。不得因暂停而视为完成或直接 archive。
+
 # 云端 TMS 高保真原型与 OMS 共享组件规划
 
 > **2026-09-27 原型交互进度**：开发态 TMS 已演示本产品 `tenant.*` 角色、订阅事件 actor 待本人匹配及撤权交互；OMS 不管理学校账号。[双端浏览器审计](../add-c1-oms-operations-prototype/prototype-browser-audit-2026-09-27.md) 已补新版 actor 流程桌面/窄屏复核，但不代表真实事件或权限 API 验收。首位管理员身份来自签名真实 `subscription.created.actor.user_id`，由 Enterprise 程序一次性引导、本人登录匹配后激活；Webhook mock 或 fixture 不能赋权；正式权限见 [`add-enterprise-management-authorization`](../add-enterprise-management-authorization/proposal.md)。

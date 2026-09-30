@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 # DeepTutor 可信逐 attempt 服务用量与核对总账
 
 > **实施已获批准（2026-09-26）**：本版替换旧 Token-only/费用下游目标，用户已单独批准按现版实施。供给、授予、预留、用量与更正以 `add-enterprise-oms-business-logic` 为**唯一**总账，不另建平行事实。

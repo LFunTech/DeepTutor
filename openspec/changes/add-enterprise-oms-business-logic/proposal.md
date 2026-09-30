@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 # 云端 OMS 业务逻辑基础契约
 
 > 权威边界修订（2026-09-27，当前修订版已单独获批）：用户确认本代理不得修改 EduPlus2；EduPlus2 继续提供现有身份、学校与生命周期权威，**DeepTutor Enterprise 程序维护并判定仅限本产品 OMS/TMS 的双应用域权限（PG 仅保存事实）；OMS 仍独占平台与跨校业务动作**。此前发送端 OMS 草稿已撤销，不作为依赖交付。直接依赖提案当前修订版亦分别获批，但正式跨学校写 API 仍须完成外部合同、权限、绑定与端到端验收。真实租户数据、生产发布、归档及本次提交不在授权内；完成度以 `tasks.md` 与 `implementation-evidence.md` 为准。

@@ -170,6 +170,57 @@ Woodpecker 构建把前端 bundle、Python dependency tree 和 runtime OS/base l
 
 test-cn 使用独立的静态 Deployment、Service 与最小化 NetworkPolicy。`deploy.sh` 在执行任何 `kubectl` 前校验 test-cn docs digest，并在 migration 成功后部署 docs 服务；同名 Ingress 使用 test-cn 专用清单明确包含 `/docs` 和 `/` 两条 Prefix 路径，避免依赖控制器对多个同域名 Ingress 的合并行为。pre/prod 沿用只有 `/` 的基础 Ingress，不创建 docs 服务或路径。部署步骤等待 docs rollout，经真实 HTTPS 校验 `/docs/` 首页和其引用的一项静态资源；失败即阻断发布，不得把静态文件构建成功等同于发布成功。文档构建和路由结果写入 test-cn 脱敏 evidence。test-cn 正式触发依赖内部 deployment tag 和实际入库的 `docs-site/` 文件，本次源码改动不代表已部署。
 
+## 决策 2b：Woodpecker 执行速度优化边界与路线
+
+2026-09-29 对 `deploy/test-cn/v1.4.0-rc.55` 到 `rc.69` 的 Woodpecker 执行历史进行排查后，当前 test-cn 发布流水线的稳定瓶颈按关键路径排序为：
+
+| 区域 | 成功流水线 p50 | 观察到的最大值 | 结论 |
+| --- | ---: | ---: | --- |
+| 总耗时 | 1104s | 2470s | 常规发布约 13–22 分钟，偶发可到 40 分钟以上。 |
+| 并行编译阶段最长步骤 | 344s | 1674s | 通常由 enterprise frontends 主导，偶发由 frontend/python deps cache miss 或网络/registry 拖慢。 |
+| `compile-enterprise-frontends-test-cn` | 344s | 480s | `npm ci` 已可缓存；主要成本转移到 Kaniko rootfs unpack/snapshot/cache push 与 OMS/TMS 串行 typecheck/test/build。 |
+| `build-runtime-image-test-cn` | 512s | 801s | 最稳定的大头；最终 runtime 组装存在大量 cross-stage artifact 提取、小 `COPY` snapshot 与 cache layer push。 |
+| `deploy-test-cn` | 199s | 384s | 主要受 migration Job 与 rollout 等待影响；无迁移变更的发布仍会跑完整 migration/bootstrap Job。 |
+
+优化必须保持以下发布契约不变：
+
+- 仍从 canonical deployment tag 解析 `target_env_id`，不可接受手工环境覆盖。
+- 仍以不可变 digest 部署，不使用 mutable `latest` 或移动已有 deployment tag。
+- 任何 artifact 复用都必须基于输入内容 hash 与 registry digest，写入 release evidence；不能按文件名、tag 名或“看起来没变”跳过。
+- 不为提速移除 typecheck/test、secret preflight、digest 校验、migration/schema verify、rollout/smoke 或 secret leakage scan；只能让未变化的产物安全复用，或把重活拆分并行。
+- 所有优化试验使用新的 `deploy/<env_id>/vX.Y.Z-rc.N` tag；错误 tag 只能删除错误引用并新建正确 tag，不得移动已经用于发布的 tag。
+
+### 优化阶段
+
+1. **P0：runtime final image 低风险提速**
+   - 合并 `Dockerfile.protected-runtime` 中多个小 `COPY`，优先把 `deploy/docker-runtime/` 脚本/配置目录级复制，减少 Kaniko snapshot/cache push 次数。
+   - 对 `build-runtime-image-test-cn` 做 A/B：当前 `--cache=true --cache-copy-layers` 与关闭 final stage copy-layer cache 的耗时对比。final image 每个 release tag 都会变，过度缓存小 `COPY` 可能比直接组装更慢。
+   - 验收：runtime digest 可解析，部署 smoke 不退化，release evidence 记录 A/B tag、各 step 耗时与最终选择。
+
+2. **P1：输入 hash 驱动的 artifact 复用**
+   - 为 `frontend-build`、`enterprise-frontends-build`、`docs`、`python-deps`、`runtime-base` 计算输入 hash；hash 输入至少包含对应源码/lockfile/workspace manifest、Dockerfile target、构建参数与基础镜像 digest。
+   - 若 registry 中已有 `artifact:<input-hash>`，本次 release 只复用该 immutable digest 并在 evidence 中记录来源；不存在才触发 Kaniko 构建。
+   - 验收：复用路径仍产出当前 release manifest；跨环境 registry/repo 不匹配时 fail closed；cache hit/miss 与复用 digest 写入 evidence。
+
+3. **P2：拆分 enterprise OMS/TMS 构建**
+   - 把当前单个 `enterprise-frontends-builder` 拆为 shared deps layer、`enterprise-oms-builder` 与 `enterprise-tms-builder`。
+   - OMS/TMS 并行执行；TMS-only 或 OMS-only 变更仅重建受影响应用，共享包/lockfile 变化才同时重建。
+   - runtime image 从两个 artifact digest 装配，pre-deploy 同时校验两者 registry 归属。
+   - 验收：正式 OMS/TMS 未登录 fail-closed、相关 API 401/403、前端页面 smoke 与 docs smoke 均保持通过；未变化一侧的复用 digest 进入 evidence。
+
+4. **P3：migration/deploy 快速路径**
+   - 当应用 migration 文件、bootstrap 逻辑、schema version contract 与目标环境 schema_history 均证明无待执行迁移时，允许跳过 heavy migration Job，改为轻量 schema verify / drift check。
+   - 该快速路径必须 fail closed：任一 hash 缺失、不确定、schema_history drift、pending migration 或前序 release 状态不明时，回到完整 migration/bootstrap Job。
+   - 验收：无迁移发布节省 deploy 时间；真实 migration 变更仍创建 Job 并阻断失败 rollout。
+
+5. **P4：观测与异常 outlier 收敛**
+   - 每次 release 输出 machine-readable step durations、artifact input hash、cache hit/miss、复用 digest、Kaniko cache mode、migration Job duration 与 rollout duration。
+   - 对 `compile-python-deps-test-cn`、`compile-frontend-test-cn` 这类偶发 1000s+ outlier，优先用 P1 的 input-hash 复用消除重复构建，再检查 registry/cache repo 网络与 Kaniko cache 查询成本。
+
+### 非目标
+
+本优化方案不把 test-cn 的内部 tag 直通扩展到 pre/prod，不改变生产受保护 tag/审批要求；不引入 Helm 部署路径；不修改 EduPlus2 或其他外部仓库；不以跳过真实 smoke 或迁移校验换取速度。
+
 ## 决策 3：迁移和 rollout 由发布步骤编排
 
 应用 PG migration、固定租户 bootstrap、默认 policy/profile 初始化由独立 Job 或等价发布步骤执行：

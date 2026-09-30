@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 # 面向普通运营人员的 OMS 界面
 
 > **2026-09-29 执行版**：当前修订版已获批准，且页面/API/动作矩阵任务已完成；本 change 现在只负责**独立 OMS 正式前端**的呈现、路由守卫、真实 API client 与 E2E 验收，不再承载 Provider/Skill/额度/用量后端业务规则。后端能力分别以 `add-enterprise-management-authorization`、`add-enterprise-oms-business-logic`、`add-enterprise-all-service-provider-settings` 与 `add-enterprise-exact-token-usage-ledger` 为权威；真实 API/权限未就绪前不得把原型当生产界面。

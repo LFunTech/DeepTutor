@@ -463,6 +463,54 @@ class OmsQuotaCloseCommandRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class OmsSupplyRegisterCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lot_id: UUID
+    service_id: str = Field(min_length=1, max_length=255)
+    unit_code: str = Field(min_length=1, max_length=255)
+    provider_id: str = Field(min_length=1, max_length=255)
+    provider_account_id: str = Field(default="", max_length=255)
+    pool_id: str = Field(min_length=1, max_length=255)
+    basis: Literal["legacy_unverified", "native_units", "money", "credits", "paygo"]
+    hard_ceiling: Decimal | None = Field(default=None, gt=0)
+    starts_at: datetime
+    expires_at: datetime
+    evidence_ref: str = Field(min_length=1, max_length=255)
+    verified_native: bool
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsSupplyRevokeCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsAttemptSettleCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    units: Decimal = Field(ge=0)
+    source: Literal["provider_usage", "verified_reconciliation"]
+    evidence_ref: str = Field(min_length=1, max_length=255)
+    provider_request_id: str = Field(default="", max_length=255)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsProviderReceiptSettleCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: str = Field(min_length=1, max_length=255)
+    provider_account_id: str = Field(default="", max_length=255)
+    provider_request_id: str = Field(min_length=1, max_length=255)
+    units: Decimal = Field(ge=0)
+    evidence_ref: str = Field(min_length=1, max_length=255)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class OmsAttemptReleaseCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence_ref: str = Field(min_length=1, max_length=255)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class TmsServiceAccessGrantCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     grant_id: UUID
@@ -1692,6 +1740,85 @@ def create_application(enterprise):
         except (RuntimeError, psycopg.Error):
             return JSONResponse({"detail": "Supply governance unavailable"}, status_code=503)
 
+    @oms.post("/supply/lots")
+    async def oms_supply_lot_register(
+        request: Request,
+        command: OmsSupplyRegisterCommandRequest,
+    ):
+        """OMS 平台供给补充；证据引用只入账，不回显给浏览器。"""
+
+        from deeptutor.persistence.postgres.scope import GlobalScope
+
+        from ..oms.supply import OmsSupplyLedger, SupplyRejected, SupplyRequest
+
+        authorized = await _authorize_oms_request(request, "ops.supply.manage")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            lot_id = await OmsSupplyLedger(enterprise.db).register(
+                GlobalScope(actor.subject),
+                SupplyRequest(
+                    lot_id=command.lot_id,
+                    service_id=command.service_id,
+                    unit_code=command.unit_code,
+                    provider_id=command.provider_id,
+                    provider_account_id=command.provider_account_id,
+                    pool_id=command.pool_id,
+                    basis=command.basis,
+                    hard_ceiling=command.hard_ceiling,
+                    starts_at=command.starts_at,
+                    expires_at=command.expires_at,
+                    evidence_ref=command.evidence_ref,
+                    verified_native=command.verified_native,
+                    actor_subject=actor.subject,
+                    request_id=_request_id(request),
+                    reason=command.reason,
+                ),
+            )
+        except SupplyRejected:
+            return JSONResponse({"detail": "Supply command conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid supply command"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Supply command unavailable"}, status_code=503)
+        return {"lot_id": str(lot_id), "service_id": command.service_id, "version": 1}
+
+    @oms.post("/supply/lots/{lot_id}/revoke")
+    async def oms_supply_lot_revoke(
+        request: Request,
+        lot_id: UUID,
+        command: OmsSupplyRevokeCommandRequest,
+    ):
+        """OMS 平台供给批次撤销；由后端复核 supply manage 权限与版本。"""
+
+        from deeptutor.persistence.postgres.scope import GlobalScope
+
+        from ..oms.supply import OmsSupplyLedger, SupplyRejected, SupplyRevokeRequest
+
+        authorized = await _authorize_oms_request(request, "ops.supply.manage")
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            version = await OmsSupplyLedger(enterprise.db).revoke(
+                GlobalScope(actor.subject),
+                SupplyRevokeRequest(
+                    lot_id=lot_id,
+                    expected_version=command.expected_version,
+                    actor_subject=actor.subject,
+                    request_id=_request_id(request),
+                    reason=command.reason,
+                ),
+            )
+        except SupplyRejected:
+            return JSONResponse({"detail": "Supply revoke conflict"}, status_code=409)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid supply revoke"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Supply revoke unavailable"}, status_code=503)
+        return {"lot_id": str(lot_id), "version": version}
+
     @oms.get("/schools/{school_id}/usage")
     async def oms_school_usage(request: Request, school_id: UUID):
         from ..oms.governance import usage_projection
@@ -1719,6 +1846,29 @@ def create_application(enterprise):
         except (RuntimeError, psycopg.Error):
             return JSONResponse({"detail": "Usage governance unavailable"}, status_code=503)
 
+    @oms.get("/schools/{school_id}/usage/export")
+    async def oms_school_usage_export(request: Request, school_id: UUID):
+        from ..oms.governance import usage_export_projection
+
+        authorized = await _authorize_oms_request(
+            request, "ops.audit.export", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            return await usage_export_projection(
+                enterprise,
+                school_id,
+                actor_subject=actor.subject,
+                request_id=_request_id(request),
+                limit=int(request.query_params.get("limit", "500")),
+            )
+        except ValueError:
+            return JSONResponse({"detail": "Invalid request"}, status_code=422)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Usage export unavailable"}, status_code=503)
+
     @oms.get("/schools/{school_id}/jobs")
     async def oms_school_jobs(request: Request, school_id: UUID):
         from ..oms.governance import jobs_projection
@@ -1732,6 +1882,135 @@ def create_application(enterprise):
             return await jobs_projection(enterprise, school_id)
         except (RuntimeError, psycopg.Error):
             return JSONResponse({"detail": "Job governance unavailable"}, status_code=503)
+
+    @oms.post("/schools/{school_id}/usage/provider-receipts")
+    async def oms_provider_receipt_settle(
+        request: Request,
+        school_id: UUID,
+        command: OmsProviderReceiptSettleCommandRequest,
+    ):
+        """OMS/受控对账按 provider request/task ID 回填原 attempt；不回显 receipt。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.attempts import (
+            OmsAttemptLedger,
+            SettlementRejected,
+            UsageExceedsReservation,
+        )
+
+        authorized = await _authorize_oms_request(
+            request, "ops.reconciliation.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsAttemptLedger(
+                enterprise.db
+            ).settle_provider_receipt_as_reconciler(
+                TenantScope(str(school_id), actor.subject),
+                actor,
+                provider_id=command.provider_id,
+                provider_account_id=command.provider_account_id,
+                provider_request_id=command.provider_request_id,
+                units=command.units,
+                evidence_ref=command.evidence_ref,
+                reason=command.reason,
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except UsageExceedsReservation:
+            return JSONResponse({"detail": "Reconciliation required"}, status_code=409)
+        except SettlementRejected:
+            return JSONResponse({"detail": "Settlement conflict"}, status_code=409)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Settlement unavailable"}, status_code=503)
+        return {
+            "attempt_id": str(result.attempt_id),
+            "status": result.status,
+            "settled_units": _decimal_text(result.settled_units),
+        }
+
+    @oms.post("/schools/{school_id}/attempts/{attempt_id}/settle")
+    async def oms_attempt_settle(
+        request: Request,
+        school_id: UUID,
+        attempt_id: UUID,
+        command: OmsAttemptSettleCommandRequest,
+    ):
+        """OMS 人工核对/更正 attempt；原始 evidence 入账但不回显。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.attempts import (
+            OmsAttemptLedger,
+            SettlementRejected,
+            UsageExceedsReservation,
+        )
+
+        authorized = await _authorize_oms_request(
+            request, "ops.reconciliation.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsAttemptLedger(enterprise.db).settle_as_reconciler(
+                TenantScope(str(school_id), actor.subject),
+                actor,
+                attempt_id,
+                units=command.units,
+                source=command.source,
+                evidence_ref=command.evidence_ref,
+                provider_request_id=command.provider_request_id,
+                reason=command.reason,
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except UsageExceedsReservation:
+            return JSONResponse({"detail": "Reconciliation required"}, status_code=409)
+        except SettlementRejected:
+            return JSONResponse({"detail": "Settlement conflict"}, status_code=409)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Settlement unavailable"}, status_code=503)
+        return {
+            "attempt_id": str(result.attempt_id),
+            "status": result.status,
+            "settled_units": _decimal_text(result.settled_units),
+        }
+
+    @oms.post("/schools/{school_id}/attempts/{attempt_id}/release")
+    async def oms_attempt_release(
+        request: Request,
+        school_id: UUID,
+        attempt_id: UUID,
+        command: OmsAttemptReleaseCommandRequest,
+    ):
+        """OMS 核对确认未发出后释放预留；原始 evidence 入账但不回显。"""
+
+        from ..management.authorization import ManagementAuthorizationDenied
+        from ..oms.attempts import OmsAttemptLedger, SettlementRejected
+
+        authorized = await _authorize_oms_request(
+            request, "ops.reconciliation.manage", target_school_id=school_id
+        )
+        if isinstance(authorized, JSONResponse):
+            return authorized
+        actor, _ = authorized
+        try:
+            result = await OmsAttemptLedger(enterprise.db).release_as_reconciler(
+                TenantScope(str(school_id), actor.subject),
+                actor,
+                attempt_id,
+                evidence_ref=command.evidence_ref,
+                reason=command.reason,
+            )
+        except ManagementAuthorizationDenied:
+            return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        except SettlementRejected:
+            return JSONResponse({"detail": "Release conflict"}, status_code=409)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Release unavailable"}, status_code=503)
+        return {"attempt_id": str(result.attempt_id), "status": result.status}
 
     @oms.get("/audit")
     async def oms_audit(request: Request):
@@ -1757,16 +2036,15 @@ def create_application(enterprise):
     async def oms_cost(request: Request):
         """成本为 OMS-only 敏感读取；没有可信成本源时返回未配置状态而不是伪造金额。"""
 
-        from ..oms.governance import describe_status
+        from ..oms.governance import cost_projection
 
         authorized = await _authorize_oms_request(request, "ops.cost.read")
         if isinstance(authorized, JSONResponse):
             return authorized
-        return {
-            "costs": [],
-            "status": describe_status("not_configured"),
-            "notice": "当前没有已核实供应商成本源；不会从配额或用量推导经营成本。",
-        }
+        try:
+            return await cost_projection(enterprise)
+        except (RuntimeError, psycopg.Error):
+            return JSONResponse({"detail": "Cost governance unavailable"}, status_code=503)
 
     @oms.post("/models/draft")
     async def oms_model_draft(request: Request, command: OmsModelDraftRequest):

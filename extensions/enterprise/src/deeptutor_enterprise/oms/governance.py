@@ -10,7 +10,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
+
+from psycopg.types.json import Jsonb
 
 from deeptutor.persistence.postgres.scope import GlobalScope
 
@@ -321,9 +323,22 @@ async def tenant_projection(enterprise, school_id: UUID) -> dict[str, object]:
             await c.execute(
                 "SELECT t.id,t.external_tid,t.external_eligibility,t.local_enabled,"
                 "t.bootstrap_completed,t.provisioning_status,t.recovery_state,"
-                "b.eduplus_tenant_id,b.status AS binding_status,b.version AS binding_version "
+                "b.eduplus_tenant_id,b.status AS binding_status,b.version AS binding_version,"
+                "p.school_code,r.external_tenant_name "
                 "FROM enterprise.tenants t "
                 "LEFT JOIN oms.school_bindings b ON b.tenant_id=t.id "
+                "LEFT JOIN LATERAL ("
+                "SELECT school_code FROM eduplus2.webhook_school_state "
+                "WHERE school_id=t.id AND external_tenant_id=b.eduplus_tenant_id "
+                "AND binding_version=b.version "
+                "ORDER BY updated_at DESC,generation DESC LIMIT 1"
+                ") p ON TRUE "
+                "LEFT JOIN LATERAL ("
+                "SELECT external_tenant_name FROM eduplus2.external_client_registrations "
+                "WHERE tenant_id=t.id AND internal_tenant_id=t.id AND status='active' "
+                "AND btrim(external_tenant_name)<>'' "
+                "ORDER BY updated_at DESC,id DESC LIMIT 1"
+                ") r ON TRUE "
                 "WHERE t.id=%s",
                 (school_id,),
             )
@@ -348,12 +363,21 @@ async def tenant_projection(enterprise, school_id: UUID) -> dict[str, object]:
                 "FROM oms.usage_attempts GROUP BY status ORDER BY status"
             )
         ).fetchall()
-    external_tid = str(row["external_tid"] or "")
+    external_tid = str(row["external_tid"] or "").strip()
+    eduplus_tenant_id = str(row["eduplus_tenant_id"] or "").strip()
+    school_code = (
+        str(row["school_code"] or "").strip()
+        or external_tid
+        or eduplus_tenant_id
+    )
+    school_name = str(row["external_tenant_name"] or "").strip()
     return {
         "school_id": str(row["id"]),
+        "school_code": school_code,
+        "school_name": school_name,
         "external_binding": {
             "has_external_tid": bool(external_tid),
-            "eduplus_tenant_id": str(row["eduplus_tenant_id"] or ""),
+            "eduplus_tenant_id": eduplus_tenant_id,
             "status": describe_status(row["binding_status"] or "unknown"),
             "version": row["binding_version"] or 0,
         },
@@ -525,8 +549,10 @@ async def jobs_projection(enterprise, school_id: UUID) -> dict[str, object]:
     async with enterprise.db.transaction(TenantScope(str(school_id), "@oms-jobs-projection")) as c:
         rows = await (
             await c.execute(
-                "SELECT attempt_id,operation_id,service_id,unit_code,status,updated_at,"
-                "reserved_units,settled_units "
+                "SELECT attempt_id,operation_id,service_id,unit_code,provider_id,"
+                "provider_account_id,model_id,subject_kind,subject_id,user_id,app_id,"
+                "status,updated_at,reserved_units,settled_units,"
+                "GREATEST(reserved_units - settled_units,0) AS pending_units "
                 "FROM oms.usage_attempts "
                 "WHERE status IN ('remote_unknown','reconcile_required') "
                 "ORDER BY updated_at DESC,attempt_id LIMIT 100"
@@ -540,13 +566,149 @@ async def jobs_projection(enterprise, school_id: UUID) -> dict[str, object]:
                 "operation_id": str(row["operation_id"]),
                 "service_id": row["service_id"],
                 "unit_code": row["unit_code"],
+                "provider_id": row["provider_id"],
+                "provider_account_id": row["provider_account_id"],
+                "model_id": row["model_id"],
+                "subject_kind": row["subject_kind"],
+                "subject_id": row["subject_id"],
+                "user_id": row["user_id"],
+                "app_id": row["app_id"],
                 "status": describe_status(row["status"]),
                 "updated_at": _iso(row["updated_at"]),
                 "reserved_units": _decimal_text(row["reserved_units"]),
                 "settled_units": _decimal_text(row["settled_units"]),
+                "pending_units": _decimal_text(row["pending_units"]),
             }
             for row in rows
         ],
+    }
+
+
+async def usage_export_projection(
+    enterprise,
+    school_id: UUID,
+    *,
+    actor_subject: str,
+    request_id: str,
+    limit: int = 500,
+) -> dict[str, object]:
+    """返回学校 usage attempt 的 OMS 安全导出；原始证据和供应商 receipt 不出库。"""
+
+    limit = min(max(int(limit), 1), 1_000)
+    async with enterprise.db.transaction(TenantScope(str(school_id), "@oms-usage-export")) as c:
+        rows = await (
+            await c.execute(
+                "SELECT attempt_id,operation_id,service_id,unit_code,provider_id,"
+                "provider_account_id,model_id,subject_kind,subject_id,user_id,app_id,"
+                "status,reserved_units,settled_units,"
+                "GREATEST(reserved_units - settled_units,0) AS pending_units,"
+                "started_at,updated_at "
+                "FROM oms.usage_attempts "
+                "ORDER BY started_at DESC,attempt_id LIMIT %s",
+                (limit,),
+            )
+        ).fetchall()
+        await c.execute(
+            "INSERT INTO oms.audit_events"
+            "(id,actor_subject,action,target_tenant_id,object_kind,object_id,"
+            "request_id,result,reason,safe_summary) "
+            "VALUES(%s,%s,'usage.export',%s,'usage_export',%s,%s,'success',%s,%s)",
+            (
+                uuid4(),
+                actor_subject,
+                school_id,
+                str(school_id),
+                request_id,
+                "safe_usage_export",
+                Jsonb({"item_count": len(rows), "format": "json"}),
+            ),
+        )
+    return {
+        "school_id": str(school_id),
+        "export": {
+            "kind": "usage_attempts",
+            "format": "json",
+            "item_count": len(rows),
+            "redacted_fields": [
+                "raw_evidence",
+                "provider_receipts",
+                "secrets",
+                "cost_amounts",
+            ],
+        },
+        "items": [
+            {
+                "attempt_id": str(row["attempt_id"]),
+                "operation_id": str(row["operation_id"]),
+                "service_id": row["service_id"],
+                "unit_code": row["unit_code"],
+                "provider_id": row["provider_id"],
+                "provider_account_id": row["provider_account_id"],
+                "model_id": row["model_id"],
+                "subject_kind": row["subject_kind"],
+                "subject_id": row["subject_id"],
+                "user_id": row["user_id"],
+                "app_id": row["app_id"],
+                "status": describe_status(row["status"]),
+                "reserved_units": _decimal_text(row["reserved_units"]),
+                "settled_units": _decimal_text(row["settled_units"]),
+                "pending_units": _decimal_text(row["pending_units"]),
+                "started_at": _iso(row["started_at"]),
+                "updated_at": _iso(row["updated_at"]),
+            }
+            for row in rows
+        ],
+    }
+
+
+async def cost_projection(enterprise) -> dict[str, object]:
+    """返回 OMS-only 成本安全投影；缺可信成本契约时只展示待核定用量摘要。"""
+
+    cost_status = describe_status("not_configured")
+    async with enterprise.db.transaction(GlobalScope("@oms-cost-projection")) as c:
+        tenant_rows = await (
+            await c.execute("SELECT id FROM enterprise.tenants ORDER BY id LIMIT 500")
+        ).fetchall()
+    rows = []
+    for tenant_row in tenant_rows:
+        school_id = tenant_row["id"]
+        async with enterprise.db.transaction(
+            TenantScope(str(school_id), "@oms-cost-projection")
+        ) as c:
+            rows.extend(
+                await (
+                    await c.execute(
+                        "SELECT tenant_id,service_id,provider_id,provider_account_id,model_id,unit_code,"
+                        "count(*) AS attempts,"
+                        "COALESCE(sum(settled_units),0) AS settled_units,"
+                        "COALESCE(sum(GREATEST(reserved_units - settled_units,0)),0) AS pending_units "
+                        "FROM oms.usage_attempts "
+                        "GROUP BY tenant_id,service_id,provider_id,provider_account_id,model_id,unit_code "
+                        "ORDER BY tenant_id,service_id,provider_id,provider_account_id,model_id,unit_code "
+                        "LIMIT 500"
+                    )
+                ).fetchall()
+            )
+    return {
+        "costs": [],
+        "uncosted_usage": [
+            {
+                "school_id": str(row["tenant_id"]),
+                "service_id": row["service_id"],
+                "provider_id": row["provider_id"],
+                "provider_account_id": row["provider_account_id"],
+                "model_id": row["model_id"],
+                "unit_code": row["unit_code"],
+                "attempts": row["attempts"],
+                "settled_units": _decimal_text(row["settled_units"]),
+                "pending_units": _decimal_text(row["pending_units"]),
+                "cost_status": cost_status,
+                "reason": "供应商成本合同未核实，OMS 只能展示用量待核定摘要。",
+            }
+            for row in rows
+        ],
+        "status": cost_status,
+        "notice": "当前没有已核实供应商成本源；不会从配额或用量推导经营成本。",
     }
 
 
@@ -560,8 +722,8 @@ async def supply_projection(enterprise) -> dict[str, object]:
         ).fetchall()
         lots = await (
             await c.execute(
-                "SELECT service_id,provider_id,pool_id,unit_code,status,hard_ceiling,"
-                "settled_lifetime,committed_unspent,reserved_inflight,starts_at,expires_at "
+                "SELECT id,service_id,provider_id,pool_id,unit_code,status,hard_ceiling,"
+                "settled_lifetime,committed_unspent,reserved_inflight,starts_at,expires_at,version "
                 "FROM oms.supply_lots ORDER BY service_id,pool_id,expires_at,id LIMIT 200"
             )
         ).fetchall()
@@ -578,6 +740,7 @@ async def supply_projection(enterprise) -> dict[str, object]:
         ],
         "supply_lots": [
             {
+                "lot_id": str(row["id"]),
                 "service_id": row["service_id"],
                 "provider_id": row["provider_id"],
                 "pool_id": row["pool_id"],
@@ -591,6 +754,7 @@ async def supply_projection(enterprise) -> dict[str, object]:
                 "reserved_inflight": _decimal_text(row["reserved_inflight"]),
                 "starts_at": _iso(row["starts_at"]),
                 "expires_at": _iso(row["expires_at"]),
+                "version": row["version"],
             }
             for row in lots
         ],

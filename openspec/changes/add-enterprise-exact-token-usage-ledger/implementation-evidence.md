@@ -81,3 +81,45 @@
 
 - 2.1/2.2 完成的是 OMS 总账和预留准入服务；真实 CLI/HTTP/WS/SDK/后台/Agent adapter 尚未全部调用该服务，因此全入口验收仍归 3.1/3.2 与 OMS 业务 7.4/7.5。
 - request/task ID 对账、pending 告警、供应商账单核对与只追加更正仍属 2.3，未因本任务完成。
+
+## 2026-09-30 本地合成 PG 与隐私/回归验证同步
+
+本节同步当前已完成的本地验证，不关闭真实 adapter 样本、供应商账单核对或逐服务外部 usage 合同：
+
+- 合成 PG/未知远端：
+  - `OmsAttemptLedger` 已覆盖预留、赠送优先、多 attempt、重复回放、迟到 usage、remote_unknown 保留预留、provider usage 幂等、overage/reconcile_required、并发 reservation 不超额、grant revoke/expire 只释放未使用承诺等总账不变量。
+  - `UsageCallContext.safe_request_hash()` 拒绝 prompt/messages/answer/content/attachments 等私有正文进入账本 fingerprint。
+- 分级 DTO 防泄漏：
+  - OMS 用量明细只返回 operation/attempt、service/unit、provider/model 安全摘要、subject、状态、reserved/settled 单位和时间，不返回 evidence、provider_request_id、prompt、回答、附件或成本。
+  - TMS `/api/v1/tms/quotas` 当前学校只读投影不返回 provider/model/供给/成本/跨学校字段。
+- 验证：
+  - `.venv/bin/python -m pytest extensions/enterprise/tests -q` → **803 passed, 3 skipped, 2 warnings**；其中 `test_oms_attempt_ledger.py`、`test_oms_call_context.py`、`test_oms_ledger_migration.py` 仍覆盖核心总账与隐私不变量。
+  - `npm test --prefix extensions/enterprise/frontends` → **27 files / 297 tests passed**，含 OMS/TMS usage DTO 前端脱敏与只读展示。
+  - `openspec validate add-enterprise-exact-token-usage-ledger --strict` → 见本轮验证记录；`git diff --check` → **通过**；只读 upstream merge-tree smoke 未发现冲突标记。
+
+任务影响：新增勾选 **3.1.1、3.2.1**。父任务 **2.3、3.1、3.2** 仍未完成；request/task ID 可核验账单对账、pending 告警、只追加更正、真实 adapter 调用样本、供应商证据逐笔比对和逐服务缺合同/usage/上界清单仍待完成。
+
+## 2026-09-30 Provider request/task ID 幂等对账切片（2.3.1 完成；2.3 父任务未完成）
+
+实现内容：
+
+- `OmsAttemptLedger.mark_dispatched()` 支持记录 provider request/task ID，并在 append-only evidence event 中保留发出 intent；同一 attempt 再次记录不同 provider request ID 会失败关闭。
+- 新增 `settle_provider_receipt()` 与 OMS API `/api/v1/oms/schools/{school_id}/usage/provider-receipts`，可按 `provider_id/provider_account_id/provider_request_id` 找回原 attempt 并调用既有幂等结算逻辑；重复 receipt 不重复扣量，未知 receipt 不释放预留。
+- `UsageCallContext.safe_request_hash()` 递归拒绝私有正文 key，`UsageCallContext.attempt()` 先校验 subject_kind 与 user/app/service 归属，避免真实入口把错误主体或 prompt/附件信息写入用量哈希/总账。
+
+验证：
+
+- `test_oms_attempt_ledger.py` → **16 passed**。
+- `test_oms_call_context.py` → **3 passed**。
+- `test_application.py::test_oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission` → **1 passed**。
+- `ruff check` 覆盖 `oms/attempts.py`、`oms/call_context.py`、`api/application.py` 与相关测试 → **通过**。
+
+剩余：2.3 仍未整体完成；真实 provider adapter 的 request/task ID 回填、可核验账单批处理、pending 告警、逐服务缺上界 fail-closed 样本和 test-cn 真实证据仍待后续切片。
+
+## 2026-09-30 合成 provider adapter runner 样本（3.1.2 完成；3.1 父任务未完成）
+
+新增 `run_metered_provider_attempt()` 作为真实 adapter 接线前的企业扩展适配层：发出前预留并写 dispatch intent，成功 receipt 按原 attempt 结算，发出后异常标记 `remote_unknown` 且保留预留。合成测试证明成功 provider 样本、provider request ID 回填、timeout 未知远端和账本不变量均可落在同一 attempt ledger；runner 不接收 prompt/回答/附件正文。
+
+验证：`test_oms_attempt_ledger.py` + `test_oms_call_context.py` → **20 passed**；相关 ruff → **通过**。
+
+剩余：真实 adapter 调用样本仍需覆盖 CLI、HTTP/WS、SDK、后台和 Agent 子调用；供应商证据逐笔比对、崩溃/重放和跨租户全链路仍在父任务。

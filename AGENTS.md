@@ -89,6 +89,20 @@ this repository's test-cn deployment. If a mistaken tag is created, delete the
 incorrect local and remote tag, then create a new immutable tag with the correct
 `deploy/test-cn/...` name; do not move or reuse an existing deployment tag.
 
+## Local HTTPS debugging boundary
+
+When debugging local OMS/TMS/frontend/auth/cookie/OAuth/WebSocket/static-asset
+behavior that is reached through a real domain such as `deeptutor.lfun.pub`,
+use the `local-ssl` skill as a mandatory part of the workflow. Do not treat
+`localhost` or raw service-port checks as sufficient for browser-facing local
+verification when `local-ssl.tsv` defines the route.
+
+Before asking the user to test locally, confirm the `local-ssl` route is linked
+and healthy, then verify the affected path through the HTTPS domain
+(`https://deeptutor.lfun.pub/...`). If local debugging requires route changes,
+update this repository's `local-ssl.tsv` and re-apply the local-ssl route
+rather than bypassing the HTTPS reverse-proxy chain.
+
 ## Database logic boundary
 
 All supported local, default, and enterprise business runtimes are

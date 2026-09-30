@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 # Agent 平台 OMS 高保真原型与总体契约重构
 
 > **2026-09-27 原型交互进度**：开发态 OMS 已演示平台人员、OMS 角色/动作、平台人员学校操作范围和授权审计；学校账号及首位 TMS 管理员开通属于 TMS／学校侧。原型验收证据见 [浏览器审计](prototype-browser-audit-2026-09-27.md)。正式身份、权限与 403/409 API 仍须按 [`add-enterprise-management-authorization`](../add-enterprise-management-authorization/proposal.md) 独立审阅和实施。

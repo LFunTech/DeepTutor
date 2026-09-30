@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 > **2026-09-29 执行版；任务 1.1 已完成。** 本版对齐独立 OMS、五类资源及供给→权益→用量→核对；旧 Token 费用/欠费任务已废止。当前 change 只负责独立 OMS 正式前端和前后端权限一致性，后端业务能力分别由授权、OMS 业务、Provider 设置和逐 attempt 用量 change 交付；真实 API/权限未就绪前不接生产入口。
 
 > **前端接入顺序（非勾选项）**：先接 `/me/permissions` 与后端 display catalog，保证无权/未启用状态；再接资源/Provider/服务授权/额度/用量只读视图；最后开放获授权写动作。任何页面不得用 fixture、浏览器本地状态或旧原型 API 代替真实 `/api/v1/oms/*`，也不得在未获后端权限 key 时预取 Secret、成本、跨学校明细或学校账号数据。
@@ -10,9 +12,12 @@
 - [ ] 2.1 实现五类资源、配置执行者状态、租户/服务授权、供给/额度总览与列表→详情，使用后端状态文案及真实权限过滤。
   - [x] 2.1.1 已接入正式 OMS 只读聚合首屏：资源状态、模型/Provider 草稿、已授权学校范围、供给服务定义/批次、审计与 OMS-only 成本状态均来自 `/api/v1/oms/*` 安全 DTO，并按 `ops.*` 动作摘要条件读取。
   - [ ] 2.1.2 尚需补齐服务授权/额度详情、租户/服务列表→详情联动、后端 display catalog 全量 descriptor 复用和真实筛选分页。
+    - [x] 2.1.2.1 已补正式 OMS 学校详情的服务授权/额度/用量安全摘要、学校详情→用量页深链选择学校，以及 Skill 写权限下的“查看详情”入口；全部复用 `/api/v1/oms/tenants` 与 `/api/v1/oms/schools/{school_id}/*` 安全 DTO，不读取学校账号或私有正文。
+    - [x] 2.1.2.2 已接入 `/api/v1/oms/status/catalog` 后端 display descriptor：正式 OMS 对 raw 状态码优先使用后端 label/description，详情中显示远端未知/待核对的下一步说明；catalog 获取失败时只退回安全 DTO 原文，不新增前端枚举语义。
 - [ ] 2.2 实现租户→用户/应用→service/provider/model→operation/attempt 的原生单位明细、预留/已结算/待核对原因、筛选分页/授权导出；不得前端估算成本或租户费用。
   - [x] 2.2.1 已接入首个已授权学校的 `/usage` attempt 只读 DTO，展示 service、operation/attempt、状态与原生单位预留/结算摘要，不展示学校私有正文或前端估算成本。
   - [ ] 2.2.2 尚需补齐租户→用户/应用→service/provider/model 的筛选分页、授权导出、完整详情和跨学校负例。
+    - [x] 2.2.2.1 已支持 `/oms/usage/school/{school_id}` 按已授权学校深链读取对应学校 usage/jobs，避免始终使用首个学校；筛选分页、导出和真实跨学校负例仍待完成。
 - [ ] 2.3 实现审计/任务及 OMS-only 已核定/未核定供应商成本查询、脱敏技术详情和无敏感原文的错误呈现。
   - [x] 2.3.1 已接入首个已授权学校的 `/jobs` 待核对任务只读 DTO 与 `/audit`、`/cost` 安全 DTO；成本状态不从租户额度/用量推导，任务不提供结算/释放/核销按钮。
   - [ ] 2.3.2 尚需补齐任务详情、已核定/未核定供应商成本查询、脱敏错误详情和分页筛选。
@@ -23,7 +28,10 @@
   - [ ] 3.1.2 尚需供给补充、服务授权、统一赠送/充值额度调整、核对动作，以及 `ops.permissions.manage` 平台人员/角色/学校范围授权 UI 与审计回读。
     - [x] 3.1.2.1 已在正式 `/oms` 平台授权治理区按 `ops.permissions.manage` 接入平台人员、角色、学校范围授权、assignment 撤权、主体停用、审批复核/apply 和审计回读安全 DTO。
     - [ ] 3.1.2.2 尚需供给补充、服务授权、统一赠送/充值额度调整、核对动作，以及真实账号下的平台授权按钮级验收。
+      - [x] 3.1.2.2.1 已在正式 OMS 供给页接入学校服务授权和 quota grant/adjust/revoke/expire 写 API：按钮按 `ops.entitlements.manage`/`ops.quotas.manage` 显隐，payload 绑定当前已授权学校、entitlement version、supply lot 和 grant version，不回显 Secret 或成本。
+      - [x] 3.1.2.2.2 已新增 OMS 供给批次注册/撤销后端 API，并在正式 OMS 供给页按 `ops.supply.manage` 接入“撤销供给批次”；payload 只使用后端安全 DTO 的 `lot_id`/`version` 与原因，不在前端伪造采购证据或补充供给输入。
 - [ ] 3.2 区分配置草稿/待生效/部分失败、供给不足、额度不足、远端未知/待核对/已结算；单服务额度不足不显示为租户停用，登录与管理仍可用。
+  - [x] 3.2.1 已用正式 OMS 前端红绿测试覆盖 raw `remote_unknown` 由后端 display catalog 呈现为“远端结果未知”，并在 attempt 详情显示必须核对后才能释放/结算的说明；不在前端硬编码后端状态语义。
 - [ ] 3.3 核验 OMS 平台人员/角色/学校操作范围/审计入口，删除“学校后台开通”及其旧深链/API；学校侧开通只由 TMS 提案实现，OMS 不列出或审批学校账号。
   - [x] 3.3.1 已在正式 `/oms` 中只展示本产品已登记平台主体与本地 `ops.*` 授权治理，不显示学校账号开通入口；写操作全部走 OMS 授权 API。
   - [ ] 3.3.2 尚需真实平台目录候选、真实账号按钮级验收和旧深链生产环境核验。
@@ -34,4 +42,9 @@
   - [ ] 4.1.2 尚需真实平台角色矩阵、跨学校真实负例、本地撤权/账号停用、并发冲突、额度不足、API 失败与完整 E2E。
     - [x] 4.1.2.1 已用后端/前端合成测试覆盖 OMS 授权审批、低风险学校范围授予、assignment 撤权、主体停用、未委托学校 403 与正式 UI API key/payload 绑定。
     - [ ] 4.1.2.2 尚需真实平台角色矩阵、跨学校真实负例、并发冲突、额度不足、API 失败与完整 E2E。
+      - [x] 4.1.2.2.1 已用正式 OMS 前端红绿测试覆盖学校服务授权/额度/用量摘要、按学校深链读取对应 usage/jobs，以及 Skill 写权限下仍保留详情抽屉；真实跨学校负例和完整 E2E 仍待 test-cn 验收。
+      - [x] 4.1.2.2.2 已用正式 OMS 前端红绿测试覆盖 `/api/v1/oms/status/catalog` 请求、raw 状态码 label 复用和详情说明展示，防止远端未知/待核对/已结算被前端误解或硬编码。
+      - [x] 4.1.2.2.3 已用正式 OMS 前端红绿测试覆盖服务授权、额度赠送、额度调整、撤销和过期按钮分别调用 `/api/v1/oms/schools/{school_id}/entitlements/{service_id}` 与 `/quota-grants*` API，且版本与 provider/pool/grant payload 均来自安全 DTO。
+      - [x] 4.1.2.2.4 已用后端/前端合成测试覆盖 OMS 供给批次注册/撤销 API 与正式 UI 撤销按钮：后端仅 `ops.supply.manage` platform 范围可写，school 范围不能冒充平台供给；前端撤销请求绑定 DTO `lot_id`/`version`。
 - [ ] 4.2 验证 OMS/TMS 独立构建/部署、共享安全 DTO、生产原型 404、可访问性/窄屏、真实 API 无 mock、构建/类型/测试；复核上游兼容与 OpenSpec 验证后才宣称上线。
+  - [x] 4.2.1 已完成当前本地可执行验证：OMS/TMS 独立 typecheck/build、企业前端全量测试与 lint、企业后端全量测试、OpenSpec strict validation、`git diff --check` 和只读 upstream merge-tree smoke 均通过；真实部署、真实 API 无 mock 浏览器 E2E、真实角色矩阵/跨学校负例仍归 4.1/5.1。

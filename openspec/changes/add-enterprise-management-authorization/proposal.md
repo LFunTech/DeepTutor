@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 # 智能体基座 OMS/TMS 双应用域权限体系
 
 > **实施中，完整任务尚未验收；局部结果见 implementation-evidence.md。** 2026-09-27 用户进一步明确：**权限由 DeepTutor Enterprise 程序控制**；PG 只保存权限事实、版本和审计，数据库权限/RLS 不是操作者授权决策器；EduPlus2 在权限链路中只提供认证及稳定身份识别，不提供本产品角色或动作许可。OMS 仅管理平台人员；首位 TMS 管理员的身份由已验签的真实 `subscription.created.actor.user_id`（按 EduPlus2 文档作为后续 OIDC `sub` 匹配候选）提供，并在接收该真实订阅 Webhook 的同一业务事务中即时开启，不走旧学校侧双负责人开通，也无需学校管理员再单独开通。用户后续指定事件所属订阅是否仍为当前订阅由 EduPlus2 处理，本产品不额外查询当前订阅 ID。本代理不得修改 EduPlus2 仓库、Keycloak 或 OpenFGA；本文不授权真实数据操作、部署、归档或提交。

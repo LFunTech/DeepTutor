@@ -70,3 +70,24 @@
 
 - 本轮确认的是应用层配置状态机和 OMS API；尚未为每个真实服务 adapter 完成可计费探针、学校服务准入、逐服务 usage/attempt 核对，因此 2.3、2.4、3.x 仍未完成。
 - 不修改 EduPlus2、Keycloak、OpenFGA 或外部 repo。
+
+## 2026-09-30 Provider 设置正式 UI 接线与本地回归同步
+
+本节同步当前正式 OMS UI 与本地全量验证结果，不表示逐真实服务 adapter 探针、可计费配置测试或 test-cn 在线账号状态已完成：
+
+- 权限/身份边界：
+  - 正式 Provider 设置 API 与 UI 均只使用 DeepTutor Enterprise 本地 `ops.providers.read/manage` 和 `ops.oms.access`；租户 token、伪造 header、auditor/security-only 角色写入仍失败关闭。
+  - 未新增 EduPlus2、OpenFGA 或 Keycloak 迁移；`eduplus-platform-admin` 在线账号状态和真实 test-cn 平台身份验收仍由管理授权 proposal 跟踪。
+- 配置状态机：
+  - 后端 Provider 设置 `draft/test/publish/rollback` 已支持 backend/canary 执行者确认、Secret ref `env:` 校验、缺 Secret 发布失败保留旧 active、rollback 丢弃坏草稿。
+  - 正式 OMS 模型/Provider 页面按 `ops.providers.read/manage` 展示脱敏连接与 test/publish/rollback 按钮；响应和浏览器状态不回显 Secret ref 明文、环境变量名、`sk-*` 或 provider 密钥。
+  - TMS 当前只读取学校安全 DTO，不接收平台 Provider/Secret 字段。
+- 验证：
+  - `npm test --prefix extensions/enterprise/frontends` → **27 files / 297 tests passed**，包含正式 OMS 模型/Provider 只读 DTO 脱敏与写按钮 payload 绑定。
+  - `npm run typecheck:oms --prefix extensions/enterprise/frontends && npm run typecheck:tms --prefix extensions/enterprise/frontends && npm run build:oms --prefix extensions/enterprise/frontends && npm run build:tms --prefix extensions/enterprise/frontends` → **通过**。
+  - `npm run lint --prefix extensions/enterprise/frontends` → **通过**。
+  - `.venv/bin/python -m pytest extensions/enterprise/tests -q` → **803 passed, 3 skipped, 2 warnings**。
+  - `openspec validate add-enterprise-all-service-provider-settings --strict` → 见本轮验证记录；`git diff --check` → **通过**。
+  - 只读 upstream mergeability smoke：merge-base `ef2d9e5c3c99fd073742c5aadc2bb9584b1e503b`，`git merge-tree "$BASE" HEAD upstream/main` 未发现冲突标记。
+
+任务影响：新增勾选 **1.2.1、2.3.1、3.1.1、3.2.1**。父任务 **1.2、2.3、2.4、3.1、3.2** 仍不关闭；逐服务真实执行者配置加载/探针、可计费测试学校选择、OMS 服务准入/attempt 核对、真实外部服务失败/重试负例与完整未支持服务清单仍待完成。

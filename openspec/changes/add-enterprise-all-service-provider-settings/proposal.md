@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 # 云端 OMS 全服务 Provider 设置与执行者确认
 
 > **2026-09-27 权威边界修订，当前修订版已单独获批**：全服务配置和 OMS 独占写入目标不变；平台操作者使用 EduPlus2 既存身份，`ops.*` 配置权限由 DeepTutor 自有 OMS 权限管理。批准不等于本地权限与 OMS attempt 准入验收；未就绪前不开放云端写路由。

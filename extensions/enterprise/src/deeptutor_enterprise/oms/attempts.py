@@ -94,6 +94,12 @@ def _safe_ref(value: str) -> str:
     return value
 
 
+def _safe_provider_request_id(value: str, *, required: bool = False) -> str:
+    if not isinstance(value, str) or len(value) > 255 or (required and not value.strip()):
+        raise SettlementRejected("provider request id is invalid")
+    return value
+
+
 def _fingerprint(scope: TenantScope, request: AttemptRequest) -> str:
     data = {
         "tenant_id": scope.tenant_id,
@@ -222,14 +228,16 @@ class OmsAttemptLedger:
             tuple((row["grant_id"], row["lot_id"], row["allocated_units"]) for row in allocations),
         )
 
-    async def _attempt(self, c, scope: TenantScope, attempt_id: UUID):
+    async def _attempt(
+        self, c, scope: TenantScope, attempt_id: UUID, *, require_subject: bool = True
+    ):
         row = await (
             await c.execute(
                 "SELECT * FROM oms.usage_attempts WHERE tenant_id=%s AND attempt_id=%s FOR UPDATE",
                 (UUID(scope.tenant_id), attempt_id),
             )
         ).fetchone()
-        if row is None or row["subject_id"] != scope.user_id:
+        if row is None or (require_subject and row["subject_id"] != scope.user_id):
             raise SettlementRejected("attempt is unavailable to this subject")
         try:
             validate_usage_attempt_row(row)
@@ -249,7 +257,9 @@ class OmsAttemptLedger:
             raise SettlementRejected(str(error)) from None
         return row
 
-    async def _lock_attempt_pool(self, c, scope: TenantScope, attempt_id: UUID):
+    async def _lock_attempt_pool(
+        self, c, scope: TenantScope, attempt_id: UUID, *, require_subject: bool = True
+    ):
         """先取不可变池身份再锁池与 attempt，避免和 reserve 重放反序死锁。"""
 
         pool = await (
@@ -260,7 +270,7 @@ class OmsAttemptLedger:
                 (UUID(scope.tenant_id), attempt_id),
             )
         ).fetchone()
-        if pool is None or pool["subject_id"] != scope.user_id:
+        if pool is None or (require_subject and pool["subject_id"] != scope.user_id):
             raise SettlementRejected("attempt is unavailable to this subject")
         if pool["pool_id"] is None:
             raise SettlementRejected("legacy attempt requires explicit reconciliation")
@@ -272,7 +282,7 @@ class OmsAttemptLedger:
             pool["unit_code"],
         )
         await _pool_lock(c, *fields)
-        attempt = await self._attempt(c, scope, attempt_id)
+        attempt = await self._attempt(c, scope, attempt_id, require_subject=require_subject)
         if fields != tuple(
             attempt[field]
             for field in (
@@ -493,19 +503,58 @@ class OmsAttemptLedger:
             )
         return AttemptReservation(request.attempt_id, "reserved", tuple(allocations))
 
-    async def mark_dispatched(self, scope: TenantScope, attempt_id: UUID) -> None:
+    async def mark_dispatched(
+        self,
+        scope: TenantScope,
+        attempt_id: UUID,
+        *,
+        evidence_ref: str | None = None,
+        provider_request_id: str = "",
+    ) -> None:
+        provider_request_id = _safe_provider_request_id(provider_request_id)
+        evidence_ref = _safe_ref(evidence_ref) if evidence_ref is not None else str(attempt_id)
         async with self.db.transaction(scope) as c:
             attempt = await self._attempt(c, scope, attempt_id)
+            current_provider_request_id = attempt["provider_request_id"] or ""
+            if (
+                provider_request_id
+                and current_provider_request_id
+                and current_provider_request_id != provider_request_id
+            ):
+                raise SettlementRejected("provider request id conflicts with prior dispatch")
             if attempt["status"] == "dispatched":
+                if provider_request_id and not current_provider_request_id:
+                    await c.execute(
+                        "UPDATE oms.usage_attempts "
+                        "SET provider_request_id=%s,updated_at=now() "
+                        "WHERE tenant_id=%s AND attempt_id=%s",
+                        (provider_request_id, UUID(scope.tenant_id), attempt_id),
+                    )
+                    await _event(
+                        c,
+                        UUID(scope.tenant_id),
+                        attempt_id,
+                        "dispatch_intent",
+                        evidence_ref,
+                        provider_request_id=provider_request_id,
+                    )
                 return
             if attempt["status"] != "reserved":
                 raise SettlementRejected("attempt cannot be dispatched from current state")
             await c.execute(
-                "UPDATE oms.usage_attempts SET status='dispatched',updated_at=now() "
+                "UPDATE oms.usage_attempts "
+                "SET status='dispatched',provider_request_id=%s,updated_at=now() "
                 "WHERE tenant_id=%s AND attempt_id=%s",
-                (UUID(scope.tenant_id), attempt_id),
+                (provider_request_id, UUID(scope.tenant_id), attempt_id),
             )
-            await _event(c, UUID(scope.tenant_id), attempt_id, "dispatch_intent", str(attempt_id))
+            await _event(
+                c,
+                UUID(scope.tenant_id),
+                attempt_id,
+                "dispatch_intent",
+                evidence_ref,
+                provider_request_id=provider_request_id,
+            )
 
     async def mark_remote_unknown(
         self, scope: TenantScope, attempt_id: UUID, *, evidence_ref: str
@@ -579,6 +628,97 @@ class OmsAttemptLedger:
                 {},
             )
 
+    async def release_as_reconciler(
+        self,
+        scope: TenantScope,
+        identity,
+        attempt_id: UUID,
+        *,
+        evidence_ref: str,
+        reason: str,
+    ) -> SettlementResult:
+        """OMS 核对确认未发出：在权限事务内释放尚未 dispatch 的预留。"""
+
+        from ..management.authorization import require_management_permission
+
+        _safe_ref(evidence_ref)
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            raise SettlementRejected("reconciliation reason is required")
+        tenant_id = UUID(scope.tenant_id)
+        evidence = {
+            "source": "confirmed_not_sent",
+            "reference": evidence_ref,
+            "units": "0",
+            "provider_request_id": "",
+        }
+        async with self.db.transaction(scope) as c:
+            await require_management_permission(
+                c,
+                identity,
+                "ops.reconciliation.manage",
+                target_school_id=tenant_id,
+                write=True,
+                _lock_school_id=tenant_id,
+            )
+            attempt = await self._lock_attempt_pool(
+                c, scope, attempt_id, require_subject=False
+            )
+            if attempt["status"] == "released":
+                if attempt["evidence"] != evidence:
+                    raise SettlementRejected(
+                        "released attempt evidence conflicts with prior receipt"
+                    )
+                return SettlementResult(attempt_id, Decimal(0), "released")
+            if attempt["status"] != "reserved":
+                raise SettlementRejected("only undispatched reserved attempts can be released")
+            rows = await (
+                await c.execute(
+                    "SELECT aa.grant_id,aa.lot_id,aa.allocated_units,aa.reserved_units,"
+                    "aa.allocation_order,"
+                    "g.status AS grant_status,g.starts_at AS grant_start,"
+                    "g.expires_at AS grant_end,sl.status AS lot_status,"
+                    "sl.starts_at AS lot_start,sl.expires_at AS lot_end "
+                    "FROM oms.attempt_allocations aa "
+                    "JOIN oms.quota_grants g ON g.id=aa.grant_id "
+                    "JOIN oms.supply_lots sl ON sl.id=aa.lot_id "
+                    "WHERE aa.tenant_id=%s AND aa.attempt_id=%s "
+                    "ORDER BY aa.allocation_order FOR UPDATE OF aa,g,sl",
+                    (tenant_id, attempt_id),
+                )
+            ).fetchall()
+            if (
+                not rows
+                or any(
+                    row["allocation_order"] is None
+                    or row["reserved_units"] != row["allocated_units"]
+                    for row in rows
+                )
+                or sum(row["allocated_units"] for row in rows) != attempt["reserved_units"]
+            ):
+                raise SettlementRejected("attempt allocations need reconciliation")
+            for row in rows:
+                reusable = await self._reusable(c, row)
+                await self._finish_allocation(
+                    c, tenant_id, attempt_id, row, used=Decimal(0), reusable=reusable
+                )
+            await c.execute(
+                "UPDATE oms.usage_attempts SET status='released',settled_units=0,"
+                "provider_request_id='',evidence=%s,updated_at=now() "
+                "WHERE tenant_id=%s AND attempt_id=%s",
+                (Jsonb(evidence), tenant_id, attempt_id),
+            )
+            await _event(c, tenant_id, attempt_id, "confirmed_not_sent", evidence_ref)
+            await _audit(
+                c,
+                tenant_id,
+                attempt_id,
+                identity.subject,
+                "usage.release",
+                reason,
+                {"service_id": attempt["service_id"], "source": "confirmed_not_sent"},
+            )
+        return SettlementResult(attempt_id, Decimal(0), "released")
+
     async def settle(
         self,
         scope: TenantScope,
@@ -596,8 +736,7 @@ class OmsAttemptLedger:
         if source not in {"provider_usage", "verified_reconciliation"}:
             raise SettlementRejected("only trusted provider or reconciled usage can settle")
         _safe_ref(evidence_ref)
-        if not isinstance(provider_request_id, str) or len(provider_request_id) > 255:
-            raise SettlementRejected("provider request id is invalid")
+        _safe_provider_request_id(provider_request_id)
         tenant_id = UUID(scope.tenant_id)
         evidence = {
             "source": source,
@@ -695,6 +834,233 @@ class OmsAttemptLedger:
                     "usage.settle",
                     source,
                     {"service_id": attempt["service_id"], "settled_units": str(units)},
+                )
+        if overage:
+            raise UsageExceedsReservation("trusted usage exceeds reserved upper bound")
+        return SettlementResult(attempt_id, units, "settled")
+
+    async def settle_provider_receipt(
+        self,
+        scope: TenantScope,
+        *,
+        provider_id: str,
+        provider_account_id: str,
+        provider_request_id: str,
+        units: Decimal,
+        evidence_ref: str,
+    ) -> SettlementResult:
+        """按供应商 request/task ID 对账，幂等落回原 attempt。"""
+
+        _safe_provider_request_id(provider_request_id, required=True)
+        for name, value in (
+            ("provider_id", provider_id),
+            ("provider_account_id", provider_account_id),
+        ):
+            if not isinstance(value, str) or len(value) > 255 or (name == "provider_id" and not value):
+                raise SettlementRejected(f"{name} is invalid")
+        tenant_id = UUID(scope.tenant_id)
+        async with self.db.transaction(scope) as c:
+            attempt = await (
+                await c.execute(
+                    "SELECT attempt_id FROM oms.usage_attempts "
+                    "WHERE tenant_id=%s AND provider_id=%s AND provider_account_id=%s "
+                    "AND provider_request_id=%s",
+                    (tenant_id, provider_id, provider_account_id, provider_request_id),
+                )
+            ).fetchone()
+        if attempt is None:
+            raise SettlementRejected("provider receipt is unavailable for this tenant")
+        return await self.settle(
+            scope,
+            attempt["attempt_id"],
+            units=units,
+            source="provider_usage",
+            evidence_ref=evidence_ref,
+            provider_request_id=provider_request_id,
+        )
+
+    async def settle_provider_receipt_as_reconciler(
+        self,
+        scope: TenantScope,
+        identity,
+        *,
+        provider_id: str,
+        provider_account_id: str,
+        provider_request_id: str,
+        units: Decimal,
+        evidence_ref: str,
+        reason: str,
+    ) -> SettlementResult:
+        """OMS 对账入口：按供应商 request/task ID 找回原 attempt 后结算。"""
+
+        _safe_provider_request_id(provider_request_id, required=True)
+        for name, value in (
+            ("provider_id", provider_id),
+            ("provider_account_id", provider_account_id),
+        ):
+            if not isinstance(value, str) or len(value) > 255 or (name == "provider_id" and not value):
+                raise SettlementRejected(f"{name} is invalid")
+        tenant_id = UUID(scope.tenant_id)
+        async with self.db.transaction(scope) as c:
+            attempt = await (
+                await c.execute(
+                    "SELECT attempt_id FROM oms.usage_attempts "
+                    "WHERE tenant_id=%s AND provider_id=%s AND provider_account_id=%s "
+                    "AND provider_request_id=%s",
+                    (tenant_id, provider_id, provider_account_id, provider_request_id),
+                )
+            ).fetchone()
+        if attempt is None:
+            raise SettlementRejected("provider receipt is unavailable for this tenant")
+        return await self.settle_as_reconciler(
+            scope,
+            identity,
+            attempt["attempt_id"],
+            units=units,
+            source="provider_usage",
+            evidence_ref=evidence_ref,
+            reason=reason,
+            provider_request_id=provider_request_id,
+        )
+
+    async def settle_as_reconciler(
+        self,
+        scope: TenantScope,
+        identity,
+        attempt_id: UUID,
+        *,
+        units: Decimal,
+        source: str,
+        evidence_ref: str,
+        reason: str,
+        provider_request_id: str = "",
+    ) -> SettlementResult:
+        """OMS 核对写入口：在同一账务事务内复核 school-scope 权限并结算。"""
+
+        from ..management.authorization import require_management_permission
+
+        try:
+            _units(units, allow_zero=True)
+        except ValueError as error:
+            raise SettlementRejected(str(error)) from None
+        if source not in {"provider_usage", "verified_reconciliation"}:
+            raise SettlementRejected("only trusted provider or reconciled usage can settle")
+        _safe_ref(evidence_ref)
+        if not isinstance(provider_request_id, str) or len(provider_request_id) > 255:
+            raise SettlementRejected("provider request id is invalid")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            raise SettlementRejected("reconciliation reason is required")
+        tenant_id = UUID(scope.tenant_id)
+        evidence = {
+            "source": source,
+            "reference": evidence_ref,
+            "units": str(units.normalize()),
+            "provider_request_id": provider_request_id,
+        }
+        overage = False
+        async with self.db.transaction(scope) as c:
+            await require_management_permission(
+                c,
+                identity,
+                "ops.reconciliation.manage",
+                target_school_id=tenant_id,
+                write=True,
+                _lock_school_id=tenant_id,
+            )
+            attempt = await self._lock_attempt_pool(
+                c, scope, attempt_id, require_subject=False
+            )
+            if attempt["status"] == "settled":
+                if attempt["evidence"] != evidence:
+                    raise SettlementRejected(
+                        "settled attempt evidence conflicts with prior receipt"
+                    )
+                return SettlementResult(attempt_id, attempt["settled_units"], "settled")
+            if attempt["status"] not in {"dispatched", "remote_unknown", "reconcile_required"}:
+                raise SettlementRejected("attempt was not dispatched or is already released")
+            if attempt["status"] == "reconcile_required" and source != "verified_reconciliation":
+                raise SettlementRejected("overage requires verified reconciliation")
+            if units > attempt["reserved_units"]:
+                overage = True
+                if attempt["status"] != "reconcile_required" or attempt["evidence"] != evidence:
+                    await c.execute(
+                        "UPDATE oms.usage_attempts SET status='reconcile_required',"
+                        "provider_request_id=%s,evidence=%s,updated_at=now() "
+                        "WHERE tenant_id=%s AND attempt_id=%s",
+                        (provider_request_id, Jsonb(evidence), tenant_id, attempt_id),
+                    )
+                    await _event(
+                        c,
+                        tenant_id,
+                        attempt_id,
+                        "overage",
+                        evidence_ref,
+                        units=units,
+                        provider_request_id=provider_request_id,
+                    )
+            else:
+                rows = await (
+                    await c.execute(
+                        "SELECT aa.grant_id,aa.lot_id,aa.allocated_units,aa.reserved_units,"
+                        "aa.allocation_order,"
+                        "g.status AS grant_status,g.starts_at AS grant_start,"
+                        "g.expires_at AS grant_end,sl.status AS lot_status,"
+                        "sl.starts_at AS lot_start,sl.expires_at AS lot_end "
+                        "FROM oms.attempt_allocations aa "
+                        "JOIN oms.quota_grants g ON g.id=aa.grant_id "
+                        "JOIN oms.supply_lots sl ON sl.id=aa.lot_id "
+                        "WHERE aa.tenant_id=%s AND aa.attempt_id=%s "
+                        "ORDER BY aa.allocation_order FOR UPDATE OF aa,g,sl",
+                        (tenant_id, attempt_id),
+                    )
+                ).fetchall()
+                if (
+                    not rows
+                    or any(
+                        row["allocation_order"] is None
+                        or row["reserved_units"] != row["allocated_units"]
+                        for row in rows
+                    )
+                    or sum(row["allocated_units"] for row in rows) != attempt["reserved_units"]
+                ):
+                    raise SettlementRejected("attempt allocations need reconciliation")
+                remaining = units
+                for row in rows:
+                    used = min(remaining, row["allocated_units"])
+                    remaining -= used
+                    reusable = await self._reusable(c, row)
+                    await self._finish_allocation(
+                        c, tenant_id, attempt_id, row, used=used, reusable=reusable
+                    )
+                if remaining:
+                    raise SettlementRejected("attempt allocation total is inconsistent")
+                await c.execute(
+                    "UPDATE oms.usage_attempts SET status='settled',settled_units=%s,"
+                    "provider_request_id=%s,evidence=%s,updated_at=now() "
+                    "WHERE tenant_id=%s AND attempt_id=%s",
+                    (units, provider_request_id, Jsonb(evidence), tenant_id, attempt_id),
+                )
+                await _event(
+                    c,
+                    tenant_id,
+                    attempt_id,
+                    source,
+                    evidence_ref,
+                    units=units,
+                    provider_request_id=provider_request_id,
+                )
+                await _audit(
+                    c,
+                    tenant_id,
+                    attempt_id,
+                    identity.subject,
+                    "usage.settle",
+                    reason,
+                    {
+                        "service_id": attempt["service_id"],
+                        "settled_units": str(units),
+                        "source": source,
+                    },
                 )
         if overage:
             raise UsageExceedsReservation("trusted usage exceeds reserved upper bound")

@@ -2,7 +2,7 @@ import "@deeptutor/admin-ui/styles.css";
 import type { CSSProperties } from "react";
 import { brandThemeStyle, loadBrandTheme } from "@deeptutor/branding";
 
-export const metadata = { title: "智能体基座 · 平台智能体运营后台原型", description: "仅供开发环境审计的独立 OMS 前端原型" };
+export const metadata = { title: "智能体基座 · 平台智能体运营后台", description: "平台智能体运营后台正式受控入口" };
 export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

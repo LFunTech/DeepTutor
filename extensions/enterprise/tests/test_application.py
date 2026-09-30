@@ -902,6 +902,7 @@ async def test_oms_permissions_summary_allows_school_scoped_operator_without_pla
         permissions = await client.get("/api/v1/oms/me/permissions", headers=headers)
         tenants = await client.get("/api/v1/oms/tenants", headers=headers)
         hidden = await client.get(f"/api/v1/oms/tenants/{hidden_school_id}", headers=headers)
+        global_supply = await client.get("/api/v1/oms/supply", headers=headers)
         provider_write = await client.post(
             "/api/v1/oms/models/draft",
             json={
@@ -916,6 +917,25 @@ async def test_oms_permissions_summary_allows_school_scoped_operator_without_pla
                         "secret": "env:DT_TEST_MODEL",
                     }
                 ],
+            },
+            headers={**headers, "Origin": "https://school.example"},
+        )
+        platform_supply_write = await client.post(
+            "/api/v1/oms/supply/lots",
+            json={
+                "lot_id": str(uuid.uuid4()),
+                "service_id": "search",
+                "unit_code": "request",
+                "provider_id": "provider-a",
+                "provider_account_id": "account-a",
+                "pool_id": "pool-a",
+                "basis": "native_units",
+                "hard_ceiling": "1",
+                "starts_at": "2026-01-01T00:00:00Z",
+                "expires_at": "2026-12-31T00:00:00Z",
+                "evidence_ref": "purchase://not-authorized",
+                "verified_native": True,
+                "reason": "学校范围不能冒充平台供给",
             },
             headers={**headers, "Origin": "https://school.example"},
         )
@@ -947,7 +967,9 @@ async def test_oms_permissions_summary_allows_school_scoped_operator_without_pla
     assert tenants.status_code == 200, tenants.text
     assert [item["school_id"] for item in tenants.json()["tenants"]] == [str(school_id)]
     assert hidden.status_code == 403
+    assert global_supply.status_code == 403
     assert provider_write.status_code == 403
+    assert platform_supply_write.status_code == 403
 
 
 async def test_oms_model_inventory_requires_provider_read_and_redacts_credentials(app, pg_dsn):
@@ -1109,6 +1131,237 @@ async def test_oms_resource_status_maps_platform_categories_without_secrets(app,
     assert "model.example" not in response.text
 
 
+async def test_oms_school_list_uses_signed_school_projection_without_platform_app_claim(
+    app, pg_dsn
+):
+    install_oms_verifier(
+        app,
+        {
+            "school-list-token": "school-list-operator",
+            "school-list-default-token": "school-list-default-operator",
+        },
+    )
+
+    enterprise = app.state.enterprise
+    owner_id = enterprise.deployment.tenant_id
+    school_id = uuid.uuid4()
+    hidden_school_id = uuid.uuid4()
+    principal = uuid.uuid4()
+    default_principal = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner_id),))
+        await c.execute(
+            "INSERT INTO enterprise.tenants"
+            "(id,external_tid,external_eligibility,local_enabled,provisioning_status,"
+            "auth_epoch,bootstrap_completed) "
+            "VALUES(%s,'71001','allowed',true,'ready','epoch',true),"
+            "(%s,'71002','allowed',true,'ready','epoch',true)",
+            (school_id, hidden_school_id),
+        )
+        await c.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,71001,'verified',now(),'signed-webhook','webhook://school-71001'),"
+            "(%s,71002,'verified',now(),'signed-webhook','webhook://school-71002')",
+            (school_id, hidden_school_id),
+        )
+        await c.execute(
+            "INSERT INTO eduplus2.webhook_school_state(tenant_id,external_tenant_id,"
+            "external_app_id,school_id,school_code,binding_version,eligibility,"
+            "external_subscription_id,last_event_id,onboarding_event_id,onboarding_completed_at) "
+            "VALUES(%s,71001,51,%s,'jygjzx',1,'allowed',81001,"
+            "'school-71001-created','school-71001-created',clock_timestamp()),"
+            "(%s,71002,51,%s,'hidden-school',1,'allowed',81002,"
+            "'school-71002-created','school-71002-created',clock_timestamp())",
+            (owner_id, school_id, owner_id, hidden_school_id),
+        )
+        await c.execute(
+            "INSERT INTO eduplus2.webhook_school_controls"
+            "(tenant_id,school_id,external_app_id) VALUES(%s,%s,51),(%s,%s,51)",
+            (owner_id, school_id, owner_id, hidden_school_id),
+        )
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES"
+            "(%s,'oms',%s,%s,'active'),"
+            "(%s,'oms',%s,%s,'active')",
+            (
+                principal,
+                "https://issuer.example",
+                "school-list-operator",
+                default_principal,
+                "https://issuer.example",
+                "school-list-default-operator",
+            ),
+        )
+        await c.execute(
+            "INSERT INTO management.role_versions"
+            "(application,role_key,version,scope_kind,is_template) "
+            "VALUES('oms','school_list_reader',1,'school',false)"
+        )
+        await c.execute(
+            "INSERT INTO management.role_actions"
+            "(application,role_key,role_version,action_key) VALUES"
+            "('oms','school_list_reader',1,'ops.oms.access'),"
+            "('oms','school_list_reader',1,'ops.tenants.read')"
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_security_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval'),"
+            "(%s,'oms',%s,'platform_security_admin',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (
+                uuid.uuid4(),
+                principal,
+                uuid.uuid4(),
+                uuid.uuid4(),
+                default_principal,
+                uuid.uuid4(),
+            ),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,school_id,"
+            "school_binding_version,valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'school_list_reader',1,'school',%s,1,"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval'),"
+            "(%s,'oms',%s,'platform_operator',1,'school',%s,1,"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (
+                uuid.uuid4(),
+                principal,
+                school_id,
+                uuid.uuid4(),
+                uuid.uuid4(),
+                default_principal,
+                school_id,
+                uuid.uuid4(),
+            ),
+        )
+
+    headers = {"Authorization": "Bearer school-list-token"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        permissions = await client.get("/api/v1/oms/me/permissions", headers=headers)
+        tenants = await client.get("/api/v1/oms/tenants", headers=headers)
+        detail = await client.get(f"/api/v1/oms/tenants/{school_id}", headers=headers)
+        hidden = await client.get(f"/api/v1/oms/tenants/{hidden_school_id}", headers=headers)
+        default_tenants = await client.get(
+            "/api/v1/oms/tenants",
+            headers={"Authorization": "Bearer school-list-default-token"},
+        )
+
+    assert permissions.status_code == 200, permissions.text
+    assert permissions.json()["school_actions"] == [
+        {"school_id": str(school_id), "actions": ["ops.oms.access", "ops.tenants.read"]}
+    ]
+    assert tenants.status_code == 200, tenants.text
+    tenant_items = tenants.json()["tenants"]
+    assert len(tenant_items) == 1
+    assert tenant_items[0]["school_id"] == str(school_id)
+    assert tenant_items[0]["school_code"] == "jygjzx"
+    assert tenant_items[0]["external_binding"]["has_external_tid"] is True
+    assert tenant_items[0]["external_binding"]["eduplus_tenant_id"] == "71001"
+    assert tenant_items[0]["external_binding"]["status"]["code"] == "verified"
+    assert tenant_items[0]["external_binding"]["version"] == 1
+    assert tenant_items[0]["lifecycle"]["external_eligibility"]["code"] == "allowed"
+    assert tenant_items[0]["lifecycle"]["provisioning_status"]["code"] == "ready"
+    assert tenant_items[0]["lifecycle"]["recovery_state"]["code"] == "normal"
+    assert tenant_items[0]["service_entitlements"] == []
+    assert tenant_items[0]["quota_grants"] == []
+    assert tenant_items[0]["usage"] == []
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["school_code"] == "jygjzx"
+    assert hidden.status_code == 403
+    assert "hidden-school" not in tenants.text
+    assert default_tenants.status_code == 200, default_tenants.text
+    assert [item["school_id"] for item in default_tenants.json()["tenants"]] == [str(school_id)]
+    assert default_tenants.json()["tenants"][0]["school_code"] == "jygjzx"
+
+
+async def test_oms_school_list_falls_back_to_eduplus_code_and_registration_name(
+    app, pg_dsn
+):
+    install_oms_verifier(app, {"school-name-token": "school-name-operator"})
+
+    enterprise = app.state.enterprise
+    owner_id = enterprise.deployment.tenant_id
+    school_id = uuid.uuid4()
+    principal = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner_id),))
+        await c.execute(
+            "INSERT INTO enterprise.tenants"
+            "(id,external_tid,external_eligibility,local_enabled,provisioning_status,"
+            "auth_epoch,bootstrap_completed) "
+            "VALUES(%s,'71001','allowed',true,'ready','epoch',true)",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,71001,'verified',now(),'signed-webhook','webhook://school-71001')",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO eduplus2.webhook_school_state(tenant_id,external_tenant_id,"
+            "external_app_id,school_id,school_code,binding_version,eligibility,"
+            "external_subscription_id,last_event_id,onboarding_event_id,onboarding_completed_at) "
+            "VALUES(%s,71001,51,%s,'',1,'allowed',81001,"
+            "'school-71001-created','school-71001-created',clock_timestamp())",
+            (owner_id, school_id),
+        )
+        await c.execute(
+            "INSERT INTO eduplus2.webhook_school_controls"
+            "(tenant_id,school_id,external_app_id) VALUES(%s,%s,51)",
+            (owner_id, school_id),
+        )
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+        await c.execute(
+            "INSERT INTO eduplus2.external_client_registrations"
+            "(tenant_id,id,client_id,external_tenant_id,external_tenant_name,"
+            "external_app_id,external_app_name,internal_tenant_id,registered_by_surface,"
+            "created_by,updated_by) "
+            "VALUES(%s,%s,'client-71001','71001','晋元高级中学',"
+            "'51','学伴智能体',%s,'oms','synthetic','synthetic')",
+            (school_id, uuid.uuid4(), school_id),
+        )
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(owner_id),))
+        await c.execute(
+            "INSERT INTO management.principals"
+            "(id,application,issuer,subject,status) VALUES(%s,'oms',%s,%s,'active')",
+            (principal, "https://issuer.example", "school-name-operator"),
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,school_id,"
+            "school_binding_version,valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_operator',1,'school',%s,1,"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, school_id, uuid.uuid4()),
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        tenants = await client.get(
+            "/api/v1/oms/tenants",
+            headers={"Authorization": "Bearer school-name-token"},
+    )
+
+    assert tenants.status_code == 200, tenants.text
+    tenant_items = tenants.json()["tenants"]
+    assert len(tenant_items) == 1
+    assert tenant_items[0]["school_id"] == str(school_id)
+    assert tenant_items[0]["school_code"] == "71001"
+    assert tenant_items[0]["school_name"] == "晋元高级中学"
+    assert tenant_items[0]["external_binding"]["eduplus_tenant_id"] == "71001"
+
+
 async def test_oms_governance_read_api_filters_by_local_school_grants_and_descriptors(
     app, pg_dsn
 ):
@@ -1175,6 +1428,7 @@ async def test_oms_governance_read_api_filters_by_local_school_grants_and_descri
             "('oms','school_governance_reader',1,'ops.usage.read'),"
             "('oms','school_governance_reader',1,'ops.jobs.read'),"
             "('oms','school_governance_reader',1,'ops.audit.read'),"
+            "('oms','school_governance_reader',1,'ops.audit.export'),"
             "('oms','platform_supply_cost_reader',1,'ops.supply.read'),"
             "('oms','platform_supply_cost_reader',1,'ops.cost.read')"
         )
@@ -1211,6 +1465,7 @@ async def test_oms_governance_read_api_filters_by_local_school_grants_and_descri
             "'user','learner-1','learner-1','remote_unknown',12,0,%s::jsonb)",
             (school_id, attempt_id, operation_id, json.dumps({"diagnostic": "redacted"})),
         )
+        supply_lot_id = uuid.uuid4()
         await c.execute(
             "INSERT INTO oms.supply_lots"
             "(id,service_id,provider_id,provider_account_id,pool_id,unit_code,"
@@ -1218,7 +1473,7 @@ async def test_oms_governance_read_api_filters_by_local_school_grants_and_descri
             "VALUES(%s,'llm','provider-a','acct','pool-a','token',"
             "'contract://safe',100,now()-interval '1 day',now()+interval '7 days',"
             "'native_units',now())",
-            (uuid.uuid4(),),
+            (supply_lot_id,),
         )
         await c.execute("SELECT set_config('app.management_app','oms',true)")
         await c.execute(
@@ -1251,6 +1506,14 @@ async def test_oms_governance_read_api_filters_by_local_school_grants_and_descri
             headers=headers,
         )
         jobs = await client.get(f"/api/v1/oms/schools/{school_id}/jobs", headers=headers)
+        usage_export = await client.get(
+            f"/api/v1/oms/schools/{school_id}/usage/export",
+            headers=headers,
+        )
+        hidden_export = await client.get(
+            f"/api/v1/oms/schools/{hidden_school_id}/usage/export",
+            headers=headers,
+        )
         supply = await client.get("/api/v1/oms/supply", headers=headers)
         audit = await client.get(
             f"/api/v1/oms/audit?school_id={school_id}&limit=10", headers=headers
@@ -1294,16 +1557,97 @@ async def test_oms_governance_read_api_filters_by_local_school_grants_and_descri
     assert "provider_request_id" not in usage.text
     assert "diagnostic" not in usage.text
     assert jobs.status_code == 200, jobs.text
-    assert jobs.json()["jobs"][0]["attempt_id"] == str(attempt_id)
+    assert jobs.json()["jobs"][0] == {
+        "attempt_id": str(attempt_id),
+        "operation_id": str(operation_id),
+        "service_id": "llm",
+        "unit_code": "token",
+        "provider_id": "provider-a",
+        "provider_account_id": "acct",
+        "model_id": "model-a",
+        "subject_kind": "user",
+        "subject_id": "learner-1",
+        "user_id": "learner-1",
+        "app_id": "",
+        "status": usage.json()["details"][0]["status"],
+        "updated_at": jobs.json()["jobs"][0]["updated_at"],
+        "reserved_units": "12",
+        "settled_units": "0",
+        "pending_units": "12",
+    }
     assert "provider_request_id" not in jobs.text
     assert "diagnostic" not in jobs.text
+    assert usage_export.status_code == 200, usage_export.text
+    export_body = usage_export.json()
+    assert export_body["export"] == {
+        "kind": "usage_attempts",
+        "format": "json",
+        "item_count": 1,
+        "redacted_fields": [
+            "raw_evidence",
+            "provider_receipts",
+            "secrets",
+            "cost_amounts",
+        ],
+    }
+    assert export_body["items"][0] == {
+        "attempt_id": str(attempt_id),
+        "operation_id": str(operation_id),
+        "service_id": "llm",
+        "unit_code": "token",
+        "provider_id": "provider-a",
+        "provider_account_id": "acct",
+        "model_id": "model-a",
+        "subject_kind": "user",
+        "subject_id": "learner-1",
+        "user_id": "learner-1",
+        "app_id": "",
+        "status": usage.json()["details"][0]["status"],
+        "reserved_units": "12",
+        "settled_units": "0",
+        "pending_units": "12",
+        "started_at": export_body["items"][0]["started_at"],
+        "updated_at": export_body["items"][0]["updated_at"],
+    }
+    assert "provider_request_id" not in usage_export.text
+    assert "diagnostic" not in usage_export.text
+    assert "contract://safe" not in usage_export.text
+    assert hidden_export.status_code == 403
     assert supply.status_code == 200, supply.text
     assert supply.json()["service_definitions"][0]["service_id"] == "llm"
+    assert supply.json()["supply_lots"][0]["lot_id"] == str(supply_lot_id)
+    assert supply.json()["supply_lots"][0]["version"] == 1
     assert "contract://safe" not in supply.text
     assert audit.status_code == 200, audit.text
     assert audit.json()["management_events"][0]["result"]["code"] == "success"
+    assert ("usage.export", {"item_count": 1, "format": "json"}) in [
+        (event["action"], event["safe_summary"]) for event in audit.json()["oms_events"]
+    ]
     assert cost.status_code == 200, cost.text
-    assert cost.json()["status"]["code"] == "not_configured"
+    cost_body = cost.json()
+    assert cost_body["status"]["code"] == "not_configured"
+    assert cost_body["notice"] == "当前没有已核实供应商成本源；不会从配额或用量推导经营成本。"
+    assert cost_body["costs"] == []
+    assert cost_body["uncosted_usage"] == [
+        {
+            "school_id": str(school_id),
+            "service_id": "llm",
+            "provider_id": "provider-a",
+            "provider_account_id": "acct",
+            "model_id": "model-a",
+            "unit_code": "token",
+            "attempts": 1,
+            "settled_units": "0",
+            "pending_units": "12",
+            "cost_status": cost_body["status"],
+            "reason": "供应商成本合同未核实，OMS 只能展示用量待核定摘要。",
+        }
+    ]
+    assert "contract://safe" not in cost.text
+    assert "provider_request_id" not in cost.text
+    assert "diagnostic" not in cost.text
+    assert "amount" not in cost.text
+    assert "price" not in cost.text
     assert "DT_TEST" not in (
         catalog.text
         + summary.text
@@ -1311,6 +1655,7 @@ async def test_oms_governance_read_api_filters_by_local_school_grants_and_descri
         + detail.text
         + usage.text
         + jobs.text
+        + usage_export.text
         + supply.text
         + audit.text
         + cost.text
@@ -2166,6 +2511,7 @@ async def test_oms_school_entitlement_and_quota_commands_are_authorized_and_audi
     grant_id = uuid.uuid4()
     expired_grant_id = uuid.uuid4()
     lot_id = uuid.uuid4()
+    managed_lot_id = uuid.uuid4()
     async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
         await c.execute(
             "UPDATE enterprise.tenants SET bootstrap_completed=true,local_enabled=true,"
@@ -2199,6 +2545,25 @@ async def test_oms_school_entitlement_and_quota_commands_are_authorized_and_audi
             (principal, "https://issuer.example", "school-operator"),
         )
         await c.execute(
+            "INSERT INTO management.role_versions"
+            "(application,role_key,version,scope_kind,is_template) "
+            "VALUES('oms','platform_supply_manager_test',1,'platform',false)"
+        )
+        await c.execute(
+            "INSERT INTO management.role_actions(application,role_key,role_version,action_key) "
+            "VALUES"
+            "('oms','platform_supply_manager_test',1,'ops.oms.access'),"
+            "('oms','platform_supply_manager_test',1,'ops.supply.manage')"
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,"
+            "valid_from,expires_at,command_id,created_by) "
+            "VALUES(%s,'oms',%s,'platform_supply_manager_test',1,'platform',"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (uuid.uuid4(), principal, uuid.uuid4()),
+        )
+        await c.execute(
             "INSERT INTO management.assignments"
             "(id,application,principal_id,role_key,role_version,scope_kind,school_id,"
             "school_binding_version,valid_from,expires_at,command_id,created_by) "
@@ -2213,6 +2578,43 @@ async def test_oms_school_entitlement_and_quota_commands_are_authorized_and_audi
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://school.example"
     ) as client:
+        registered_supply = await client.post(
+            "/api/v1/oms/supply/lots",
+            json={
+                "lot_id": str(managed_lot_id),
+                "service_id": "search",
+                "unit_code": "request",
+                "provider_id": "provider-a",
+                "provider_account_id": "account-a",
+                "pool_id": "pool-b",
+                "basis": "native_units",
+                "hard_ceiling": "50",
+                "starts_at": starts_at,
+                "expires_at": expires_at,
+                "evidence_ref": "purchase://managed-secret",
+                "verified_native": True,
+                "reason": "补充搜索服务供给",
+            },
+            headers=headers,
+        )
+        assert registered_supply.status_code == 200, registered_supply.text
+        assert registered_supply.json() == {
+            "lot_id": str(managed_lot_id),
+            "service_id": "search",
+            "version": 1,
+        }
+        assert "managed-secret" not in registered_supply.text
+        revoked_supply = await client.post(
+            f"/api/v1/oms/supply/lots/{managed_lot_id}/revoke",
+            json={
+                "expected_version": 1,
+                "reason": "撤销错误供给批次",
+            },
+            headers=headers,
+        )
+        assert revoked_supply.status_code == 200, revoked_supply.text
+        assert revoked_supply.json() == {"lot_id": str(managed_lot_id), "version": 2}
+
         entitlement = await client.post(
             f"/api/v1/oms/schools/{school_id}/entitlements/search",
             json={
@@ -2368,11 +2770,394 @@ async def test_oms_school_entitlement_and_quota_commands_are_authorized_and_audi
     assert tuple(grant_row) == ("revoked", 3, 30, 10)
     assert tuple(commitment) == (0, 30)
     assert supply[0] == 0
+    assert ("supply.register", "success") in [tuple(row) for row in audit_actions]
+    assert ("supply.revoke", "success") in [tuple(row) for row in audit_actions]
     assert ("service_entitlement.set", "success") in [tuple(row) for row in audit_actions]
     assert ("quota.grant", "success") in [tuple(row) for row in audit_actions]
     assert ("quota.adjust", "success") in [tuple(row) for row in audit_actions]
     assert ("quota.revoke", "success") in [tuple(row) for row in audit_actions]
     assert ("quota.expire", "success") in [tuple(row) for row in audit_actions]
+
+
+async def test_oms_reconciliation_settles_remote_unknown_attempt_with_school_scope_permission(
+    app, pg_dsn
+):
+    """OMS 用量核对写入必须经目标学校 ops.reconciliation.manage，并保留原证据不回显。"""
+
+    from decimal import Decimal
+
+    from deeptutor_enterprise.oms.attempts import AttemptRequest, OmsAttemptLedger
+    from deeptutor_enterprise.scope import TenantScope
+
+    install_oms_verifier(
+        app,
+        {
+            "reconcile-token": "reconcile-operator",
+            "read-token": "read-operator",
+        },
+    )
+    enterprise = app.state.enterprise
+    school_id = enterprise.deployment.tenant_id
+    grant_id = uuid.uuid4()
+    lot_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    operation_id = uuid.uuid4()
+    release_attempt_id = uuid.uuid4()
+    release_operation_id = uuid.uuid4()
+    receipt_attempt_id = uuid.uuid4()
+    receipt_operation_id = uuid.uuid4()
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+        await c.execute(
+            "UPDATE enterprise.tenants SET bootstrap_completed=true,local_enabled=true,"
+            "provisioning_status='ready',external_eligibility='allowed',"
+            "recovery_state='normal' WHERE id=%s",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.school_bindings"
+            "(tenant_id,eduplus_tenant_id,status,verified_at,verified_by,source_ref) "
+            "VALUES(%s,10001,'verified',now(),'synthetic-verifier','synthetic://school')",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.service_definitions(service_id,unit_code,resource_category,enabled) "
+            "VALUES('search','request','tool_integration',true)"
+        )
+        await c.execute(
+            "INSERT INTO oms.supply_lots"
+            "(id,service_id,provider_id,provider_account_id,pool_id,unit_code,"
+            "evidence_ref,hard_ceiling,committed_unspent,starts_at,expires_at,"
+            "supply_basis,verified_at,created_by) "
+            "VALUES(%s,'search','provider-a','account-a','pool-a','request',"
+            "'purchase://reconcile-secret',20,10,now()-interval '1 hour',"
+            "now()+interval '7 days','native_units',now(),'supply-admin')",
+            (lot_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.tenant_service_entitlements"
+            "(tenant_id,service_id,status,starts_at,expires_at,created_by) "
+            "VALUES(%s,'search','active',now()-interval '1 hour',"
+            "now()+interval '7 days','school-operator')",
+            (school_id,),
+        )
+        await c.execute(
+            "INSERT INTO oms.quota_grants"
+            "(id,tenant_id,service_id,unit_code,acquisition_method,quantity,"
+            "starts_at,expires_at,created_by,source_ref) "
+            "VALUES(%s,%s,'search','request','gift',10,now()-interval '1 hour',"
+            "now()+interval '7 days','school-operator','campaign://reconcile-secret')",
+            (grant_id, school_id),
+        )
+        await c.execute(
+            "INSERT INTO oms.grant_commitments"
+            "(tenant_id,grant_id,lot_id,committed_total,unspent) VALUES(%s,%s,%s,10,10)",
+            (school_id, grant_id, lot_id),
+        )
+        reconcile_principal = uuid.uuid4()
+        read_principal = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO management.principals(id,application,issuer,subject,status) "
+            "VALUES(%s,'oms','https://issuer.example','reconcile-operator','active'),"
+            "(%s,'oms','https://issuer.example','read-operator','active')",
+            (reconcile_principal, read_principal),
+        )
+        await c.execute(
+            "INSERT INTO management.role_versions"
+            "(application,role_key,version,scope_kind,is_template) VALUES"
+            "('oms','school_reconciler_test',1,'school',false),"
+            "('oms','school_usage_reader_test',1,'school',false)"
+        )
+        await c.execute(
+            "INSERT INTO management.role_actions(application,role_key,role_version,action_key) "
+            "VALUES"
+            "('oms','school_reconciler_test',1,'ops.oms.access'),"
+            "('oms','school_reconciler_test',1,'ops.reconciliation.manage'),"
+            "('oms','school_usage_reader_test',1,'ops.oms.access'),"
+            "('oms','school_usage_reader_test',1,'ops.usage.read')"
+        )
+        await c.execute(
+            "INSERT INTO management.assignments"
+            "(id,application,principal_id,role_key,role_version,scope_kind,school_id,"
+            "school_binding_version,valid_from,expires_at,command_id,created_by) VALUES"
+            "(%s,'oms',%s,'school_reconciler_test',1,'school',%s,1,"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval'),"
+            "(%s,'oms',%s,'school_usage_reader_test',1,'school',%s,1,"
+            "now()-interval '1 minute',now()+interval '1 hour',%s,'synthetic-approval')",
+            (
+                uuid.uuid4(),
+                reconcile_principal,
+                school_id,
+                uuid.uuid4(),
+                uuid.uuid4(),
+                read_principal,
+                school_id,
+                uuid.uuid4(),
+            ),
+        )
+
+    attempt_scope = TenantScope(str(school_id), "learner-1")
+    ledger = OmsAttemptLedger(enterprise.db)
+    await ledger.reserve(
+        attempt_scope,
+        AttemptRequest(
+            operation_id=operation_id,
+            attempt_id=attempt_id,
+            service_id="search",
+            unit_code="request",
+            provider_id="provider-a",
+            provider_account_id="account-a",
+            pool_id="pool-a",
+            model_id="search-basic",
+            config_version=1,
+            subject_kind="user",
+            subject_id="learner-1",
+            user_id="learner-1",
+            app_id="",
+            reserved_units=Decimal("10"),
+        ),
+    )
+    await ledger.mark_dispatched(attempt_scope, attempt_id)
+    await ledger.mark_remote_unknown(
+        attempt_scope, attempt_id, evidence_ref="provider://timeout-secret"
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://school.example"
+    ) as client:
+        denied = await client.post(
+            f"/api/v1/oms/schools/{school_id}/attempts/{attempt_id}/settle",
+            json={
+                "units": "7",
+                "source": "verified_reconciliation",
+                "evidence_ref": "reconcile://ticket-secret",
+                "provider_request_id": "provider-request-secret",
+                "reason": "按供应商对账单核对",
+            },
+            headers={"Authorization": "Bearer read-token", "Origin": "https://school.example"},
+        )
+        settled = await client.post(
+            f"/api/v1/oms/schools/{school_id}/attempts/{attempt_id}/settle",
+            json={
+                "units": "7",
+                "source": "verified_reconciliation",
+                "evidence_ref": "reconcile://ticket-secret",
+                "provider_request_id": "provider-request-secret",
+                "reason": "按供应商对账单核对",
+            },
+            headers={
+                "Authorization": "Bearer reconcile-token",
+                "Origin": "https://school.example",
+            },
+        )
+        release_scope = TenantScope(str(school_id), "learner-1")
+        await ledger.reserve(
+            release_scope,
+            AttemptRequest(
+                operation_id=release_operation_id,
+                attempt_id=release_attempt_id,
+                service_id="search",
+                unit_code="request",
+                provider_id="provider-a",
+                provider_account_id="account-a",
+                pool_id="pool-a",
+                model_id="search-basic",
+                config_version=1,
+                subject_kind="user",
+                subject_id="learner-1",
+                user_id="learner-1",
+                app_id="",
+                reserved_units=Decimal("3"),
+            ),
+        )
+        release_denied = await client.post(
+            f"/api/v1/oms/schools/{school_id}/attempts/{release_attempt_id}/release",
+            json={
+                "evidence_ref": "reconcile://not-sent-secret",
+                "reason": "确认供应商未收到请求",
+            },
+            headers={"Authorization": "Bearer read-token", "Origin": "https://school.example"},
+        )
+        released = await client.post(
+            f"/api/v1/oms/schools/{school_id}/attempts/{release_attempt_id}/release",
+            json={
+                "evidence_ref": "reconcile://not-sent-secret",
+                "reason": "确认供应商未收到请求",
+            },
+            headers={
+                "Authorization": "Bearer reconcile-token",
+                "Origin": "https://school.example",
+            },
+        )
+        await ledger.reserve(
+            attempt_scope,
+            AttemptRequest(
+                operation_id=receipt_operation_id,
+                attempt_id=receipt_attempt_id,
+                service_id="search",
+                unit_code="request",
+                provider_id="provider-a",
+                provider_account_id="account-a",
+                pool_id="pool-a",
+                model_id="search-basic",
+                config_version=1,
+                subject_kind="user",
+                subject_id="learner-1",
+                user_id="learner-1",
+                app_id="",
+                reserved_units=Decimal("3"),
+            ),
+        )
+        await ledger.mark_dispatched(
+            attempt_scope,
+            receipt_attempt_id,
+            evidence_ref="dispatch://provider-receipt-secret",
+            provider_request_id="provider-receipt-secret",
+        )
+        receipt_denied = await client.post(
+            f"/api/v1/oms/schools/{school_id}/usage/provider-receipts",
+            json={
+                "provider_id": "provider-a",
+                "provider_account_id": "account-a",
+                "provider_request_id": "provider-receipt-secret",
+                "units": "2",
+                "evidence_ref": "bill://provider-receipt-secret",
+                "reason": "按供应商 request ID 自动匹配原 attempt",
+            },
+            headers={"Authorization": "Bearer read-token", "Origin": "https://school.example"},
+        )
+        receipt_settled = await client.post(
+            f"/api/v1/oms/schools/{school_id}/usage/provider-receipts",
+            json={
+                "provider_id": "provider-a",
+                "provider_account_id": "account-a",
+                "provider_request_id": "provider-receipt-secret",
+                "units": "2",
+                "evidence_ref": "bill://provider-receipt-secret",
+                "reason": "按供应商 request ID 自动匹配原 attempt",
+            },
+            headers={
+                "Authorization": "Bearer reconcile-token",
+                "Origin": "https://school.example",
+            },
+        )
+
+    assert denied.status_code == 403, denied.text
+    assert settled.status_code == 200, settled.text
+    assert settled.json() == {
+        "attempt_id": str(attempt_id),
+        "status": "settled",
+        "settled_units": "7",
+    }
+    assert "ticket-secret" not in settled.text
+    assert "provider-request-secret" not in settled.text
+    assert release_denied.status_code == 403, release_denied.text
+    assert released.status_code == 200, released.text
+    assert released.json() == {"attempt_id": str(release_attempt_id), "status": "released"}
+    assert "not-sent-secret" not in released.text
+    assert receipt_denied.status_code == 403, receipt_denied.text
+    assert receipt_settled.status_code == 200, receipt_settled.text
+    assert receipt_settled.json() == {
+        "attempt_id": str(receipt_attempt_id),
+        "status": "settled",
+        "settled_units": "2",
+    }
+    assert "provider-receipt-secret" not in receipt_settled.text
+    async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+        await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(school_id),))
+        attempt = await (
+            await c.execute(
+                "SELECT status,settled_units,provider_request_id,evidence "
+                "FROM oms.usage_attempts WHERE tenant_id=%s AND attempt_id=%s",
+                (school_id, attempt_id),
+            )
+        ).fetchone()
+        commitment = await (
+            await c.execute(
+                "SELECT unspent,reserved,settled,released FROM oms.grant_commitments "
+                "WHERE tenant_id=%s AND grant_id=%s AND lot_id=%s",
+                (school_id, grant_id, lot_id),
+            )
+        ).fetchone()
+        supply = await (
+            await c.execute(
+                "SELECT committed_unspent,reserved_inflight,settled_lifetime "
+                "FROM oms.supply_lots WHERE id=%s",
+                (lot_id,),
+            )
+        ).fetchone()
+        evidence_events = await (
+            await c.execute(
+                "SELECT event_kind,reference,provider_request_id FROM oms.attempt_evidence_events "
+                "WHERE tenant_id=%s AND attempt_id=%s ORDER BY created_at,event_kind",
+                (school_id, attempt_id),
+            )
+        ).fetchall()
+        release_attempt = await (
+            await c.execute(
+                "SELECT status,settled_units,evidence FROM oms.usage_attempts "
+                "WHERE tenant_id=%s AND attempt_id=%s",
+                (school_id, release_attempt_id),
+            )
+        ).fetchone()
+        release_events = await (
+            await c.execute(
+                "SELECT event_kind,reference FROM oms.attempt_evidence_events "
+                "WHERE tenant_id=%s AND attempt_id=%s",
+                (school_id, release_attempt_id),
+            )
+        ).fetchall()
+        receipt_attempt = await (
+            await c.execute(
+                "SELECT status,settled_units,provider_request_id,evidence "
+                "FROM oms.usage_attempts WHERE tenant_id=%s AND attempt_id=%s",
+                (school_id, receipt_attempt_id),
+            )
+        ).fetchone()
+        audit = await (
+            await c.execute(
+                "SELECT actor_subject,action,reason,safe_summary FROM oms.audit_events "
+                "WHERE target_tenant_id=%s AND object_id=%s AND action='usage.settle'",
+                (school_id, str(attempt_id)),
+            )
+        ).fetchone()
+    assert tuple(attempt[:3]) == (
+        "settled",
+        Decimal("7.000000"),
+        "provider-request-secret",
+    )
+    assert attempt[3]["reference"] == "reconcile://ticket-secret"
+    assert tuple(commitment) == (
+        Decimal("1.000000"),
+        Decimal("0.000000"),
+        Decimal("9.000000"),
+        Decimal("0.000000"),
+    )
+    assert tuple(supply) == (
+        Decimal("1.000000"),
+        Decimal("0.000000"),
+        Decimal("9.000000"),
+    )
+    assert ("verified_reconciliation", "reconcile://ticket-secret", "provider-request-secret") in [
+        tuple(row) for row in evidence_events
+    ]
+    assert tuple(release_attempt[:2]) == ("released", Decimal("0.000000"))
+    assert release_attempt[2]["reference"] == "reconcile://not-sent-secret"
+    assert ("confirmed_not_sent", "reconcile://not-sent-secret") in [
+        tuple(row) for row in release_events
+    ]
+    assert tuple(receipt_attempt[:3]) == (
+        "settled",
+        Decimal("2.000000"),
+        "provider-receipt-secret",
+    )
+    assert receipt_attempt[3]["reference"] == "bill://provider-receipt-secret"
+    assert tuple(audit[:3]) == ("reconcile-operator", "usage.settle", "按供应商对账单核对")
+    assert audit[3] == {
+        "service_id": "search",
+        "settled_units": "7",
+        "source": "verified_reconciliation",
+    }
 
 
 async def test_eduplus2_signed_webhook_demo_only_checks_delivery_without_state_change(app):
@@ -2926,6 +3711,8 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
         "/api/v1/oms/provider-settings/rollback",
         "/api/v1/oms/provider-settings/test",
         "/api/v1/oms/resources/status",
+        "/api/v1/oms/schools/{school_id}/attempts/{attempt_id}/release",
+        "/api/v1/oms/schools/{school_id}/attempts/{attempt_id}/settle",
         "/api/v1/oms/schools/{school_id}/entitlements/{service_id}",
         "/api/v1/oms/schools/{school_id}/jobs",
         "/api/v1/oms/schools/{school_id}/quota",
@@ -2934,6 +3721,8 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
         "/api/v1/oms/schools/{school_id}/quota-grants/{grant_id}/expire",
         "/api/v1/oms/schools/{school_id}/quota-grants/{grant_id}/revoke",
         "/api/v1/oms/schools/{school_id}/usage",
+        "/api/v1/oms/schools/{school_id}/usage/export",
+        "/api/v1/oms/schools/{school_id}/usage/provider-receipts",
         "/api/v1/oms/skills",
         "/api/v1/oms/skills/draft",
         "/api/v1/oms/skills/{name}/schools/{school_id}/grant",
@@ -2942,6 +3731,8 @@ def test_enterprise_management_route_allowlist_is_narrow(app):
         "/api/v1/oms/status/catalog",
         "/api/v1/oms/summary",
         "/api/v1/oms/supply",
+        "/api/v1/oms/supply/lots",
+        "/api/v1/oms/supply/lots/{lot_id}/revoke",
         "/api/v1/oms/tenants",
         "/api/v1/oms/tenants/{school_id}",
     }

@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 # OMS Token 计费与 EduPlus2 欠费协同
 
 > **退役目标已获用户批准（2026-09-26）**：本提案及下列正文仅保留历史，不得按旧 tasks 实施、同步其冲突 spec 或归档。现行替代为已批准的 `add-enterprise-oms-business-logic`（服务供给、统一充值/赠送额度与真实消耗）；退役决议见 `replacement-decision-draft-2026-09-26.md`。

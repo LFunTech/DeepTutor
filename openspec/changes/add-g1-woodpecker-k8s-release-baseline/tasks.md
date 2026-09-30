@@ -1,3 +1,5 @@
+> **暂停状态（2026-09-30）**：本 proposal 暂不作为当前 OMS v1 执行主线；已完成项保留为历史证据，未完成项需在后续 TMS/M1/G1/学校集成或发布专项 proposal 中重订后再推进。不得因暂停而视为完成或直接 archive。
+
 # 实施任务
 
 范围以 [proposal](proposal.md)、[design](design.md) 和 `enterprise-g1-woodpecker-k8s-release-baseline` delta spec 为准。本 proposal 只交付 G1 Woodpecker/K8s 发布闭环；固定租户 runtime、resource binding、EduPlus2 demo 和 smoke harness 由 `add-m1-fixed-tenant-runtime-baseline` 提供。未接入目标环境的占位 pipeline、通用 YAML、默认 `prod`、手工覆盖环境变量或只适配单一生产环境的实现不得标记完成；部署目标必须由符合目标环境门禁的 deployment tag 解析。

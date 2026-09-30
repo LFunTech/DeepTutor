@@ -476,7 +476,15 @@ async def handle_frontend_callback(request: Request, enterprise) -> JSONResponse
 async def refresh_session(request: Request, enterprise) -> JSONResponse:
     refresh_token = str(request.cookies.get(OMS_REFRESH_COOKIE) or "").strip()
     if not refresh_token:
-        return JSONResponse({"authenticated": False}, status_code=401)
+        response = JSONResponse({"authenticated": False}, status_code=401)
+        response.delete_cookie(
+            OMS_CSRF_COOKIE,
+            path=OMS_CSRF_COOKIE_PATH,
+            secure=True,
+            samesite="lax",
+        )
+        response.delete_cookie(OMS_CSRF_COOKIE, path=OMS_COOKIE_PATH, secure=True, samesite="lax")
+        return response
     if not _oms_csrf_valid(request):
         return _json_error("csrf_invalid", 403)
     try:

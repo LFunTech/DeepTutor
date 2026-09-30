@@ -18,7 +18,18 @@ type TmsAudit = { id: string; action?: string; result?: string; reason_code?: st
 type TmsSkill = { id: string; name?: string; status?: string; publication_revision?: number };
 type TmsQuotaGrant = { grant_id?: string; service_id?: string; unit_code?: string; quantity?: string; status?: string };
 type TmsUsage = { attempt_id?: string; service_id?: string; unit_code?: string; status?: string; settled_units?: string; reserved_units?: string };
-type TmsServiceAccessGrant = { grant_id?: string; service_id?: string; subject_kind?: string; subject_id?: string; status?: string; sync_status?: string };
+type TmsEntitlement = { service_id?: string; status?: string; starts_at?: string; expires_at?: string; version?: number };
+type TmsServiceAccessGrant = { grant_id?: string; service_id?: string; subject_kind?: string; subject_id?: string; status?: string; sync_status?: string; starts_at?: string; expires_at?: string; entitlement_version?: number; version?: number };
+type TmsPermissionAction = { action_key?: string; allowed_scope?: string; sensitive?: boolean; status?: string; version?: number };
+type TmsRoleTemplate = { role_key?: string; version?: number; scope_kind?: string; is_template?: boolean; owner_school_id?: string; actions?: string[] };
+type TmsCatalogPrincipal = { principal_id?: string; subject?: string; status?: string; policy_version?: number };
+type TmsCatalogAssignment = { assignment_id?: string; principal_id?: string; subject?: string; role_key?: string; role_version?: number; status?: string; version?: number };
+type TmsPermissionCatalog = {
+  actions?: TmsPermissionAction[];
+  roles?: TmsRoleTemplate[];
+  principals?: TmsCatalogPrincipal[];
+  assignments?: TmsCatalogAssignment[];
+};
 
 function tmsBase(schoolCode: string) {
   return `/tms/${encodeURIComponent(schoolCode)}`;
@@ -55,6 +66,9 @@ type TmsModel = {
   approvals: TmsApproval[];
   audits: TmsAudit[];
   skills: TmsSkill[];
+  permissionCatalog: TmsPermissionCatalog;
+  permissionCatalogLoaded: boolean;
+  entitlements: TmsEntitlement[];
   quotaGrants: TmsQuotaGrant[];
   usage: TmsUsage[];
   serviceAccess: TmsServiceAccessGrant[];
@@ -104,6 +118,9 @@ function newCommandId() {
 function memberId(row: TmsMember) { return row.principal_id ?? row.id ?? ""; }
 function approvalId(row: TmsApproval) { return row.approval_id ?? row.id ?? ""; }
 function memberRoles(row: TmsMember) { return row.roles ?? row.assignments ?? []; }
+function approvalTitle(row: TmsApproval) { return row.operation ?? approvalId(row); }
+function entitlementVersion(row: TmsEntitlement) { return typeof row.version === "number" && row.version > 0 ? row.version : undefined; }
+function catalogDefaults(): TmsPermissionCatalog { return { actions: [], roles: [], principals: [], assignments: [] }; }
 function oneYearLater() {
   const date = new Date();
   date.setUTCFullYear(date.getUTCFullYear() + 1);
@@ -228,8 +245,8 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
         const directory = await readJson<DirectoryState>("/api/v1/tms/directory/users", token);
         const permissionActions = permissions.actions ?? [];
         const quotaResult = permissionActions.includes("tenant.quotas.read") || permissionActions.includes("tenant.usage.read")
-          ? await readJson<{ grants?: TmsQuotaGrant[]; usage?: TmsUsage[]; usage_details?: TmsUsage[] }>("/api/v1/tms/quotas", token)
-          : { grants: [], usage: [], usage_details: [] };
+          ? await readJson<{ entitlements?: TmsEntitlement[]; grants?: TmsQuotaGrant[]; usage?: TmsUsage[]; usage_details?: TmsUsage[] }>("/api/v1/tms/quotas", token)
+          : { entitlements: [], grants: [], usage: [], usage_details: [] };
         const serviceAccessResult = permissionActions.includes("tenant.access.manage")
           ? await readJson<{ service_access_grants?: TmsServiceAccessGrant[] }>("/api/v1/tms/service-access", token)
           : { service_access_grants: [] };
@@ -246,6 +263,9 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
             approvals: approvalsResult.approvals ?? [],
             audits: auditsResult.events ?? [],
             skills: skillsResult.skills ?? [],
+            permissionCatalog: catalogDefaults(),
+            permissionCatalogLoaded: !permissionActions.includes("tenant.permissions.manage"),
+            entitlements: quotaResult.entitlements ?? [],
             quotaGrants: quotaResult.grants ?? [],
             usage: quotaResult.usage_details?.length ? quotaResult.usage_details : quotaResult.usage ?? [],
             serviceAccess: serviceAccessResult.service_access_grants ?? [],
@@ -263,11 +283,48 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
     return () => { cancelled = true; };
   }, [schoolCode]);
 
+  useEffect(() => {
+    if (state !== "ready" || !model) return;
+    if (tmsRoot(route, base) !== "roles") return;
+    if (model.permissionCatalogLoaded) return;
+    if (!(model.permissions.actions ?? []).includes("tenant.permissions.manage")) return;
+    let cancelled = false;
+    async function loadPermissionCatalog() {
+      try {
+        const catalog = await readJson<TmsPermissionCatalog>("/api/v1/tms/permissions", authTokenRef.current);
+        if (!cancelled) {
+          setModel(current => current ? { ...current, permissionCatalog: catalog, permissionCatalogLoaded: true } : current);
+        }
+      } catch (caught) {
+        const error = caught as ApiError;
+        if (!cancelled) {
+          setModel(current => current ? { ...current, permissionCatalogLoaded: true } : current);
+          setMessage(`学校角色目录读取失败：${error.status} ${error.detail}`);
+        }
+      }
+    }
+    void loadPermissionCatalog();
+    return () => { cancelled = true; };
+  }, [state, model, route, base]);
+
   const patchMember = (principalId: string, updater: (member: TmsMember) => TmsMember) => {
     setModel(current => current ? { ...current, members: current.members.map(member => memberId(member) === principalId ? updater(member) : member) } : current);
   };
   const patchApproval = (targetApprovalId: string, updater: (approval: TmsApproval) => TmsApproval) => {
     setModel(current => current ? { ...current, approvals: current.approvals.map(approval => approvalId(approval) === targetApprovalId ? updater(approval) : approval) } : current);
+  };
+  const upsertServiceAccess = (grant: TmsServiceAccessGrant) => {
+    setModel(current => {
+      if (!current) return current;
+      if (!grant.grant_id) return { ...current, serviceAccess: [...current.serviceAccess, grant] };
+      const exists = current.serviceAccess.some(item => item.grant_id === grant.grant_id);
+      return {
+        ...current,
+        serviceAccess: exists
+          ? current.serviceAccess.map(item => item.grant_id === grant.grant_id ? { ...item, ...grant } : item)
+          : [...current.serviceAccess, grant],
+      };
+    });
   };
   const grantAuditor = async (member: TmsMember) => {
     const principalId = memberId(member);
@@ -305,6 +362,59 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
       setMessage(`撤销失败：${error.status} ${error.detail}`);
     }
   };
+  const grantServiceAccess = async (member: TmsMember, entitlement: TmsEntitlement) => {
+    const principalId = memberId(member);
+    const serviceId = entitlement.service_id;
+    const expectedEntitlementVersion = entitlementVersion(entitlement);
+    if (!principalId || !serviceId || !expectedEntitlementVersion) return;
+    try {
+      const result = await writeJson<TmsServiceAccessGrant>("/api/v1/tms/service-access", {
+        grant_id: newCommandId(),
+        service_id: serviceId,
+        subject_kind: "member",
+        subject_id: principalId,
+        starts_at: entitlement.starts_at ?? new Date().toISOString(),
+        expires_at: entitlement.expires_at ?? oneYearLater(),
+        expected_entitlement_version: expectedEntitlementVersion,
+        reason: "正式 TMS UI 授予成员服务访问",
+      }, authToken);
+      upsertServiceAccess({
+        ...result,
+        service_id: result.service_id ?? serviceId,
+        subject_kind: result.subject_kind ?? "member",
+        subject_id: result.subject_id ?? principalId,
+        status: result.status ?? "active",
+        sync_status: result.sync_status ?? "local_ready",
+        entitlement_version: result.entitlement_version ?? expectedEntitlementVersion,
+        version: result.version ?? 1,
+      });
+      setMessage("已提交服务访问授予。");
+    } catch (caught) {
+      const error = caught as ApiError;
+      setMessage(`服务访问授予失败：${error.status} ${error.detail}`);
+    }
+  };
+  const revokeServiceAccess = async (grant: TmsServiceAccessGrant) => {
+    if (!grant.grant_id) return;
+    const expectedVersion = grant.version ?? 1;
+    try {
+      const result = await writeJson<TmsServiceAccessGrant>(`/api/v1/tms/service-access/${grant.grant_id}/revoke`, {
+        expected_version: expectedVersion,
+        reason: "正式 TMS UI 撤销服务访问",
+      }, authToken);
+      upsertServiceAccess({
+        ...grant,
+        ...result,
+        grant_id: result.grant_id ?? grant.grant_id,
+        status: result.status ?? "revoked",
+        version: result.version ?? expectedVersion + 1,
+      });
+      setMessage("已提交服务访问撤销。");
+    } catch (caught) {
+      const error = caught as ApiError;
+      setMessage(`服务访问撤销失败：${error.status} ${error.detail}`);
+    }
+  };
   const applyApproval = async (approval: TmsApproval) => {
     const id = approvalId(approval);
     if (!id) return;
@@ -336,6 +446,7 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
 
   const actions = model?.permissions.actions ?? [];
   const canManage = actions.includes("tenant.permissions.manage");
+  const canManageAccess = actions.includes("tenant.access.manage");
   const directoryMessage = model?.directory.message ?? model?.directory.reason_code ?? "目录状态未返回";
   const directoryRows = (model?.directory.users ?? []).map((user, index) => ({ ...user, id: user.id ?? `directory-${index}` }));
   const memberRows = (model?.members ?? []).map(member => ({ ...member, id: memberId(member) }));
@@ -343,17 +454,32 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
   const quotaRows = (model?.quotaGrants ?? []).map((grant, index) => ({ ...grant, id: grant.grant_id ?? `quota-${index}` }));
   const usageRows = (model?.usage ?? []).map((usage, index) => ({ ...usage, id: usage.attempt_id ?? `usage-${index}` }));
   const serviceAccessRows = (model?.serviceAccess ?? []).map((grant, index) => ({ ...grant, id: grant.grant_id ?? `access-${index}` }));
+  const roleCatalogRows = (model?.permissionCatalog.roles ?? [])
+    .filter(role => role.scope_kind === "school" && role.role_key)
+    .map((role, index) => ({ ...role, id: `${role.role_key ?? "role"}:${role.version ?? index}` }));
+  const actionCatalogRows = (model?.permissionCatalog.actions ?? [])
+    .filter(action => typeof action.action_key === "string" && action.action_key.startsWith("tenant."))
+    .map((action, index) => ({ ...action, id: action.action_key ?? `action-${index}` }));
+  const catalogPrincipalRows = (model?.permissionCatalog.principals ?? [])
+    .map((principal, index) => ({ ...principal, id: principal.principal_id ?? `principal-${index}` }));
+  const catalogAssignmentRows = (model?.permissionCatalog.assignments ?? [])
+    .map((assignment, index) => ({ ...assignment, id: assignment.assignment_id ?? `assignment-${index}` }));
+  const firstGrantableEntitlement = (model?.entitlements ?? []).find(item => item.status === "active" && item.service_id && entitlementVersion(item));
   const root = tmsRoot(route, base);
   const segments = tmsSegments(route, base);
   const detailRoot = segments[0] ?? "home";
   const detailId = segments[1];
   const openDetail = (section: string, id: string) => navigate(`${base}/${section}/${encodeRoutePart(id)}`);
-  const closeDetail = () => navigate(detailRoot === "home" ? base : `${base}/${detailRoot}`);
+  const closeDetail = () => navigate(detailRoot === "home" ? base : detailRoot === "approvals" ? `${base}/authz-records` : `${base}/${detailRoot}`);
   const detailTitle = (() => {
     if (!detailId) return "";
     if (detailRoot === "members") {
       const member = memberRows.find(row => row.id === detailId);
       return member?.display_name ?? member?.subject ?? detailId;
+    }
+    if (detailRoot === "approvals" || detailRoot === "authz-records") {
+      const approval = approvalRows.find(row => row.id === detailId);
+      if (approval) return approvalTitle(approval);
     }
     if (detailRoot === "quotas") return quotaRows.find(row => row.id === detailId)?.service_id ?? detailId;
     if (detailRoot === "usage") return usageRows.find(row => row.id === detailId)?.attempt_id ?? detailId;
@@ -382,6 +508,20 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
           <Notice>成员、应用、服务和共享资源应从同一授权事实回读；未返回的关系不使用原型合成数据补齐。</Notice>
         </Section>
       </>;
+    }
+    if (detailRoot === "approvals" || detailRoot === "authz-records") {
+      const approval = approvalRows.find(row => row.id === detailId);
+      if (approval) return <>
+        <PageHead eyebrow="审批与审计" title="授权审批详情" description="审批结果只来自当前学校本地授权事实；apply 仍需独立写 API 复核版本。"/>
+        <DetailGrid rows={[
+          { label: "审批", value: approvalId(approval) },
+          { label: "操作", value: approval.operation ?? "unknown" },
+          { label: "状态", value: approval.status ?? "unknown" },
+          { label: "目标版本", value: `Policy v${approval.expected_target_policy_version ?? 0}` },
+          { label: "所属学校", value: model?.permissions.school_id ?? schoolCode },
+        ]}/>
+      </>;
+      if (detailRoot === "approvals") return <StatePanel state="empty" message="对象不存在或不可访问。"/>;
     }
     if (detailRoot === "quotas") {
       const quota = quotaRows.find(row => row.id === detailId);
@@ -478,14 +618,23 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
         { key: "roles", label: "本地角色", render: row => memberRoles(row).filter(item => item.status !== "revoked").map(item => item.role_key).filter(Boolean).join("、") || "—" },
       ]} rowActions={row => {
         const details = [{ label: "成员资料", onClick: () => openDetail("members", row.id) }];
-        if (!canManage || row.status !== "active") return details;
+        if (row.status !== "active") return details;
         const activeRoles = memberRoles(row).filter(item => item.status === "active");
         const revokable = activeRoles.find(item => item.assignment_id && item.role_key !== "school_admin");
         const canGrantAuditor = !activeRoles.some(item => item.role_key === "school_auditor");
+        const canGrantFirstServiceAccess = Boolean(
+          canManageAccess
+          && firstGrantableEntitlement
+          && !serviceAccessRows.some(grant => grant.status === "active"
+            && grant.subject_kind === "member"
+            && grant.subject_id === row.id
+            && grant.service_id === firstGrantableEntitlement.service_id),
+        );
         return [
           ...details,
-          ...(canGrantAuditor ? [{ label: "授予只读角色", onClick: () => void grantAuditor(row) }] : []),
-          ...(revokable ? [{ label: `撤销 ${revokable.role_key ?? "角色"}`, onClick: () => void revokeAssignment(row, revokable) }] : []),
+          ...(canManage && canGrantAuditor ? [{ label: "授予只读角色", onClick: () => void grantAuditor(row) }] : []),
+          ...(canManage && revokable ? [{ label: `撤销 ${revokable.role_key ?? "角色"}`, onClick: () => void revokeAssignment(row, revokable) }] : []),
+          ...(canGrantFirstServiceAccess && firstGrantableEntitlement ? [{ label: "授予首个服务访问", onClick: () => void grantServiceAccess(row, firstGrantableEntitlement) }] : []),
         ];
       }}/>
     </Section>}
@@ -508,7 +657,10 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
         { key: "service", label: "服务", render: row => row.service_id ?? "unknown" },
         { key: "subject", label: "主体", render: row => row.subject_id ?? "—" },
         { key: "status", label: "状态", render: row => `${row.status ?? "unknown"}${row.sync_status ? ` · ${row.sync_status}` : ""}` },
-      ]} onOpen={row => openDetail(root === "apps" ? "apps" : root === "home" ? "services" : root, row.id)} openLabel={row => `查看 ${row.service_id ?? row.id} 访问详情`}/>
+      ]} rowActions={row => [
+        { label: `查看 ${row.service_id ?? row.id} 访问详情`, onClick: () => openDetail(root === "apps" ? "apps" : root === "home" ? "services" : root, row.id) },
+        ...(canManageAccess && row.status === "active" && row.grant_id ? [{ label: "撤销服务访问", onClick: () => void revokeServiceAccess(row) }] : []),
+      ]}/>
     </Section>}
     {(root === "home" || root === "skills") && <Section title="Skill 授权"><DataTable rows={model?.skills ?? []} searchLabel="搜索 Skill" columns={[
       { key: "name", label: "Skill", render: row => row.name ?? row.id },
@@ -523,13 +675,41 @@ export default function TmsFormalApp({ schoolCode }: { schoolCode: string }) {
     </Section>}
     {root === "roles" && <Section title="学校角色" subtitle="角色目录由后端安全 DTO 提供；未返回时保持只读治理空态。">
       <Notice>角色授予仍必须走当前学校 `tenant.permissions.manage` 与审批/委托上界；前端不会自填 ops.* 或跨校动作。</Notice>
+      <div className="section-grid">
+        <DataTable rows={roleCatalogRows} searchLabel="搜索学校角色" columns={[
+          { key: "role", label: "角色", render: row => `${row.role_key ?? row.id} v${row.version ?? 0}` },
+          { key: "source", label: "来源", render: row => row.is_template ? "内置模板" : `本校自定义${row.owner_school_id ? ` · ${row.owner_school_id}` : ""}` },
+          { key: "actions", label: "tenant 动作", render: row => (row.actions ?? []).filter(action => action.startsWith("tenant.")).join("、") || "—" },
+        ]}/>
+        <DataTable rows={actionCatalogRows} searchLabel="搜索 tenant 动作" columns={[
+          { key: "action", label: "动作", render: row => row.action_key ?? row.id },
+          { key: "scope", label: "范围", render: row => row.allowed_scope ?? "school" },
+          { key: "risk", label: "风险", render: row => row.sensitive ? "敏感动作" : "低风险" },
+          { key: "status", label: "状态", render: row => row.status ?? "unknown" },
+        ]}/>
+      </div>
+      <div className="section-grid">
+        <DataTable rows={catalogPrincipalRows} searchLabel="搜索本校主体" columns={[
+          { key: "subject", label: "主体", render: row => row.subject ?? row.principal_id ?? row.id },
+          { key: "status", label: "状态", render: row => row.status ?? "unknown" },
+          { key: "policy", label: "Policy", render: row => `v${row.policy_version ?? 0}` },
+        ]}/>
+        <DataTable rows={catalogAssignmentRows} searchLabel="搜索角色授权" columns={[
+          { key: "subject", label: "主体", render: row => row.subject ?? row.principal_id ?? "—" },
+          { key: "role", label: "角色", render: row => `${row.role_key ?? "unknown"} v${row.role_version ?? 0}` },
+          { key: "status", label: "状态", render: row => `${row.status ?? "unknown"} · v${row.version ?? 0}` },
+        ]}/>
+      </div>
     </Section>}
     {(root === "home" || root === "roles" || root === "access-grants" || root === "authz-records" || root === "events") && <Section title={root === "events" ? "管理事件" : "审批与审计"} subtitle="当前学校本地授权事实" >
       <div aria-label="TMS 审批与审计" className="section-grid">
         <DataTable rows={approvalRows} searchLabel="搜索审批" columns={[
           { key: "op", label: "审批", render: row => row.operation ?? row.id },
           { key: "status", label: "状态", render: row => row.status ?? "unknown" },
-        ]} rowActions={row => canManage && row.status === "approved" ? [{ label: "应用审批", onClick: () => void applyApproval(row) }] : []}/>
+        ]} rowActions={row => [
+          { label: "查看审批详情", onClick: () => openDetail("authz-records", row.id) },
+          ...(canManage && row.status === "approved" ? [{ label: "应用审批", onClick: () => void applyApproval(row) }] : []),
+        ]}/>
         <DataTable rows={model?.audits ?? []} searchLabel="搜索审计" columns={[
           { key: "action", label: "动作", render: row => row.action ?? row.id },
           { key: "result", label: "结果", render: row => row.result ?? row.reason_code ?? "unknown" },

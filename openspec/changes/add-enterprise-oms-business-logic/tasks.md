@@ -1,3 +1,5 @@
+> **冻结/替代状态（2026-09-30）**：本 proposal 不再作为当前 OMS 执行主线；已完成项仅作为 `deliver-oms-test-cn-management-v1` 的证据来源，未完成项除非在新 proposal 中列明，否则暂停推进。不得把本 proposal 的未完成任务当作已交付或直接 archive。
+
 > 2026-09-27 用户确认 EduPlus2 身份/学校/生命周期与 DeepTutor OMS 应用权限拆分，且本代理不得修改 EduPlus2；本 change 权限权威修订版及直接依赖提案随后已分别获批。内部总账实施授权和隔离合成数据限制保持。真实租户数据、生产发布、归档、此次提交/推送均未授权；test-cn Webhook mock 联调不改变 OMS 写入门禁。只在各项证据真实完成后勾选，实施证据见 `implementation-evidence.md`。
 
 > **首个 Agent 的 test-cn 交付优先顺序**：用户指定正式 OMS 维护模型/global Skill，由指定测试学校的受控服务主体先联调，不开放学校用户入口。按 `design.md` 的“test-cn 首个 Agent”切片，优先贯通管理授权 1.2/2.1/3.2、Provider 设置 1.1–2.4、OMS 6.2–6.5/7.3–7.5、独立 OMS 界面 1.1/1.2/3.1 与 B1/B2 的学校运行时门禁；旧原型 fixture、核心本地设置和手工改库均不能替代。此交付顺序不勾选未完成任务，也不豁免后续完整 OMS/Provider/Skill 的全服务验收。**职责拆分**：本 change 只定义/实现 OMS 后端业务闭环；正式 OMS 前端归 `add-c1-c2-oms-operator-interface`，TMS tenant Skill 和学校成员/应用归 `add-enterprise-tms-business-logic`，统一鉴权归 `add-enterprise-management-authorization`。
@@ -18,6 +20,7 @@
 
 - [x] 3.1 审计本地 Web 设置和云端企业装配的所有管理入口（含 API、CLI/SDK），形成云端阻断/个人接口白名单与本地设置保留的路由级负例和回退证据。见 `implementation-evidence.md` §3.1；这是当前未开放 OMS 写路由的入口基线，未来正式 OMS API 装配仍须重新验收。
 - [ ] 3.2 对每处确实缺少的 DeepTutor 通用 seam 提交替代方案、拟改入口、上游合并风险及 CLI/HTTP/WS/SDK/后台 smoke；仅经严格审阅后实施，并留当前 upstream 兼容证据。
+  - [x] 3.2.1 已完成当前只读 upstream mergeability smoke 与本地入口回归：企业后端/前端全量验证通过，`git merge-tree $(git merge-base HEAD upstream/main) HEAD upstream/main` 未发现冲突标记；未执行 merge/rebase/reset，真实 upstream 合并验收仍保留在父任务。
 
 ## 4. B1：EduPlus2 生命周期与可信主体
 
@@ -35,7 +38,9 @@
 - [x] 6.2 建立五类平台资源与现有 DeepTutor descriptor/registry 的映射和安全状态 API；逐项验证 search、task 回退、embedding、TTS/STT、image/video、解析/RAG、外部 Agent/工具的条件字段与本地 Web 语义一致。见 `implementation-evidence.md` §2026-09-28 OMS 平台资源安全状态 API；该 API 只返回脱敏 descriptor/status，不执行探针、不保存配置、不替代 6.3 发布确认。
 - [x] 6.3 实施并验证受控配置草稿、测试、目标执行者逐实例版本确认、部分确认/超时失败保留旧 active、新实例就绪前装载及回退；Secret 明文不进入响应、日志或审计，云端旧管理旁路被阻断。见 `implementation-evidence.md` §2026-09-28 任务 6.3。
 - [ ] 6.4 同步 OMS 原型中供给/调用扣量的简化文案与 fixture，再将独立 OMS 前端接入真实平台身份和资源管理 API；按列表→详情检查普通运营/高权限角色、加载/空/错误/无权限/待生效、审计关联与生产原型 404。
+  - [x] 6.4.1 已将独立正式 OMS 前端接入 `/api/v1/oms/*` 真实安全 DTO：平台资源、模型/Provider、供给批次、学校权益/额度、用量/任务、审计/成本状态、权限治理与 Skill 均为列表→详情抽屉；生产原型路径非 development 返回 404，未授权/失败场景失败关闭。
 - [ ] 6.5 与 TMS 业务 change 实施云端 Skill `global`/`tenant` owner 和安全来源模型：**本 change 负责 OMS global/builtin 包登记、审核、发布、学校授权及运行时过滤规则**；TMS change 负责 tenant ZIP 创建/更新与本校自用。非 builtin 创建/更新只接收完整 ZIP，服务端校验包并以 `SKILL.md` 作为全部内容元数据来源，保存不可变版本/摘要且审查前不运行脚本或 `always`；builtin 不可编辑、默认零租户授权并按打包版本复核；验证无需 TMS 二次分配、未授权 builtin 在清单/`read_skill`/显式请求/`always` 各入口不可达、依赖不足不可用、同名 tenant 优先且本地 DeepTutor 行为不变。
+  - [x] 6.5.1 已接入正式 OMS global Skill 安全 DTO 与审查/发布/学校授权按钮：`ops.skills.read/review/publish/grant` 同 key 控制，payload 使用 revision/version/sha256/school_id，不回显对象 key、包正文、Secret 或未授权 builtin 内容。
 
 ## 7. C2：供给、配额、真实消耗与治理
 
@@ -43,8 +48,15 @@
 - [x] 7.2 实施供应商供给批次/兼容池与可授予量事务校验；验证供给过期仍保留历史消耗、授予不晚于供给有效期、金额/credits/paygo 无可信上界时拒绝硬额度及新调用，并以并发测试证明不超额承诺。见 `implementation-evidence.md` §7.2；完成内部总账事务与合成验证，不代表平台采购写 API、供应商凭据核验或真实执行者已开放。
 - [x] 7.3 实施 OMS 租户服务授权及同一列表的赠送/充值额度授予、调整、过期/撤销；验证操作审计、版本冲突、赠送优先与未使用承诺释放。见 `implementation-evidence.md` §2026-09-28 OMS 服务授权与额度 API；完成的是经 DeepTutor 本产品 school-scope 授权的合成 PG API/总账闭环，不代表真实执行边界或供应商调用已开放。
 - [ ] 7.4 在真实 CLI、HTTP/WS、SDK、后台和 Agent 子调用执行边界接入授权/额度/供给准入与预留；验证单服务耗尽只拒该服务新调用，登录/管理/历史与其他服务可用。
+  - [x] 7.4.1 已实现企业扩展内可复用的 metered provider attempt runner：以 `UsageCallContext` 生成 attempt、先预留再记录 dispatch intent、成功时按可信 receipt 结算、异常时标记 `remote_unknown` 并保留预留；合成 provider 样本覆盖成功结算与发出后超时待核对。父任务仍需把该 runner 接入真实 CLI/HTTP/WS/SDK/后台/Agent 与逐服务 adapter。
 - [ ] 7.5 以供应商可信 usage/可核验对账结算 Token，以真实原生单位结算其他服务；验证流中断、异步任务、同一 operation 多个可计费 attempt、重复回执、迟到响应、取消未知结果、一次 attempt 跨多笔额度及 Agent 防双扣。
+  - [x] 7.5.1 已实现 provider request/task ID 对账切片：`mark_dispatched` 可记录不含私有正文的供应商 request ID，`/api/v1/oms/schools/{school_id}/usage/provider-receipts` 经目标学校 `ops.reconciliation.manage` 按 provider/account/request ID 找回原 attempt 幂等结算，重复回执不双扣且响应不回显 provider receipt。父任务仍需真实 provider adapter/账单样本、流式/异步/Agent 全入口与 test-cn 端到端验收。
 - [ ] 7.6 实施保留原始证据的核对/更正与 OMS-only 供应商成本视图；验证无成本契约时未核定、不生成租户费用，并检查权限、导出、日志及 TMS DTO 负例。
+  - [x] 7.6.1 已实现 `/api/v1/oms/cost` 的 OMS-only 未核定成本安全投影：经 `ops.cost.read` platform 范围授权后，按学校/service/provider/account/model/unit 聚合 usage attempt 的已结算与待核定原生单位；无可信成本契约时继续返回空 `costs` 和 `not_configured`，不返回金额、单价、采购 evidence、provider receipt、租户费用或账单字段。父任务仍需真实核对/更正、已核定成本规则、导出与 test-cn 端到端验证。
+  - [x] 7.6.2 已实现 `/api/v1/oms/schools/{school_id}/attempts/{attempt_id}/settle` 的 OMS 人工核对结算写入口：同一账务事务内复核目标学校 `ops.reconciliation.manage`、保留 reconciliation/provider evidence 于 usage attempt 与 evidence events、响应与审计 safe summary 不回显原始证据；无该权限的只读 operator 403。父任务仍需导出、已核定供应商成本规则、真实 provider 对账和 test-cn 端到端验证。
+  - [x] 7.6.3 已将 `/api/v1/oms/schools/{school_id}/jobs` 待核对队列扩展为 OMS 可用的安全上下文投影：返回 provider/model/subject 与 pending units 以便人工核对，同时继续不回显 provider receipt、evidence、diagnostic 或 Secret。父任务仍需导出、真实 provider 自动对账、超预留调整与 test-cn 端到端验证。
+  - [x] 7.6.4 已实现 `/api/v1/oms/schools/{school_id}/usage/export` 的学校用量安全导出：经目标学校 `ops.audit.export` 授权后返回 JSON attempt 导出，导出动作写入 OMS 审计；DTO 不回显 evidence、provider request id/receipt、diagnostic、Secret、合同引用、金额或成本字段。父任务仍需真实 provider 自动对账、已核定成本规则、超预留调整与 test-cn 端到端验证。
+  - [x] 7.6.5 已实现 `/api/v1/oms/schools/{school_id}/attempts/{attempt_id}/release` 的 OMS 确认未发出释放入口：同一账务事务内复核目标学校 `ops.reconciliation.manage`，仅释放尚未 dispatch 的 reserved attempt，原始证据入库但不回显；无该权限的只读 operator 403。父任务仍需真实 provider 自动对账、已核定成本规则、超预留调整与 test-cn 端到端验证。
 - [ ] 7.7 以独立 OMS 正式入口验收采购补充→租户授权/额度→单次执行→租户/用户/供应商归集→异常核对全链路；验收既存 EduPlus2 身份/学校接口与 DeepTutor 本地 OMS 逐动作/目标授权、外部账号停用和本地撤权竞态负例；保留本仓库迁移 dry-run/apply/verify、回退、审计、上游兼容与 G3 发布证据。不得以外部发送端草稿或合成 JWT 代替真实联调。
 
 ## 8. H：条件性多执行者与高可用

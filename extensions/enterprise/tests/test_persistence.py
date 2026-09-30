@@ -41,6 +41,7 @@ EXPECTED_EXTENSION_MIGRATIONS = [
     "0011_webhook_school_controls",
     "0012_remove_legacy_database_function",
     "0013_relocate_database_business_rules",
+    "0014_actor_identity_context",
     "oms/0001_ledger_base",
     "oms/0002_grant_source",
     "oms/0003_grant_command_idempotency",

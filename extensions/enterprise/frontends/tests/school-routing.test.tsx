@@ -35,6 +35,12 @@ describe("教育业务的学校路由与名称", () => {
     await expect(Promise.resolve().then(() => OmsFormalSlugPage({ params: Promise.resolve({ slug: ["tms-bootstrap-requests"] }) }))).rejects.toThrow("NEXT_NOT_FOUND");
   });
 
+  it("OMS 正式入口不把 Next 静态资源深链送入会话鉴权", async () => {
+    await expect(Promise.resolve().then(() => OmsFormalSlugPage({
+      params: Promise.resolve({ slug: ["_next", "static", "chunks", "0.qfcr9oeii_b.js"] }),
+    }))).rejects.toThrow("NEXT_NOT_FOUND");
+  });
+
   it("TMS 在学校 code 路由显示服务列表，详情深链保留 code", () => {
     render(<TmsPrototype/>);
     expect(within(screen.getByRole("banner")).getByText("学校智能体管理后台")).toBeInTheDocument();

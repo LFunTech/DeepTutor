@@ -1,5 +1,6 @@
 """CallContext 只在企业扩展内转换为 OMS attempt，不让 core 依赖余额逻辑。"""
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import uuid
@@ -20,7 +21,7 @@ def _context():
         pool_id="pool-a",
         model_id="model-a",
         config_version=3,
-        subject_kind="user",
+        subject_kind="delegated_user",
         subject_id="learner-1",
         user_id="learner-1",
         app_id="agent-app-1",
@@ -47,6 +48,20 @@ def test_usage_call_context_creates_distinct_billable_attempts_for_same_operatio
     assert first.service_id == "llm"
     assert first.pool_id == "pool-a"
     assert first.subject_id == "learner-1"
+    assert first.subject_kind == "delegated_user"
+    assert first.app_id == "agent-app-1"
+
+
+def test_usage_call_context_rejects_invalid_subject_attribution():
+    context = _context()
+    with pytest.raises(ValueError, match="subject attribution"):
+        replace(context, subject_kind="user", app_id="agent-app-1").attempt(
+            reserved_units=Decimal("1")
+        )
+    with pytest.raises(ValueError, match="subject attribution"):
+        replace(context, subject_kind="service", user_id="learner-1", app_id="").attempt(
+            reserved_units=Decimal("1")
+        )
 
 
 def test_usage_request_hash_rejects_private_content_and_is_deterministic():
@@ -57,3 +72,7 @@ def test_usage_request_hash_rejects_private_content_and_is_deterministic():
         safe_request_hash({"prompt": "do not persist"})
     with pytest.raises(ValueError, match="private request content"):
         safe_request_hash({"attachments": ["raw"]})
+    with pytest.raises(ValueError, match="private request content"):
+        safe_request_hash({"route": "ws.turn", "metadata": {"messages": ["raw"]}})
+    with pytest.raises(ValueError, match="private request content"):
+        safe_request_hash({"route": "ws.turn", "Prompt": "raw"})

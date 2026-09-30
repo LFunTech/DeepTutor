@@ -215,3 +215,29 @@ async def test_refresh_endpoint_requires_bff_csrf_header(monkeypatch):
 
     assert response.status_code == 403
     assert json.loads(response.body) == {"detail": "csrf_invalid"}
+
+
+async def test_refresh_endpoint_clears_stale_csrf_hint_when_refresh_cookie_missing(
+    monkeypatch,
+):
+    from deeptutor_enterprise.oms import oauth
+
+    _base_oauth_env(monkeypatch)
+
+    class RefreshRequest:
+        query_params = QueryParams()
+        url = URL("https://llm-agent-test.f123.pub/api/v1/oms/auth/refresh")
+        headers = {"x-csrf-token": "csrf-token"}
+        cookies = {"dt_oms_csrf": "csrf-token"}
+
+    response = await oauth.refresh_session(RefreshRequest(), object())
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {"authenticated": False}
+    headers = _set_cookie_headers(response)
+    assert any(
+        header.startswith("dt_oms_csrf=")
+        and "Max-Age=0" in header
+        and "Path=/;" in header
+        for header in headers
+    )

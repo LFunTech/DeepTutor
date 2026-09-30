@@ -236,6 +236,186 @@ async def test_attempt_gift_first_unknown_keeps_reservation_and_settles_once(pg_
         await db.__aexit__(None, None, None)
 
 
+async def test_provider_request_receipt_reconciles_original_attempt_once(pg_dsn):
+    """按供应商 request ID 对账时必须回到原 attempt，重复回执不能双扣。"""
+
+    from deeptutor_enterprise.oms.attempts import OmsAttemptLedger, SettlementRejected
+
+    db, tenant_id, lot_id, _ = await _ledger(pg_dsn)
+    scope = TenantScope(str(tenant_id), "learner-1")
+    request = _request(units=12)
+    try:
+        ledger = OmsAttemptLedger(db)
+        await ledger.reserve(scope, request)
+        await ledger.mark_dispatched(
+            scope,
+            request.attempt_id,
+            evidence_ref="dispatch://request-id-1",
+            provider_request_id="provider-request-id-1",
+        )
+        result = await ledger.settle_provider_receipt(
+            scope,
+            provider_id="provider-a",
+            provider_account_id="account-a",
+            provider_request_id="provider-request-id-1",
+            units=Decimal("9"),
+            evidence_ref="bill://provider-request-id-1",
+        )
+        assert result.attempt_id == request.attempt_id
+        assert result.settled_units == Decimal("9")
+        assert (
+            await ledger.settle_provider_receipt(
+                scope,
+                provider_id="provider-a",
+                provider_account_id="account-a",
+                provider_request_id="provider-request-id-1",
+                units=Decimal("9"),
+                evidence_ref="bill://provider-request-id-1",
+            )
+            == result
+        )
+        with pytest.raises(SettlementRejected, match="provider receipt"):
+            await ledger.settle_provider_receipt(
+                scope,
+                provider_id="provider-a",
+                provider_account_id="account-a",
+                provider_request_id="provider-missing",
+                units=Decimal("1"),
+                evidence_ref="bill://provider-missing",
+            )
+        with pytest.raises(SettlementRejected, match="conflicts"):
+            await ledger.mark_dispatched(
+                scope,
+                request.attempt_id,
+                evidence_ref="dispatch://request-id-2",
+                provider_request_id="provider-request-id-2",
+            )
+        assert await _balances(pg_dsn, tenant_id, lot_id) == (
+            (9, 71, 0),
+            {"gift": (21, 0, 9, 0), "recharge": (50, 0, 0, 0)},
+        )
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(tenant_id),))
+            attempt = await (
+                await c.execute(
+                    "SELECT status,provider_request_id,settled_units "
+                    "FROM oms.usage_attempts WHERE tenant_id=%s AND attempt_id=%s",
+                    (tenant_id, request.attempt_id),
+                )
+            ).fetchone()
+            events = await (
+                await c.execute(
+                    "SELECT event_kind,provider_request_id FROM oms.attempt_evidence_events "
+                    "WHERE tenant_id=%s AND attempt_id=%s ORDER BY created_at,id",
+                    (tenant_id, request.attempt_id),
+                )
+            ).fetchall()
+        assert attempt == ("settled", "provider-request-id-1", Decimal("9.000000"))
+        assert events == [
+            ("dispatch_intent", "provider-request-id-1"),
+            ("provider_usage", "provider-request-id-1"),
+        ]
+    finally:
+        await db.__aexit__(None, None, None)
+
+
+async def test_metered_provider_attempt_runner_settles_or_marks_unknown(pg_dsn):
+    from deeptutor_enterprise.oms.attempts import OmsAttemptLedger
+    from deeptutor_enterprise.oms.call_context import (
+        ProviderAttemptReceipt,
+        UsageCallContext,
+        run_metered_provider_attempt,
+    )
+
+    db, tenant_id, lot_id, _ = await _ledger(pg_dsn)
+    scope = TenantScope(str(tenant_id), "learner-1")
+    try:
+        ledger = OmsAttemptLedger(db)
+        context = UsageCallContext(
+            tenant_id=tenant_id,
+            operation_id=uuid.uuid4(),
+            service_id="llm",
+            unit_code="token",
+            provider_id="provider-a",
+            provider_account_id="account-a",
+            pool_id="pool-a",
+            model_id="model-a",
+            config_version=1,
+            subject_kind="user",
+            subject_id="learner-1",
+            user_id="learner-1",
+        )
+
+        async def successful_call(attempt_id):
+            assert isinstance(attempt_id, uuid.UUID)
+            return ProviderAttemptReceipt(
+                result={"content": "ok"},
+                units=Decimal("6"),
+                evidence_ref="usage://runner-success",
+                provider_request_id="provider-runner-success",
+            )
+
+        result = await run_metered_provider_attempt(
+            ledger,
+            scope,
+            context,
+            reserved_units=Decimal("10"),
+            dispatch_evidence_ref="dispatch://runner-success",
+            unknown_evidence_ref="timeout://runner-success",
+            call=successful_call,
+        )
+        assert result == {"content": "ok"}
+
+        failing_context = replace(context, operation_id=uuid.uuid4())
+
+        async def failing_call(_attempt_id):
+            raise TimeoutError("network timeout after dispatch")
+
+        with pytest.raises(TimeoutError):
+            await run_metered_provider_attempt(
+                ledger,
+                scope,
+                failing_context,
+                reserved_units=Decimal("5"),
+                dispatch_evidence_ref="dispatch://runner-timeout",
+                unknown_evidence_ref="timeout://runner-timeout",
+                call=failing_call,
+            )
+        assert await _balances(pg_dsn, tenant_id, lot_id) == (
+            (6, 69, 5),
+            {"gift": (19, 5, 6, 0), "recharge": (50, 0, 0, 0)},
+        )
+        async with await psycopg.AsyncConnection.connect(pg_dsn) as c:
+            await c.execute("SELECT set_config('app.tenant_id',%s,true)", (str(tenant_id),))
+            rows = await (
+                await c.execute(
+                    "SELECT status,provider_request_id,settled_units FROM oms.usage_attempts "
+                    "WHERE tenant_id=%s ORDER BY started_at,attempt_id",
+                    (tenant_id,),
+                )
+            ).fetchall()
+            events = await (
+                await c.execute(
+                    "SELECT event_kind,reference,provider_request_id "
+                    "FROM oms.attempt_evidence_events WHERE tenant_id=%s "
+                    "ORDER BY created_at,id",
+                    (tenant_id,),
+                )
+            ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("settled", "provider-runner-success", Decimal("6.000000")),
+            ("remote_unknown", "", Decimal("0.000000")),
+        ]
+        assert ("provider_usage", "usage://runner-success", "provider-runner-success") in [
+            tuple(row) for row in events
+        ]
+        assert ("remote_unknown", "timeout://runner-timeout", "") in [
+            tuple(row) for row in events
+        ]
+    finally:
+        await db.__aexit__(None, None, None)
+
+
 async def test_confirmed_not_sent_can_release_but_dispatched_cannot(pg_dsn):
     from deeptutor_enterprise.oms.attempts import OmsAttemptLedger, SettlementRejected
 
